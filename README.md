@@ -83,7 +83,7 @@ claudeAddin()
 
 - Click "Start Server" to launch the connection
 - Configure logging settings if desired
-- Keep the addin window open while using Claude
+- Keep the addin window active while using Claude (you can switch to other views like Files, Plots, Viewers, etc. - just don't hit the stop sign/stop button)
 
 3) Open Claude Desktop and ask it to execute R code in your session
 
