@@ -127,6 +127,7 @@ For Connection Issues:
 - Check that the Python path is correct in your config file
 - Verify that you've started the server in the addin interface
 - Try restarting RStudio if the port is already in use
+- Most server issues can be solved by restarting the R session. Make sure to save your work before you do. 
 
 For Python Dependency Issues:
 
@@ -138,6 +139,11 @@ Claude Can't See Results:
 - Make sure the addin is running (the window must stay open)
 - Check that the server status shows "Running"
 - Verify there are no error messages in the R console
+
+Warnings:
+
+You may get a warning after installing dev tools, this will not mess with functionality. Bugs still exist, but I will work on fixing them as they arise.
+
 
 # Limitations
 
