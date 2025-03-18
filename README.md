@@ -142,7 +142,7 @@ Claude Can't See Results:
 
 Warnings:
 
-You may get a warning after installing dev tools, this will not mess with functionality. Bugs still exist, but I will work on fixing them as they arise.
+- You may get a warning after installing dev tools, this will not mess with functionality. Bugs still exist, but I will work on fixing them as they arise.
 
 
 # Limitations
