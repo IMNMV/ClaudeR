@@ -113,6 +113,7 @@ All in all, if you (a human) can do it with R, Claude can do it with R. Go nuts 
 - Code Visibility: By default, code executed by Claude is printed to your console for transparency
 - Port Configuration: The default port is 8787, but you can change it if needed
 - Log Files: Each R session gets its own log file when logging is enabled
+- Claude can install packages if you ask it to. Be careful with this - good prompting is very important. By default it tends to try other methods if it fails, but telling it what it should or shouldn't do as part of the initial prompt is good practice.
 
 # Troubleshooting
 
