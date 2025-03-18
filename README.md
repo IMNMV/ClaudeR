@@ -74,10 +74,9 @@ Add the following to the configuration file:
 {
   "mcpServers": {
     "r-studio": {
-      "command": "python",
+      "command": "python",  # Or full path to your Python executable
       "args": ["PATH_TO_REPOSITORY/ClaudeR/inst/scripts/persistent_r_mcp.py"],
       "env": {
-        "PYTHONPATH": "PATH_TO_PYTHON_SITE_PACKAGES",
         "PYTHONUNBUFFERED": "1"
       }
     }
