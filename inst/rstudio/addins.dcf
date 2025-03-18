@@ -1,0 +1,4 @@
+Name: Claude RStudio Connection
+Description: Connect Claude with your active RStudio session
+Binding: claude_rstudio_addin
+Interactive: true
