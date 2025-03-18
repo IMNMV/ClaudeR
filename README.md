@@ -13,8 +13,8 @@ ClaudeR is an R package that creates a direct connection between RStudio and Cla
 # Installation
 Prerequisites:
 
-1) R and RStudio: R 4.0+ and RStudio
-2) Python 3.8+: For the MCP server component
+1) R 4.0+ and RStudio
+2) Python 3.8+ For the MCP server component
 3) Claude Desktop App: The desktop version of Claude AI
 
 # Step 1: Install R Package Dependencies
