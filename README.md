@@ -95,11 +95,11 @@ Each R session gets its own log file with timestamps for all code executed. That
 # Example Interactions
 Once connected, you can ask Claude things like:
 
-"I have a dataset loaded in my env named data, please perform exploratory data analysis on it and run relevant statistical analyses."
-"Load the mtcars dataset and create a scatterplot of mpg vs. hp with a trend line"
-"Fit a linear model to predict mpg based on weight and horsepower"
-"Generate a correlation matrix for the iris dataset and visualize it"
-"Create a function to calculate moving averages of a time series"
+- "I have a dataset loaded in my env named data, please perform exploratory data analysis on it and run relevant statistical analyses."
+- "Load the mtcars dataset and create a scatterplot of mpg vs. hp with a trend line"
+- "Fit a linear model to predict mpg based on weight and horsepower"
+- "Generate a correlation matrix for the iris dataset and visualize it"
+- "Create a function to calculate moving averages of a time series"
 
 All in all, if you (a human) can do it with R, Claude can do it with R. Go nuts with it. 
 
