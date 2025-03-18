@@ -20,12 +20,6 @@
 
 - MCP is an open protocol developed by Anthropic that allows Claude to safely interact with local tools and data sources.
 
-[Watch the code access demo](assets/accessing_code.mov)
-
-# Accessing logs 
-
-[Watch how to access logs for the full code](assets/example_walk_through.mov)
-
 In this case:
 
 1. The Python MCP server acts as a bridge between Claude and RStudio
