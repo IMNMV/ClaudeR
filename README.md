@@ -1,5 +1,9 @@
 # ClaudeR
-ClaudeR is an R package that creates a direct connection between RStudio and Claude AI, allowing for interactive coding sessions where Claude can execute code in your active RStudio session and see the results in real-time.
+
+
+- ClaudeR is an R package that creates a direct connection between RStudio and Claude AI, allowing for interactive coding sessions where Claude can execute code in your active RStudio session and see the results in real-time.
+
+- It can explore the data autonomously, or be a collaborator. The choice is yours.
 
 # Features
 
