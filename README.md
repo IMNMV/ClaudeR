@@ -149,7 +149,9 @@ Warnings:
 
 
 "Listening on http://127.0.0.1:3071
+
 createTcpServer: address already in use
+
 Error starting HTTP server: Failed to create server"
 
 This is a UI bug. The server is still active, and you can have Claude run code like normal. However, to fully end the server you will need to restart RStudio.
