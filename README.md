@@ -29,6 +29,8 @@ In this case:
 
 - This architecture ensures Claude can only perform approved operations through well-defined interfaces while maintaining complete control over your R environment.
 
+[![ClaudeR Demo Video](https://img.youtube.com/vi/KSKcuxRSZDY/0.jpg)](https://youtu.be/KSKcuxRSZDY)
+
 
 # Installation
 Prerequisites:
