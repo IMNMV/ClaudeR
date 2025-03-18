@@ -64,6 +64,9 @@ Add the following to the configuration file:
   }
 }
 ```
+Replace
+- PATH_TO_REPOSITORY with the path to where the package is installed (use find.package("ClaudeR") in R to locate it)
+- PATH_TO_PYTHON_SITE_PACKAGES with the path to your Python site-packages directory
 
 # Usage
 Starting the Connection
