@@ -14,6 +14,22 @@
 - Console Printing: Option to print Claude's code to the console before execution
 - Environment Integration: Claude can access variables and functions in your R environment
 
+# How It Works
+
+- ClaudeR leverages the Model Context Protocol (MCP) to create a bidirectional connection between Claude AI and your RStudio environment. 
+
+- MCP is an open protocol developed by Anthropic that allows Claude to safely interact with local tools and data sources.
+
+In this case:
+
+1. The Python MCP server acts as a bridge between Claude and RStudio
+2. When Claude wants to execute R code, it sends the request to the MCP server
+3. The MCP server forwards this to the R addin running in RStudio
+4. The code executes in your R session and results are sent back to Claude
+
+- This architecture ensures Claude can only perform approved operations through well-defined interfaces while maintaining complete control over your R environment.
+
+
 # Installation
 Prerequisites:
 
@@ -71,6 +87,19 @@ Add the following to the configuration file:
 Replace
 - PATH_TO_REPOSITORY with the path to where the package is installed (use find.package("ClaudeR") in R to locate it)
 - PATH_TO_PYTHON_SITE_PACKAGES with the path to your Python site-packages directory
+
+# Finding Your Python Site-Packages Path
+
+To find your Python site-packages path:
+
+1. Open a terminal or command prompt
+2. Run this command:
+   ```bash
+   python -c "import site; print(site.getsitepackages()[0])"
+   ```
+3. Copy the output path and use it in your configuration
+
+If you're using a virtual environment or conda, make sure to run this command in the correct environment where you installed the dependencies.
 
 # Usage
 Starting the Connection
