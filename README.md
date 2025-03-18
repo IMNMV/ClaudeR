@@ -76,7 +76,8 @@ claudeAddin()
 ```
 
 2) In the addin interface:
-![ClaudeR Addin Interface](https://raw.githubusercontent.com/your-username/your-repo/main/images/interface.png)
+![ClaudeR Addin Interface](assets/ui_interface.png)
+
 - Click "Start Server" to launch the connection
 - Configure logging settings if desired
 - Keep the addin window open while using Claude
