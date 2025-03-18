@@ -20,11 +20,11 @@
 
 - MCP is an open protocol developed by Anthropic that allows Claude to safely interact with local tools and data sources.
 
-<video src="assets/accessing_code.mov" controls title="Code Access Demo" width="640"></video>
+[Watch the code access demo](assets/accessing_code.mov)
 
 # Accessing logs 
 
-<video src="assets/example_walk_through.mov" controls title="Example Walkthrough" width="640"></video>
+[Watch how to access logs for the full code](assets/example_walk_through.mov)
 
 In this case:
 
