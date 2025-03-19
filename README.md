@@ -71,10 +71,10 @@ devtools::install_github("IMNMV/ClaudeR")
 ```
 
 # Step 4: Configure Claude Desktop
-Locate or create the Claude Desktop configuration file using terminal or command prompt:
+Locate or create the Claude Desktop configuration json file using terminal or command prompt:
 ```bash
-Mac: ~/Library/Application Support/Claude/claude_desktop_config.json
-Windows: %APPDATA%\Claude\claude_desktop_config.json
+Mac: cd /Users/YOUR-NAME/Library/Application\ Support/Claude/
+Windows: cd %APPDATA%\Claude
 ```
 
 Add the following to the configuration file:
