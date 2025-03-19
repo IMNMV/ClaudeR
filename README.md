@@ -79,7 +79,7 @@ Windows: cd %APPDATA%\Claude
 
 Or, via the desktop app, open the Claude desktop App > Click Claude in the top left > Settings > Developer > Edit Config
 
-Add the following to the configuration file:
+Add the following to the claude_desktop_config.json file:
 ```bash
 {
   "mcpServers": {
