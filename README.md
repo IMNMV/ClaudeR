@@ -42,6 +42,8 @@ Prerequisites:
 3) Claude Desktop App: The desktop version of Claude AI
 
 # Step 1: Install R Package Dependencies
+
+Run these inside your RStudio environment. 
 ```bash
 install.packages(c(
   "R6",
@@ -56,17 +58,20 @@ install.packages(c(
 ```
 # Step 2: Install Python Dependencies
 
+Run this in terminal or command prompt
 ```bash
 pip install mcp httpx
 ```
-
 # Step 3: Install ClaudeR from GitHub
+
+
+Run this in your RStudio environment
 ```bash
 devtools::install_github("IMNMV/ClaudeR")
 ```
 
 # Step 4: Configure Claude Desktop
-Locate or create the Claude Desktop configuration file:
+Locate or create the Claude Desktop configuration file using terminal or command prompt:
 ```bash
 Mac: ~/Library/Application Support/Claude/claude_desktop_config.json
 Windows: %APPDATA%\Claude\claude_desktop_config.json
@@ -74,6 +79,7 @@ Windows: %APPDATA%\Claude\claude_desktop_config.json
 
 Add the following to the configuration file:
 
+To find this, open the Claude desktop App > Click Claude in the top left > Settings > Developer > Edit Config
 ```bash
 {
   "mcpServers": {
@@ -108,7 +114,7 @@ If you're using a virtual environment or conda, make sure to run this command in
 # Usage
 Starting the Connection
 
-1) Load the ClaudeR package and start the addin:
+1) Load the ClaudeR package in your RStudio environment and start the addin:
 
 ```bash
 library(ClaudeR)
