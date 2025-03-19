@@ -77,9 +77,9 @@ Mac: cd /Users/YOUR-NAME/Library/Application\ Support/Claude/
 Windows: cd %APPDATA%\Claude
 ```
 
-Add the following to the configuration file:
+Or, via the desktop app, open the Claude desktop App > Click Claude in the top left > Settings > Developer > Edit Config
 
-To find this, open the Claude desktop App > Click Claude in the top left > Settings > Developer > Edit Config
+Add the following to the configuration file:
 ```bash
 {
   "mcpServers": {
