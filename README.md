@@ -78,6 +78,8 @@ Mac: open .
 Windows: cd %APPDATA%\Claude
 Windows: explorer .
 ```
+If you can't open it, right click > Open with > pick the editor of your choice (text edit, notepad, vscode, xcode, etc.)
+
 
 Or, via the desktop app, open the Claude desktop App > Click Claude in the top left > Settings > Developer > Edit Config
 
