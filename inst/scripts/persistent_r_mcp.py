@@ -103,6 +103,40 @@ async def list_tools() -> List[types.Tool]:
                 },
                 "required": ["what"]
             }
+        ),
+        types.Tool(
+            name="get_active_document",
+            description="Get the content of the active document in RStudio",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        types.Tool(
+            name="modify_code_section",
+            description="Modify a specific section of code in the active document",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "search_pattern": {
+                        "type": "string",
+                        "description": "Pattern to identify the section of code to be modified"
+                    },
+                    "replacement": {
+                        "type": "string",
+                        "description": "New code to replace the identified section"
+                    },
+                    "line_start": {
+                        "type": "number",
+                        "description": "Optional: Start line number for the search (1-based indexing)"
+                    },
+                    "line_end": {
+                        "type": "number",
+                        "description": "Optional: End line number for the search (1-based indexing)"
+                    }
+                },
+                "required": ["search_pattern", "replacement"]
+            }
         )
     ]
 
@@ -236,6 +270,131 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         return result_contents or [types.TextContent(
             type="text",
             text=f"Unknown info type: {what}"
+        )]
+    
+    elif name == "get_active_document":
+        # Get active document content
+        result = await execute_r_code_via_addin("""
+        if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+            context <- rstudioapi::getActiveDocumentContext()
+            list(
+                content = paste(context$contents, collapse = "\n"),
+                path = context$path,
+                line_count = length(context$contents)
+            )
+        } else {
+            list(error = "RStudio API not available")
+        }
+        """)
+        
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error retrieving active document: {result.get('error', 'Unknown error')}"
+            )]
+        
+        return [types.TextContent(
+            type="text",
+            text=result.get("output", "No document content retrieved")
+        )]
+
+    elif name == "modify_code_section":
+        if not all(k in arguments for k in ["search_pattern", "replacement"]):
+            return [types.TextContent(
+                type="text",
+                text="Error: Both 'search_pattern' and 'replacement' parameters are required"
+            )]
+        
+        # Escape special characters for R string
+        search_pattern = arguments["search_pattern"].replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "\\'")
+        replacement = arguments["replacement"].replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "\\'")
+        
+        # Get line constraints if provided
+        line_start = arguments.get("line_start", "NULL")
+        line_end = arguments.get("line_end", "NULL")
+        
+        modify_code = f"""
+        if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {{
+            context <- rstudioapi::getActiveDocumentContext()
+            content <- context$contents
+            
+            # Convert to a single string for pattern matching
+            full_text <- paste(content, collapse = "\\n")
+            
+            # Apply line constraints if provided
+            line_start <- {line_start}
+            line_end <- {line_end}
+            
+            if (!is.null(line_start) && !is.null(line_end)) {{
+                # Work with a subset of lines
+                if (line_start > 0 && line_end <= length(content) && line_start <= line_end) {{
+                    subset_lines <- content[line_start:line_end]
+                    subset_text <- paste(subset_lines, collapse = "\\n")
+                    
+                    # Apply replacement in the subset
+                    search_pattern <- "{search_pattern}"
+                    modified_subset <- gsub(search_pattern, "{replacement}", subset_text, perl = TRUE)
+                    
+                    # Split back into lines
+                    modified_lines <- strsplit(modified_subset, "\\n")[[1]]
+                    
+                    # Update the content
+                    if (length(modified_lines) == length(subset_lines)) {{
+                        content[line_start:line_end] <- modified_lines
+                        rstudioapi::setDocumentContents(paste(content, collapse = "\\n"), id = context$id)
+                        list(
+                            success = TRUE, 
+                            message = paste0("Modified code between lines ", line_start, " and ", line_end)
+                        )
+                    }} else {{
+                        list(
+                            success = FALSE,
+                            error = "Replacement resulted in different number of lines"
+                        )
+                    }}
+                }} else {{
+                    list(
+                        success = FALSE,
+                        error = paste0("Invalid line range: ", line_start, "-", line_end, 
+                                      ". Document has ", length(content), " lines.")
+                    )
+                }}
+            }} else {{
+                # Apply replacement to entire document
+                modified_text <- gsub("{search_pattern}", "{replacement}", full_text, perl = TRUE)
+                
+                if (modified_text != full_text) {{
+                    rstudioapi::setDocumentContents(modified_text, id = context$id)
+                    list(
+                        success = TRUE,
+                        message = "Modified code in the document"
+                    )
+                }} else {{
+                    list(
+                        success = FALSE,
+                        error = "Pattern not found in document"
+                    )
+                }}
+            }}
+        }} else {{
+            list(
+                success = FALSE,
+                error = "RStudio API not available"
+            )
+        }}
+        """
+        
+        result = await execute_r_code_via_addin(modify_code)
+        
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error modifying code: {result.get('error', 'Unknown error')}"
+            )]
+        
+        return [types.TextContent(
+            type="text",
+            text=result.get("output", "No result returned from code modification")
         )]
     
     return [types.TextContent(

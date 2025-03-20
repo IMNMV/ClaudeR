@@ -7,12 +7,24 @@
 
 # Features
 
+Claude has the following MCP tools:
+- execute_r – Execute R code and return the output.
+- execute_r_with_plot – Execute R code that generates a plot.
+- get_active_document – Get the content of the active document in RStudio.
+- get_r_info – Get information about the R environment.
+- modify_code_section – Modify a specific section of code in the active document.
+
+From these, you are able to do the following:
+
 - Direct Code Execution: Claude can write and execute R code in your active RStudio session (including installing packages)
+- Feedback/Assistance: Receive explanations of what your current R script does, and/or ask for edits at specific lines.
 - Visualization Creation: Claude can generate, see, and refine plots and visualizations 
 - Data Analysis: Claude can analyze your datasets and iteratively provide insights
 - Code Logging: All code executed by Claude can be saved to log files for future reference
 - Console Printing: Option to print Claude's code to the console before execution
 - Environment Integration: Claude can access variables and functions in your R environment
+
+* Note: Claude is able able to create Quarto Presentations. I recommend opening an active qmd file and asking for specific updates there. 
 
 # How It Works
 
