@@ -241,6 +241,30 @@ execute_code_in_session <- function(code, settings = NULL) {
     settings <- load_claude_settings()
   }
   
+  # Security check for dangerous system operations
+  dangerous_patterns <- c(
+    "rm\\s+-rf", "deltree", "rd\\s+/s", "format\\s+",
+    "sudo\\s+", "chmod\\s+777", "chown\\s+",
+    "apt-get\\s+remove", "apt\\s+remove", "yum\\s+erase",
+    "nc\\s+-e", "netcat", "curl.*\\|.*bash",
+    "kill\\s+-9\\s+1", "killall\\s+", "shutdown", "reboot",
+    ":\\(\\)\\{", # Fork bomb pattern
+    "mkfs", # Format filesystems
+    "dd\\s+if=.*of=.*/dev/" # DD to devices
+  )
+  
+  # Only check when system() or system2() is used
+  if (grepl("\\bsystem\\s*\\(|\\bsystem2\\s*\\(", code)) {
+    for (pattern in dangerous_patterns) {
+      if (grepl(pattern, code, ignore.case = TRUE)) {
+        return(list(
+          success = FALSE,
+          error = paste0("Security restriction: This code contains potentially dangerous system operation matching '", pattern, "'")
+        ))
+      }
+    }
+  }
+  
   # Print code to console if enabled
   if (settings$print_to_console) {
     cat("\n### Claude executing the following code ###\n")
