@@ -241,28 +241,13 @@ execute_code_in_session <- function(code, settings = NULL) {
     settings <- load_claude_settings()
   }
   
-  # Security check for dangerous system operations
-  dangerous_patterns <- c(
-    "rm\\s+-rf", "deltree", "rd\\s+/s", "format\\s+",
-    "sudo\\s+", "chmod\\s+777", "chown\\s+",
-    "apt-get\\s+remove", "apt\\s+remove", "yum\\s+erase",
-    "nc\\s+-e", "netcat", "curl.*\\|.*bash",
-    "kill\\s+-9\\s+1", "killall\\s+", "shutdown", "reboot",
-    ":\\(\\)\\{", # Fork bomb pattern
-    "mkfs", # Format filesystems
-    "dd\\s+if=.*of=.*/dev/" # DD to devices
-  )
-  
-  # Only check when system() or system2() is used
-  if (grepl("\\bsystem\\s*\\(|\\bsystem2\\s*\\(", code)) {
-    for (pattern in dangerous_patterns) {
-      if (grepl(pattern, code, ignore.case = TRUE)) {
-        return(list(
-          success = FALSE,
-          error = paste0("Security restriction: This code contains potentially dangerous system operation matching '", pattern, "'")
-        ))
-      }
-    }
+  # Validate the code to block dangerous operations
+  validation_result <- validate_code_security(code)
+  if (validation_result$blocked) {
+    return(list(
+      success = FALSE,
+      error = validation_result$reason
+    ))
   }
   
   # Print code to console if enabled
@@ -400,13 +385,94 @@ execute_code_in_session <- function(code, settings = NULL) {
   })
 }
 
+#' Validate code for security issues
+#'
+#' @param code The R code to validate
+#' @return A list with blocked (logical) and reason (character) fields
+validate_code_security <- function(code) {
+  # List of patterns to block
+  
+  # 1. System command execution patterns
+  system_patterns <- c(
+    "\\bsystem\\s*\\(",            # system()
+    "\\bsystem2\\s*\\(",           # system2()
+    "\\bshell\\s*\\(",             # shell()
+    "`[^`]+`",                     # Backtick execution
+    "\\bcall\\s*\\([\"']system",   # Indirect call to system
+    "\\bpipe\\s*\\(",              # pipe()
+    "\\bshell\\.exec\\s*\\("       # shell.exec()
+  )
+  
+  # 2. File deletion patterns
+  file_deletion_patterns <- c(
+    # R's file removal functions
+    "\\bunlink\\s*\\(",            # unlink()
+    "\\bfile\\.remove\\s*\\(",     # file.remove()
+    
+    # Other variations for file/path removal
+    "\\bfile\\.delete\\s*\\(",     # file.delete() (custom/packages)
+    "\\bremove\\.file\\s*\\(",     # remove.file() (custom/packages)
+    "\\bdelete\\.file\\s*\\("      # delete.file() (custom/packages)
+  )
+  
+  # 3. System command deletion patterns (via system/shell execution)
+  system_deletion_patterns <- c(
+    # rm variations with any spacing pattern
+    "\\brm\\s+\\-?\\s*[rf]+\\b",   # rm -rf, rm -r, rm -f
+    "\\brm\\s+\\-+\\w+\\b",        # rm --recursive, rm --force
+    "\\brm\\s+[^-]",               # rm filename
+    "\\brm\\s+\\-\\s*",            # rm - (stdin)
+    "\\brm\\b",                    # rm by itself
+    
+    # Other deletion commands
+    "\\brmdir\\b",                 # rmdir
+    "\\bdel\\b",                   # del (Windows)
+    "\\berase\\b",                 # erase (Windows)
+    "\\brd\\s+/s",                 # rd /s (Windows)
+    "\\bdeltree\\b"                # deltree (old Windows)
+  )
+  
+  # Check for system command execution
+  for (pattern in system_patterns) {
+    if (grepl(pattern, code, ignore.case = TRUE)) {
+      return(list(
+        blocked = TRUE,
+        reason = paste0("Security restriction: System command execution is not allowed (matched pattern: ", pattern, ")")
+      ))
+    }
+  }
+  
+  # Check for file deletion functions
+  for (pattern in file_deletion_patterns) {
+    if (grepl(pattern, code, ignore.case = TRUE)) {
+      return(list(
+        blocked = TRUE,
+        reason = paste0("Security restriction: File deletion operations are not allowed (matched pattern: ", pattern, ")")
+      ))
+    }
+  }
+  
+  # Only check system deletion if a system execution function is found
+  if (any(sapply(system_patterns, function(p) grepl(p, code, ignore.case = TRUE)))) {
+    for (pattern in system_deletion_patterns) {
+      if (grepl(pattern, code, ignore.case = TRUE)) {
+        return(list(
+          blocked = TRUE,
+          reason = paste0("Security restriction: File deletion through system commands is not allowed (matched pattern: ", pattern, ")")
+        ))
+      }
+    }
+  }
+  
+  # Code passed all security checks
+  return(list(blocked = FALSE))
+}
+
 #' Log code to file
 #'
 #' @param code The R code to log
 #' @param log_path The path to the log file
 #' @return Invisible NULL
-# Replace the log_code_to_file function with this improved version:
-
 log_code_to_file <- function(code, log_path) {
   # Create timestamp
   timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")

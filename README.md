@@ -46,6 +46,31 @@ Check out the youtube video below for a quick example of what to expect when you
 [![ClaudeR Demo Video](https://img.youtube.com/vi/KSKcuxRSZDY/0.jpg)](https://youtu.be/KSKcuxRSZDY)
 
 
+# Security Restrictions
+
+For security reasons, ClaudeR implements strict restrictions on code execution:
+
+- **System commands**: All `system()` and `system2()` calls are blocked, as well as backtick execution, `shell()`, and other methods of executing system commands.
+
+- **File deletion**: Operations that could delete files (like `unlink()`, `file.remove()`, or system commands containing `rm`) are prohibited.
+
+- **Error messages**: When Claude attempts to run restricted code, the operation will be blocked and a specific error message will be returned explaining why.
+
+## Why These Restrictions Matter
+
+These security measures exist to protect your system from unintended consequences when using an AI assistant:
+
+1. **Data Protection**: While Claude is designed to be helpful, allowing unrestricted system access could potentially lead to accidental deletion or modification of important files.
+
+2. **Controlled Environment**: By limiting operations to data analysis, visualization, and non-destructive R functions, we ensure Claude remains a safe tool for collaboration.
+
+3. **Principle of Least Privilege**: Following security best practices, Claude is given only the permissions necessary to assist with data analysis tasks, not full system access.
+
+4. **Predictable Behavior**: These restrictions create clear boundaries around what actions can be performed automatically versus what requires manual user intervention.
+
+These restrictions only apply to code executed through the Claude integration. Normal R code you run directly is not affected by these limitations. If you need to perform restricted operations, you can do so directly in the R console.
+
+
 # Installation
 Prerequisites:
 

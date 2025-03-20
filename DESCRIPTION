@@ -15,4 +15,4 @@ Imports:
     base64enc,
     rstudioapi,
     grDevices
-RoxygenNote: 7.1.1
+RoxygenNote: 7.3.2
