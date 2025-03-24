@@ -235,13 +235,15 @@ createTcpServer: address already in use
 Error starting HTTP server: Failed to create server"
 
 This is a UI bug. The server is still active, and you can have Claude run code like normal. However, to fully end the server you will need to restart RStudio.
-If this issue causes Claude to not access the R environment you have two options:
+If this issue causes Claude to not access the R environment you have two options.
+
+Option 1:
 
 run the following command in terminal:
 ```bash
 lsof -i :8787
 ```
-Find the lin that looks like this:
+Find the line that looks like this:
 ```bash
 "rsession- 80283  nyk   65u  IPv4 0xb1b445116e5da8f9      0t0  TCP localhost:msgsrvr (LISTEN)"
 ```
@@ -252,7 +254,7 @@ Kill that process using the PID. In this case, it would be 80283. This assumes y
 kill -9 80283
 ```
 
-It should now work. If it doesn't, it's time for option 2: please restart your computer. I'm working on a fix for this issue that doesn't require restarts or process terminations, but I need to localize the problem. Sorry about that.
+It should now work. If it doesn't, it's time for Option 2: please restart your computer. I'm working on a fix for this issue that doesn't require restarts or process terminations, but I need to localize the problem. Sorry about that.
 
 
 # Limitations
