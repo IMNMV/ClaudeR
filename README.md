@@ -68,7 +68,7 @@ These security measures exist to protect your system from unintended consequence
 
 4. **Predictable Behavior**: These restrictions create clear boundaries around what actions can be performed automatically versus what requires manual user intervention.
 
-These restrictions only apply to code executed through the Claude integration. Normal R code you run directly is not affected by these limitations. If you need to perform restricted operations, you can do so directly in the R console.
+These restrictions only apply to code executed through the Claude integration. Normal R code you, the human, run directly is not affected by these limitations. If you need to perform restricted operations, you can do so directly in the R console. These restrictions are in place to protect you from any unexpected behavior. Claude is generally safe, but it's always better to be safe than sorry.
 
 
 # Installation
@@ -235,7 +235,7 @@ createTcpServer: address already in use
 Error starting HTTP server: Failed to create server"
 
 This is a UI bug. The server is still active, and you can have Claude run code like normal. However, to fully end the server you will need to restart RStudio.
-
+If this issue causes Claude to not work with the R environment, please restart your computer. I'm working on a fix for this issue that doesn't require restarts, but I need to localize the problem. Sorry about that.
 
 
 # Limitations

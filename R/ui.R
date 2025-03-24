@@ -390,84 +390,38 @@ execute_code_in_session <- function(code, settings = NULL) {
 #' @param code The R code to validate
 #' @return A list with blocked (logical) and reason (character) fields
 validate_code_security <- function(code) {
-  # List of patterns to block
-  
-  # 1. System command execution patterns
-  system_patterns <- c(
-    "\\bsystem\\s*\\(",            # system()
-    "\\bsystem2\\s*\\(",           # system2()
-    "\\bshell\\s*\\(",             # shell()
-    "`[^`]+`",                     # Backtick execution
-    "\\bcall\\s*\\([\"']system",   # Indirect call to system
-    "\\bpipe\\s*\\(",              # pipe()
-    "\\bshell\\.exec\\s*\\("       # shell.exec()
-  )
-  
-  # 2. File deletion patterns
-  file_deletion_patterns <- c(
-    # R's file removal functions
-    "\\bunlink\\s*\\(",            # unlink()
-    "\\bfile\\.remove\\s*\\(",     # file.remove()
-    
-    # Other variations for file/path removal
-    "\\bfile\\.delete\\s*\\(",     # file.delete() (custom/packages)
-    "\\bremove\\.file\\s*\\(",     # remove.file() (custom/packages)
-    "\\bdelete\\.file\\s*\\("      # delete.file() (custom/packages)
-  )
-  
-  # 3. System command deletion patterns (via system/shell execution)
-  system_deletion_patterns <- c(
-    # rm variations with any spacing pattern
-    "\\brm\\s+\\-?\\s*[rf]+\\b",   # rm -rf, rm -r, rm -f
-    "\\brm\\s+\\-+\\w+\\b",        # rm --recursive, rm --force
-    "\\brm\\s+[^-]",               # rm filename
-    "\\brm\\s+\\-\\s*",            # rm - (stdin)
-    "\\brm\\b",                    # rm by itself
-    
-    # Other deletion commands
-    "\\brmdir\\b",                 # rmdir
-    "\\bdel\\b",                   # del (Windows)
-    "\\berase\\b",                 # erase (Windows)
-    "\\brd\\s+/s",                 # rd /s (Windows)
-    "\\bdeltree\\b"                # deltree (old Windows)
-  )
-  
-  # Check for system command execution
-  for (pattern in system_patterns) {
-    if (grepl(pattern, code, ignore.case = TRUE)) {
-      return(list(
-        blocked = TRUE,
-        reason = paste0("Security restriction: System command execution is not allowed (matched pattern: ", pattern, ")")
-      ))
-    }
+  # System command calls to block completely
+  if (grepl("\\bsystem\\s*\\(", code) ||
+      grepl("\\bsystem2\\s*\\(", code) ||
+      grepl("\\bshell\\s*\\(", code) ||
+      grepl("\\bshell\\.exec\\s*\\(", code)) {
+    return(list(
+      blocked = TRUE,
+      reason = "Security restriction: System command execution is not allowed"
+    ))
   }
-  
-  # Check for file deletion functions
+
+  # File deletion via base functions - keep your existing checks
+  file_deletion_patterns <- c(
+    "\\bunlink\\s*\\([^)]*['\"]\\*['\"][^)]*\\)",  # unlink("*")
+    "\\bunlink\\s*\\([^)]*recursive\\s*=\\s*TRUE[^)]*\\)",
+    "\\bunlink\\s*\\([^)]*force\\s*=\\s*TRUE[^)]*\\)",
+    "\\bfile\\.remove\\s*\\([^)]*['\"]\\*['\"][^)]*\\)"  # file.remove("*")
+  )
+
+  # Check file deletion calls
   for (pattern in file_deletion_patterns) {
     if (grepl(pattern, code, ignore.case = TRUE)) {
       return(list(
         blocked = TRUE,
-        reason = paste0("Security restriction: File deletion operations are not allowed (matched pattern: ", pattern, ")")
+        reason = paste0("Security restriction: Potentially dangerous file deletion operation detected")
       ))
     }
   }
-  
-  # Only check system deletion if a system execution function is found
-  if (any(sapply(system_patterns, function(p) grepl(p, code, ignore.case = TRUE)))) {
-    for (pattern in system_deletion_patterns) {
-      if (grepl(pattern, code, ignore.case = TRUE)) {
-        return(list(
-          blocked = TRUE,
-          reason = paste0("Security restriction: File deletion through system commands is not allowed (matched pattern: ", pattern, ")")
-        ))
-      }
-    }
-  }
-  
-  # Code passed all security checks
+
+  # Allow everything else
   return(list(blocked = FALSE))
 }
-
 #' Log code to file
 #'
 #' @param code The R code to log
