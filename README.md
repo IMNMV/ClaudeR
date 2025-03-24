@@ -50,7 +50,7 @@ Check out the youtube video below for a quick example of what to expect when you
 
 For security reasons, ClaudeR implements strict restrictions on code execution:
 
-- **System commands**: All `system()` and `system2()` calls are blocked, as well as backtick execution, `shell()`, and other methods of executing system commands.
+- **System commands**: All `system()` and `system2()` calls are blocked, `shell()`, and other methods of executing system commands.
 
 - **File deletion**: Operations that could delete files (like `unlink()`, `file.remove()`, or system commands containing `rm`) are prohibited.
 
