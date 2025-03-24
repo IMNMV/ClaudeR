@@ -24,7 +24,7 @@ From these, you are able to do the following:
 - Console Printing: Option to print Claude's code to the console before execution
 - Environment Integration: Claude can access variables and functions in your R environment
 
-* Note: Claude is able to create Quarto Presentations. I recommend opening an active qmd file and asking for specific updates there. 
+* Note: Claude is able to create Quarto Presentations. I recommend opening an active qmd file and asking for specific updates there. It is not perfect but I am actively working on improving this feature.
 
 # How It Works
 

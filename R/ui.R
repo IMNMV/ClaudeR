@@ -401,7 +401,7 @@ validate_code_security <- function(code) {
     ))
   }
 
-  # File deletion via base functions - keep your existing checks
+  # File deletion via base functions 
   file_deletion_patterns <- c(
     "\\bunlink\\s*\\([^)]*['\"]\\*['\"][^)]*\\)",  # unlink("*")
     "\\bunlink\\s*\\([^)]*recursive\\s*=\\s*TRUE[^)]*\\)",
