@@ -3,13 +3,13 @@
 on:
   push:
     branches: [main, master]
+  pull_request:
+    branches: [main, master]
 
-name: shiny-deploy.yaml
-
-permissions: read-all
+name: R-CMD-check
 
 jobs:
-  shiny-deploy:
+  R-CMD-check:
     runs-on: ${{ matrix.config.os }}
 
     name: ${{ matrix.config.os }} (${{ matrix.config.r }})
@@ -26,6 +26,7 @@ jobs:
 
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
 
     steps:
       - uses: actions/checkout@v4
@@ -38,17 +39,11 @@ jobs:
           http-user-agent: ${{ matrix.config.http-user-agent }}
           use-public-rspm: true
 
-      - name: Install rsconnect
-        run: install.packages("rsconnect")
-        shell: Rscript {0}
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::rcmdcheck
+          needs: check
 
-      - name: Authorize and deploy app
-        env:
-          # Provide your app name, account name, and server to be deployed below
-          APPNAME: your-app-name
-          ACCOUNT: your-account-name
-          SERVER: shinyapps.io # server to deploy
-        run: |
-          rsconnect::setAccountInfo("${{ secrets.RSCONNECT_USER }}", "${{ secrets.RSCONNECT_TOKEN }}", "${{ secrets.RSCONNECT_SECRET }}")
-          rsconnect::deployApp(appName = "${{ env.APPNAME }}", account = "${{ env.ACCOUNT }}", server = "${{ env.SERVER }}")
-        shell: Rscript {0}
+      - uses: r-lib/actions/check-r-package@v2
+        with:
+          upload-snapshots: true
