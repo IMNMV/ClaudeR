@@ -234,27 +234,14 @@ createTcpServer: address already in use
 
 Error starting HTTP server: Failed to create server"
 
-This is a UI bug. The server is still active, and you can have Claude run code like normal. However, to fully end the server you will need to restart RStudio.
-If this issue causes Claude to not access the R environment you have two options.
-
-Option 1:
-
-run the following command in terminal:
-```bash
-lsof -i :8787
-```
-Find the line that looks like this:
-```bash
-"rsession- 80283  nyk   65u  IPv4 0xb1b445116e5da8f9      0t0  TCP localhost:msgsrvr (LISTEN)"
-```
-
-Kill that process using the PID. In this case, it would be 80283. This assumes you're using the default port. If you manually changed it to something else in the UI then it's likely that port number.
+This is a UI bug. The server is still active, and you can have Claude run code like normal. However, if you run into issues with Claude not being able to connect then the server you will need to restart RStudio.
+If this issue causes Claude to not access the R environment please save your work and click the 'Force Kill Server response' in the viewer pane. This will run the kill command on the backend: 
 
 ```bash
-kill -9 80283
+kill -9 [PID] 
 ```
 
-It should now work. If it doesn't, it's time for Option 2: please restart your computer. I'm working on a fix for this issue that doesn't require restarts or process terminations, but I need to localize the problem. Sorry about that.
+This happens because the MCP server is made within the active R Studio session and thus that port is binded to it. So, by forcing this termination it will also terminate RStudio. 
 
 
 # Limitations

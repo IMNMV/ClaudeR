@@ -112,12 +112,16 @@ claudeAddin <- function() {
                          value = settings$log_file_path),
         actionButton("open_log", "Open Log File")
       ),
-      tags$hr(),
-      tags$h4("Execution Statistics"),
-      verbatimTextOutput("executionStats"),
-      tags$hr(),
-      actionButton("startServer", "Start Server", class = "btn-primary"),
-      actionButton("stopServer", "Stop Server", class = "btn-danger")
+      shiny::tags$hr(),
+      shiny::tags$h4("Execution Statistics"),
+      shiny::verbatimTextOutput("executionStats"),
+      shiny::tags$hr(),
+      shiny::actionButton("startServer", "Start Server", class = "btn-primary"),
+      shiny::actionButton("stopServer", "Stop Server", class = "btn-danger"),
+      shiny::tags$hr(),
+      shiny::tags$h4("Process Management"),
+      shiny::actionButton("kill_process", "Force Kill Server Process", class = "btn-warning"),
+      shiny::helpText("Use this only if you're experiencing 'address already in use' errors.")
     )
   )
 
@@ -207,7 +211,62 @@ claudeAddin <- function() {
       }
     })
 
-    # Update execution count periodically
+    
+    # Kill process button handler
+    shiny::observeEvent(input$kill_process, {
+      # Create a confirmation dialog
+      shiny::showModal(shiny::modalDialog(
+        title = "Warning: This will restart your R session",
+        "Please make sure to save your work before continuing as it will restart the current R session.",
+        footer = shiny::tagList(
+          shiny::modalButton("Cancel"),
+          shiny::actionButton("confirm_kill", "Continue", class = "btn-danger")
+        ),
+        easyClose = FALSE
+      ))
+    })
+    
+    # Handle confirmation of process kill
+    shiny::observeEvent(input$confirm_kill, {
+      # Close the modal dialog
+      shiny::removeModal()
+      
+      # Proceed with killing the process
+      tryCatch({
+        # Run system command to find the process using port 8787
+        port_to_kill <- input$port
+        cmd_result <- system(paste0("lsof -i :", port_to_kill, " | grep LISTEN"), intern = TRUE)
+        
+        if (length(cmd_result) > 0) {
+          # Extract PID from the result (typically the second column)
+          pid <- strsplit(cmd_result, "\\s+")[[1]][2]
+          
+          if (!is.na(pid) && pid != "") {
+            # Kill the process
+            kill_result <- system(paste0("kill -9 ", pid), intern = TRUE)
+            shiny::showNotification(paste0("Process ", pid, " using port ", port_to_kill, " terminated."), type = "message")
+            
+            # Reset server state
+            if (!is.null(server_state)) {
+              try(httpuv::stopServer(server_state), silent = TRUE)
+              server_state <<- NULL
+            }
+            running <<- FALSE
+            state$running <- FALSE
+            
+            # Force garbage collection
+            gc()
+          } else {
+            shiny::showNotification("Could not identify process ID.", type = "warning")
+          }
+        } else {
+          shiny::showNotification(paste0("No process found using port ", port_to_kill), type = "warning")
+        }
+      }, error = function(e) {
+        shiny::showNotification(paste0("Error killing process: ", e$message), type = "error")
+      })
+    })
+        # Update execution count periodically
     observe({
       state$execution_count <- execution_count
       invalidateLater(1000)
