@@ -6,6 +6,9 @@
 \usage{
 claude_rstudio_addin(port = 8787)
 }
+\arguments{
+\item{port}{the local port at which to run the server.}
+}
 \description{
 Claude RStudio Connection Addin
 }

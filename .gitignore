@@ -1,2 +1,5 @@
 .DS_Store
 *.mov
+.Rproj.user
+ClaudeR.Rproj
+.Rhistory

@@ -1,10 +1,15 @@
-#' @importFrom httpuv startServer stopServer
-#' @importFrom jsonlite fromJSON toJSON
-#' @importFrom base64enc base64encode
-#' @importFrom rstudioapi getActiveDocumentContext
-
 #' Claude RStudio Connection Addin
+#'
+#' @param port the local port at which to run the server.
+#' @importFrom httpuv startServer
+#' @importFrom jsonlite fromJSON toJSON
+#' @importFrom shiny observeEvent reactiveValues renderText verbatimTextOutput
+#'   actionButton numericInput checkboxInput textInput conditionalPanel
+#'   showNotification invalidateLater runGadget paneViewer stopApp
+#'   observe tags
+#' @importFrom miniUI gadgetTitleBar miniContentPanel miniPage
 #' @export
+
 claude_rstudio_addin <- function(port = 8787) {
   # Create reactive values for state
   state <- list(
@@ -13,10 +18,10 @@ claude_rstudio_addin <- function(port = 8787) {
     last_error = NULL,
     execution_count = 0
   )
-  
+
   # Load settings or set defaults
   settings <- load_claude_settings()
-  
+
   # Create a unique log file name for this session if logging is enabled
   if (settings$log_to_file) {
     session_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
@@ -27,9 +32,9 @@ claude_rstudio_addin <- function(port = 8787) {
     # Save updated settings
     save_claude_settings(settings)
   }
-  
+
   # Create the HTTP server
-  server <- httpuv::startServer(
+  server <- startServer(
     host = "127.0.0.1",
     port = port,
     app = list(
@@ -38,44 +43,44 @@ claude_rstudio_addin <- function(port = 8787) {
         if (req$REQUEST_METHOD == "POST") {
           # Parse the request body
           body_raw <- req$rook.input$read()
-          body <- jsonlite::fromJSON(rawToChar(body_raw))
-          
+          body <- fromJSON(rawToChar(body_raw))
+
           if (!is.null(body$code)) {
             # Execute the code in the global environment
             result <- execute_code_in_session(body$code, settings)
             state$execution_count <- state$execution_count + 1
-            
+
             # Return the result as JSON
-            response_body <- jsonlite::toJSON(result, auto_unbox = TRUE, force = TRUE)
-            
+            response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
+
             return(list(
               status = 200L,
               headers = list('Content-Type' = 'application/json'),
               body = response_body
             ))
           }
-          
+
           return(list(
             status = 400L,
             headers = list('Content-Type' = 'application/json'),
             body = '{"error": "Missing code parameter"}'
           ))
         }
-        
+
         # Handle GET requests (status checks)
         if (req$REQUEST_METHOD == "GET") {
           status <- list(
             running = state$running,
             execution_count = state$execution_count
           )
-          
+
           return(list(
             status = 200L,
             headers = list('Content-Type' = 'application/json'),
-            body = jsonlite::toJSON(status, auto_unbox = TRUE)
+            body = toJSON(status, auto_unbox = TRUE)
           ))
         }
-        
+
         # Default response for other request types
         return(list(
           status = 405L,
@@ -85,87 +90,87 @@ claude_rstudio_addin <- function(port = 8787) {
       }
     )
   )
-  
+
   # Create the UI
-  ui <- miniUI::miniPage(
-    miniUI::gadgetTitleBar("Claude RStudio Connection"),
-    miniUI::miniContentPanel(
-      shiny::tags$h4("Server Status"),
-      shiny::verbatimTextOutput("serverStatus"),
-      shiny::tags$hr(),
-      shiny::tags$h4("Logging Settings"),
-      shiny::checkboxInput("print_to_console", "Print code to console before execution",
+  ui <- miniPage(
+    gadgetTitleBar("Claude RStudio Connection"),
+    miniContentPanel(
+      tags$h4("Server Status"),
+      verbatimTextOutput("serverStatus"),
+      tags$hr(),
+      tags$h4("Logging Settings"),
+      checkboxInput("print_to_console", "Print code to console before execution",
                            value = settings$print_to_console),
-      shiny::checkboxInput("log_to_file", "Log code to file",
+      checkboxInput("log_to_file", "Log code to file",
                            value = settings$log_to_file),
-      shiny::conditionalPanel(
+      conditionalPanel(
         condition = "input.log_to_file == true",
-        shiny::textInput("log_file_path", "Log file path",
+        textInput("log_file_path", "Log file path",
                          value = settings$log_file_path),
-        shiny::actionButton("open_log", "Open Log File")
+        actionButton("open_log", "Open Log File")
       ),
-      shiny::tags$hr(),
-      shiny::tags$h4("Execution Statistics"),
-      shiny::verbatimTextOutput("executionStats"),
-      shiny::tags$hr(),
-      shiny::tags$p("Keep this window open to maintain the connection with Claude.")
+      tags$hr(),
+      tags$h4("Execution Statistics"),
+      verbatimTextOutput("executionStats"),
+      tags$hr(),
+      tags$p("Keep this window open to maintain the connection with Claude.")
     )
   )
-  
+
   # Create the server function
   server_func <- function(input, output, session) {
     # Update server status
-    output$serverStatus <- shiny::renderText({
+    output$serverStatus <- renderText({
       sprintf("HTTP Server running on http://127.0.0.1:%d", port)
     })
-    
+
     # Update execution stats
-    output$executionStats <- shiny::renderText({
+    output$executionStats <- renderText({
       sprintf("Code executions: %d", state$execution_count)
     })
-    
+
     # Update settings when inputs change
-    shiny::observeEvent(input$print_to_console, {
+    observeEvent(input$print_to_console, {
       settings$print_to_console <- input$print_to_console
       save_claude_settings(settings)
     })
-    
-    shiny::observeEvent(input$log_to_file, {
+
+    observeEvent(input$log_to_file, {
       settings$log_to_file <- input$log_to_file
       save_claude_settings(settings)
     })
-    
-    shiny::observeEvent(input$log_file_path, {
+
+    observeEvent(input$log_file_path, {
       settings$log_file_path <- input$log_file_path
       save_claude_settings(settings)
     })
-    
+
     # Open log file button
-    shiny::observeEvent(input$open_log, {
+    observeEvent(input$open_log, {
       if (file.exists(settings$log_file_path)) {
         if (requireNamespace("rstudioapi", quietly = TRUE)) {
-          rstudioapi::navigateToFile(settings$log_file_path)
+          navigateToFile(settings$log_file_path)
         } else {
           file.show(settings$log_file_path)
         }
       } else {
-        shiny::showNotification("Log file does not exist yet.", type = "warning")
+        showNotification("Log file does not exist yet.", type = "warning")
       }
     })
-    
+
     # Handle closing the app
-    shiny::observeEvent(input$done, {
+    observeEvent(input$done, {
       # Stop the server
       httpuv::stopServer(server)
       state$running <- FALSE
-      
+
       # Close the app
-      shiny::stopApp()
+      stopApp()
     })
   }
-  
+
   # Run the gadget
-  shiny::runGadget(ui, server_func, viewer = shiny::paneViewer())
+  runGadget(ui, server_func, viewer = paneViewer())
 }
 
 #' Execute R code in the active RStudio session
@@ -176,61 +181,62 @@ claude_rstudio_addin <- function(port = 8787) {
 #' @param code The R code to execute
 #' @param settings The current settings for Claude addin
 #' @return A list containing the execution result and metadata
+
 execute_code_in_session <- function(code, settings = NULL) {
   # Default settings if not provided
   if (is.null(settings)) {
     settings <- load_claude_settings()
   }
-  
+
   # Print code to console if enabled
   if (settings$print_to_console) {
     cat("\n### Claude executing the following code ###\n")
     cat(code, "\n")
     cat("### End of Claude code ###\n\n")
   }
-  
+
   # Log code to file if enabled
   if (settings$log_to_file && !is.null(settings$log_file_path) && settings$log_file_path != "") {
     log_code_to_file(code, settings$log_file_path)
   }
-  
+
   # Create a temporary environment for evaluation
   env <- .GlobalEnv
-  
+
   # Set up plot capture if needed
   plot_file <- NULL
   has_plot <- FALSE
-  
+
   tryCatch({
     # Create a temporary file for plot capture
     plot_file <- tempfile(fileext = ".png")
-    
+
     # Capture all output
     output <- utils::capture.output({
       # Open the graphics device
       grDevices::png(filename = plot_file, width = 800, height = 600)
-      
+
       # Execute the code with the graphics device open
       result <- withVisible(eval(parse(text = code), envir = env))
-      
+
       # Close the graphics device
       grDevices::dev.off()
-      
+
       # Check if a plot was created
       has_plot <- file.exists(plot_file) && file.info(plot_file)$size > 100
-      
+
       # Print the result if it's visible
       if (result$visible) {
         print(result$value)
       }
     })
-    
+
     # Prepare the response
     response <- list(
       success = TRUE,
       output = paste(output, collapse = "\n")
     )
-    
+
     # Include the result value if available
     if (exists("result") && !is.null(result$value)) {
       response$result <- if (is.data.frame(result$value)) {
@@ -249,7 +255,7 @@ execute_code_in_session <- function(code, settings = NULL) {
         })
       }
     }
-    
+
     # Include plot if available
     if (has_plot) {
       # Read the plot file and encode it
@@ -259,14 +265,14 @@ execute_code_in_session <- function(code, settings = NULL) {
         mime_type = "image/png"
       )
     }
-    
+
     return(response)
   }, error = function(e) {
     # Log the error if logging is enabled
     if (settings$log_to_file && !is.null(settings$log_file_path) && settings$log_file_path != "") {
       log_error_to_file(code, e$message, settings$log_file_path)
     }
-    
+
     return(list(
       success = FALSE,
       error = e$message
@@ -284,22 +290,23 @@ execute_code_in_session <- function(code, settings = NULL) {
 #' @param code The R code to log
 #' @param log_path The path to the log file
 #' @return Invisible NULL
+
 log_code_to_file <- function(code, log_path) {
   # Create timestamp
   timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-  
+
   # Format the log entry
   log_entry <- sprintf("# --- [%s] ---\n# Code executed by Claude:\n%s\n\n", timestamp, code)
-  
+
   # Create directory if it doesn't exist
   log_dir <- dirname(log_path)
   if (!dir.exists(log_dir)) {
     dir.create(log_dir, recursive = TRUE)
   }
-  
+
   # Append to the log file
   cat(log_entry, file = log_path, append = TRUE)
-  
+
   invisible(NULL)
 }
 
@@ -309,23 +316,24 @@ log_code_to_file <- function(code, log_path) {
 #' @param error_message The error message
 #' @param log_path The path to the log file
 #' @return Invisible NULL
+
 log_error_to_file <- function(code, error_message, log_path) {
   # Create timestamp
   timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-  
+
   # Format the log entry
   log_entry <- sprintf("# --- [%s] ---\n# Code executed by Claude (ERROR):\n%s\n# Error: %s\n\n",
                       timestamp, code, error_message)
-  
+
   # Create directory if it doesn't exist
   log_dir <- dirname(log_path)
   if (!dir.exists(log_dir)) {
     dir.create(log_dir, recursive = TRUE)
   }
-  
+
   # Append to the log file
   cat(log_entry, file = log_path, append = TRUE)
-  
+
   invisible(NULL)
 }
 
@@ -339,10 +347,10 @@ load_claude_settings <- function() {
     log_to_file = FALSE,
     log_file_path = file.path(path.expand("~"), "claude_r_logs.R")
   )
-  
+
   # Try to load settings from a settings file
   settings_file <- file.path(path.expand("~"), ".claude_r_settings.rds")
-  
+
   if (file.exists(settings_file)) {
     tryCatch({
       settings <- readRDS(settings_file)
@@ -361,6 +369,7 @@ load_claude_settings <- function() {
 #'
 #' @param settings A list containing Claude settings
 #' @return Invisible NULL
+
 save_claude_settings <- function(settings) {
   # Save settings to a settings file
   settings_file <- file.path(path.expand("~"), ".claude_r_settings.rds")

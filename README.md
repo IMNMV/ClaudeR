@@ -126,7 +126,7 @@ Add the following to the claude_desktop_config.json file:
   "mcpServers": {
     "r-studio": {
       "command": "python",  # Or full path to your Python executable
-      "args": ["PATH_TO_REPOSITORY/ClaudeR/inst/scripts/persistent_r_mcp.py"],
+      "args": ["PATH_TO_REPOSITORY/ClaudeR/scripts/persistent_r_mcp.py"],
       "env": {
         "PYTHONPATH": "PATH_TO_PYTHON_SITE_PACKAGES",  # Optional if using system Python
         "PYTHONUNBUFFERED": "1"

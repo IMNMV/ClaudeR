@@ -7,12 +7,12 @@ License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
 Imports:
-    R6,
+    base64enc,
+    ggplot2,
+    grDevices,
     httpuv,
     jsonlite,
     miniUI,
-    shiny,
-    base64enc,
     rstudioapi,
-    grDevices
+    shiny
 RoxygenNote: 7.3.2
