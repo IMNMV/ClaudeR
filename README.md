@@ -83,7 +83,7 @@ For Claude Desktop App use:
 2) Python 3.8+ For the MCP server component
 3) Claude Desktop App: The desktop version of Claude AI
 
-For Curosr:
+For Cursor:
 
 1) R Extension for Visual Studio Code
 2) Python 3.8+ For the MCP server component
