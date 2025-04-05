@@ -44,11 +44,12 @@ jobs:
 
       - name: Authorize and deploy app
         env:
-          # Provide your app name, account name, and server to be deployed below
-          APPNAME: your-app-name
-          ACCOUNT: your-account-name
-          SERVER: shinyapps.io # server to deploy
+          RSCONNECT_USER: ${{ secrets.RSCONNECT_USER }}
+          RSCONNECT_TOKEN: ${{ secrets.RSCONNECT_TOKEN }}
+          RSCONNECT_SECRET: ${{ secrets.RSCONNECT_SECRET }}
         run: |
-          rsconnect::setAccountInfo("${{ secrets.RSCONNECT_USER }}", "${{ secrets.RSCONNECT_TOKEN }}", "${{ secrets.RSCONNECT_SECRET }}")
-          rsconnect::deployApp(appName = "${{ env.APPNAME }}", account = "${{ env.ACCOUNT }}", server = "${{ env.SERVER }}")
+          rsconnect::setAccountInfo(name = Sys.getenv("RSCONNECT_USER"),
+                                     token = Sys.getenv("RSCONNECT_TOKEN"),
+                                     secret = Sys.getenv("RSCONNECT_SECRET"))
+          rsconnect::deployApp()
         shell: Rscript {0}
