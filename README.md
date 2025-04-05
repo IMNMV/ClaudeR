@@ -5,6 +5,9 @@
 
 - It can explore the data autonomously, or be a collaborator. The choice is yours.
 
+- This will work with Cursor, or any service that allows for MCP servers that has the ability to run R. For Cusor, install the R add-on (R Extension for Visual Studio Code
+) and update the MCP file accordingly. You can find this in Cursor > Settings > Cursor Settings > MCP
+
 # Features
 
 Claude has the following MCP tools:
@@ -74,9 +77,16 @@ These restrictions only apply to code executed through the Claude integration. N
 # Installation
 Prerequisites:
 
+For Claude Desktop App use:
+
 1) R 4.0+ and RStudio
 2) Python 3.8+ For the MCP server component
 3) Claude Desktop App: The desktop version of Claude AI
+
+For Curosr:
+
+1) R Extension for Visual Studio Code
+2) Python 3.8+ For the MCP server component
 
 # Step 1: Install R Package Dependencies
 
@@ -120,7 +130,8 @@ If you can't open it, right click > Open with > pick the editor of your choice (
 
 Or, via the desktop app, open the Claude desktop App > Click Claude in the top left > Settings > Developer > Edit Config
 
-Add the following to the claude_desktop_config.json file:
+Add the following to the claude_desktop_config.json file, or in the mcp.json file in the Cursor settings:
+
 ```bash
 {
   "mcpServers": {
