@@ -151,19 +151,6 @@ Replace
 - PATH_TO_REPOSITORY with the path to where the package is installed (use find.package("ClaudeR") in R to locate it)
 - PATH_TO_PYTHON_SITE_PACKAGES with the path to your Python site-packages directory
 
-# Finding Your Python Site-Packages Path
-
-To find your Python site-packages path:
-
-1. Open a terminal or command prompt
-2. Run this command:
-   ```bash
-   python -c "import site; print(site.getsitepackages()[0])"
-   ```
-3. Copy the output path and use it in your configuration
-
-If you're using a virtual environment or conda, make sure to run this command in the correct environment where you installed the dependencies.
-
 If you using `uv`, you can add the following to the mcp.json file in the Cursor settings:
 
 ```json
@@ -178,6 +165,20 @@ If you using `uv`, you can add the following to the mcp.json file in the Cursor 
     }
   }
 }
+```
+
+# Finding Your Python Site-Packages Path
+
+To find your Python site-packages path:
+
+1. Open a terminal or command prompt
+2. Run this command:
+   ```bash
+   python -c "import site; print(site.getsitepackages()[0])"
+   ```
+3. Copy the output path and use it in your configuration
+
+If you're using a virtual environment or conda, make sure to run this command in the correct environment where you installed the dependencies.
 
 
 # Usage
