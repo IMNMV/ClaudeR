@@ -1,0 +1,29 @@
+[project]
+name = "clauder"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "illumination-k", email = "illumination.k.27@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp>=1.9.1",
+]
+
+[project.scripts]
+clauder = "clauder.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.15.0",
+    "ruff>=0.11.11",
+]
+
+[tool.ruff.lint]
+select = ["I"]

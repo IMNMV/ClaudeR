@@ -3,3 +3,6 @@
 .Rproj.user
 ClaudeR.Rproj
 .Rhistory
+
+.venv
+.python-version
