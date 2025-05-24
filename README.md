@@ -158,7 +158,7 @@ If you using `uv`, you can add the following to the mcp.json file in the Cursor 
   "mcpServers": {
     "r-studio": {
       "command": "uvx", 
-      "args": ["--from", "git+https://github.com/IMNMV/ClaudeR"],
+      "args": ["--from", "git+https://github.com/IMNMV/ClaudeR", "clauder"],
       "env": {
         "PYTHONUNBUFFERED": "1"
       }
