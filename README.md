@@ -137,7 +137,7 @@ Add the following to the claude_desktop_config.json file, or in the mcp.json fil
   "mcpServers": {
     "r-studio": {
       "command": "python",  # Or full path to your Python executable
-      "args": ["PATH_TO_REPOSITORY/ClaudeR/scripts/persistent_r_mcp.py"],
+      "args": ["PATH_TO_REPOSITORY/ClaudeR/src/clauder/server.py"],
       "env": {
         "PYTHONPATH": "PATH_TO_PYTHON_SITE_PACKAGES",  # Optional if using system Python
         "PYTHONUNBUFFERED": "1"
@@ -146,6 +146,7 @@ Add the following to the claude_desktop_config.json file, or in the mcp.json fil
   }
 }
 ```
+
 Replace
 - PATH_TO_REPOSITORY with the path to where the package is installed (use find.package("ClaudeR") in R to locate it)
 - PATH_TO_PYTHON_SITE_PACKAGES with the path to your Python site-packages directory
@@ -162,6 +163,22 @@ To find your Python site-packages path:
 3. Copy the output path and use it in your configuration
 
 If you're using a virtual environment or conda, make sure to run this command in the correct environment where you installed the dependencies.
+
+If you using `uv`, you can add the following to the mcp.json file in the Cursor settings:
+
+```json
+{
+  "mcpServers": {
+    "r-studio": {
+      "command": "uvx", 
+      "args": ["--from", "git+https://github.com/IMNMV/ClaudeR"],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}
+
 
 # Usage
 Starting the Connection

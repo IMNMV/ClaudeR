@@ -1,9 +1,10 @@
 [project]
 name = "clauder"
 version = "0.1.0"
-description = "Add your description here"
+description = "Connects RStudio with Claude AI to enable interactive coding sessions."
 readme = "README.md"
 authors = [
+    { name = "Nykko Vitali", email = "nykvt@icloud.com"},
     { name = "illumination-k", email = "illumination.k.27@gmail.com" }
 ]
 requires-python = ">=3.10"
