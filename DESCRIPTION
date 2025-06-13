@@ -8,6 +8,7 @@ Encoding: UTF-8
 LazyData: true
 Imports:
     base64enc,
+    ggplot2,
     grDevices,
     httpuv,
     jsonlite,
@@ -16,6 +17,5 @@ Imports:
     shiny
 Suggests:
     devtools,
-    ggplot2
 RoxygenNote: 7.3.2
 
