@@ -3,6 +3,7 @@
 export(claudeAddin)
 export(claude_rstudio_addin)
 export(execute_code_in_session)
+export(install_clauder)
 importFrom(base64enc,base64encode)
 importFrom(ggplot2,aes)
 importFrom(ggplot2,geom_bar)

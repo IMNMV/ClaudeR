@@ -5,8 +5,7 @@
 
 - It can explore the data autonomously, or be a collaborator. The choice is yours.
 
-- This will work with Cursor, or any service that allows for MCP servers that has the ability to run R. For Cusor, install the R add-on (R Extension for Visual Studio Code
-) and update the MCP file accordingly. You can find this in Cursor > Settings > Cursor Settings > MCP
+- This will also work with Cursor, or any service that allows for MCP servers that has the ability to run RStudio.
 
 # Features
 
@@ -88,99 +87,66 @@ For Cursor:
 1) R Extension for Visual Studio Code
 2) Python 3.8+ For the MCP server component
 
-# Step 1: Install R Package Dependencies
+# Step 1: Install ClaudeR from GitHub
+Run this line inside your RStudio console. This command will download and install the ClaudeR package.
 
-Run these inside your RStudio environment. 
-```bash
-install.packages(c(
-  "R6",
-  "httpuv",
-  "jsonlite", 
-  "miniUI",
-  "shiny", 
-  "base64enc",
-  "rstudioapi",
-  "devtools"
-))
-```
-# Step 2: Install Python Dependencies
-
-Run this in terminal or command prompt
-```bash
-pip install mcp httpx
-```
-# Step 3: Install ClaudeR from GitHub
-
-
-Run this in your RStudio environment
-```bash
+```R
+if (!require("devtools")) install.packages("devtools")
 devtools::install_github("IMNMV/ClaudeR")
 ```
+# Step 2: Run the All-in-One Setup
+Now, run the setup function in your RStudio Console. This will install all needed R and Python libraries and automatically configure the config file.
 
-# Step 4: Configure Claude Desktop
-Locate or create the Claude Desktop configuration json file using terminal or command prompts:
-```bash
-Mac: cd /Users/YOUR-NAME/Library/Application\ Support/Claude/
-Mac: open .
-Windows: cd %APPDATA%\Claude
-Windows: explorer .
+For most users The script will automatically find your system's Python. Simply run:
+
+```R
+# First, load the package into your r session
+library(ClaudeR)
+
+# Now, run the installer for Claude Desktop:
+install_clauder()
+
+# Optional: If you are a Cursor user:
+install_clauder(for_cursor = TRUE)
 ```
-If you can't open it, right click > Open with > pick the editor of your choice (text edit, notepad, vscode, xcode, etc.)
 
 
-Or, via the desktop app, open the Claude desktop App > Click Claude in the top left > Settings > Developer > Edit Config
+For Conda / Virtual Environment Users:
+If you need to use a specific Python from a Conda or virtual environment, you must provide the full path to that Python executable.
 
-Add the following to the claude_desktop_config.json file, or in the mcp.json file in the Cursor settings:
+```R
+library(ClaudeR)
 
-```bash
-{
-  "mcpServers": {
-    "r-studio": {
-      "command": "python",  # Or full path to your Python executable
-      "args": ["PATH_TO_REPOSITORY/ClaudeR/scripts/persistent_r_mcp.py"],
-      "env": {
-        "PYTHONPATH": "PATH_TO_PYTHON_SITE_PACKAGES",  # Optional if using system Python
-        "PYTHONUNBUFFERED": "1"
-      }
-    }
-  }
-}
+# Define the path to your specific Python
+my_python_path <- "/path/to/your/conda/envs/my_env/bin/python"
+
+# Run the installer with that path
+install_clauder(python_path = my_python_path)
+# Or
+install_clauder(for_cusor = TRUE, python_path = my_python_path)
 ```
-Replace
-- PATH_TO_REPOSITORY with the path to where the package is installed (use find.package("ClaudeR") in R to locate it)
-- PATH_TO_PYTHON_SITE_PACKAGES with the path to your Python site-packages directory
 
-# Finding Your Python Site-Packages Path
-
-To find your Python site-packages path:
-
-1. Open a terminal or command prompt
-2. Run this command:
-   ```bash
-   python -c "import site; print(site.getsitepackages()[0])"
-   ```
-3. Copy the output path and use it in your configuration
-
-If you're using a virtual environment or conda, make sure to run this command in the correct environment where you installed the dependencies.
+The script will guide you through the process. When it's finished, you must completely quit and restart the Claude Desktop and/or Cursor for the new settings to load.
 
 # Usage
-Starting the Connection
+After installation, launch the ClaudeR connection from your RStudio console
 
-1) Load the ClaudeR package in your RStudio environment and start the addin:
 
-```bash
+```r
 library(ClaudeR)
 claudeAddin()
 ```
 
-2) In the addin interface:
+The ClaudeR add-in will appear in your RStudio Viewer pane.
+
+In the addin interface:
 ![ClaudeR Addin Interface](assets/ui_interface.png)
 
 - Click "Start Server" to launch the connection
 - Configure logging settings if desired
 - Keep the addin window active while using Claude (you can switch to other views like Files, Plots, Viewers, etc. - just don't hit the stop sign/stop button)
 
-3) Open Claude Desktop and ask it to execute R code in your session
+Open Claude Desktop (or Cursor) and ask it to execute R code in your session
 
 # Logging Options
 The ClaudeR addin provides several logging options:
@@ -222,8 +188,13 @@ For Connection Issues:
 
 For Python Dependency Issues:
 
-- Ensure you've installed the required Python packages: mcp and httpx
+- **"could not find function install_clauder" Error:** If you see this after installing, restart your R session (`Session -> Restart R` or `Cmd/Ctrl + Shift + F10`) and try again. This ensures the newest version of the package is loaded.
 - Check that your Python environment is accessible
+- **MCP Server Failed to Start in Claude/Cursor:** This usually means the installer picked up a system Python that doesn't have the necessary libraries (`mcp`, `httpx`). Re-run the installer and provide a specific path to the correct Python environment, like a Conda or venv Python, using the `python_path` argument.
+
+    ```R
+    install_clauder(python_path = "/path/to/your/conda/envs/my_env/bin/python")
+    ```
 
 Claude Can't See Results:
 
@@ -246,13 +217,13 @@ createTcpServer: address already in use
 Error starting HTTP server: Failed to create server"
 
 This is a UI bug. The server is still active, and you can have Claude run code like normal. However, if you run into issues with Claude not being able to connect then the server you will need to restart RStudio.
-If this issue causes Claude to not access the R environment please save your work and click the 'Force Kill Server response' in the viewer pane. This will run the kill command on the backend: 
+If this issue causes Claude to not access the R environment please SAVE your work and click the 'Force Kill Server response' in the viewer pane. This will run the kill command on the backend: 
 
 ```bash
 kill -9 [PID] 
 ```
 
-This happens because the MCP server is made within the active R Studio session and thus that port is binded to it. So, by forcing this termination it will also terminate RStudio. 
+This happens because the MCP server is made within the active R Studio session and thus that port is binded to it. So, by forcing this termination it will also terminate RStudio. It will only terminate the active RStudio window. Other active windows will not be affected.
 
 
 # Limitations
