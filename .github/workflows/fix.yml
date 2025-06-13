@@ -1,7 +1,0 @@
-name: Fix Status
-on: push
-jobs:
-  fix:
-    runs-on: ubuntu-latest
-    steps:
-      - run: exit 0
