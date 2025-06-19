@@ -6,7 +6,7 @@
 
 </td>
 <td align="right">
-<img src="assets/ClaudeR_Logo.png" alt="ClaudeR Logo" width="100"/>
+<img src="assets/ClaudeR_logo.png" alt="ClaudeR Logo" width="100"/>
 </td>
 </tr>
 </table>
