@@ -15,7 +15,7 @@
 
 - It can explore the data autonomously, or be a collaborator. The choice is yours.
 
-- This will also work with Cursor, or any service that allows for MCP servers that has the ability to run RStudio.
+- This will also work with Cursor or any service that allows for MCP servers and can run RStudio.
 
 # Features
 
@@ -107,7 +107,7 @@ devtools::install_github("IMNMV/ClaudeR")
 # Step 2: Run the All-in-One Setup
 Now, run the setup function in your RStudio Console. This will install all needed R and Python libraries and automatically configure the config file.
 
-For most users The script will automatically find your system's Python. Simply run:
+For most users, the script will automatically find your system's Python. Simply run:
 
 ```R
 # First, load the package into your r session
@@ -133,7 +133,7 @@ my_python_path <- "/path/to/your/conda/envs/my_env/bin/python"
 # Run the installer with that path
 install_clauder(python_path = my_python_path)
 # Or
-install_clauder(for_cusor = TRUE, python_path = my_python_path)
+install_clauder(for_cursor = TRUE, python_path = my_python_path)
 ```
 
 The script will guide you through the process. When it's finished, you must completely quit and restart the Claude Desktop and/or Cursor for the new settings to load.
@@ -165,7 +165,7 @@ The ClaudeR addin provides several logging options:
 - Log Code to File: Saves all code executed by Claude to a log file
 - Custom Log Path: Specify where log files should be saved
 
-Each R session gets its own log file with timestamps for all code executed. That means all code made from chats will be saved in a single log file until the R session is restarted.
+Each R session gets its own log file with timestamps for all code executed. All code generated through chats will be saved to a single log file until the R session is restarted.
 
 # Example Interactions
 Once connected, you can ask Claude things like:
@@ -214,7 +214,7 @@ Claude Can't See Results:
 
 Warnings:
 
-- You may get a warning after installing dev tools, this will not mess with functionality. Bugs still exist, but I will work on fixing them as they arise.
+- You may see a warning after installing dev tools, but it won't affect functionality. Bugs still exist, but I will work on fixing them as they arise.
 
 
 - If you stop the server then re-start it in the same R session, you may see the following:
