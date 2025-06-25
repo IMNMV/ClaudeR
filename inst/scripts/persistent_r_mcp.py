@@ -9,7 +9,7 @@ import base64
 from typing import Any, Dict, List
 import httpx
 import sys
-
+from datetime import datetime
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 import mcp.types as types
@@ -19,6 +19,10 @@ server = Server("r-studio")
 
 # Configuration
 R_ADDIN_URL = "http://127.0.0.1:8787"  # URL of the R addin server
+
+def escape_r_string(s: str) -> str:
+    """Escape special characters for R strings."""
+    return s.replace("\\", "\\\\").replace('"', '\\"').replace("'", "\\'").replace("\n", "\\n")
 
 # Function to execute R code via the HTTP addin
 async def execute_r_code_via_addin(code: str) -> Dict[str, Any]:
@@ -70,7 +74,7 @@ async def list_tools() -> List[types.Tool]:
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "R code to execute"
+                        "description": "R code to execute. Avoid hardcoding values pulled from analyses. Always dynamically pull the value from the object or dataframe."
                     }
                 },
                 "required": ["code"]
@@ -137,7 +141,52 @@ async def list_tools() -> List[types.Tool]:
                 },
                 "required": ["search_pattern", "replacement"]
             }
-        )
+        ),
+        types.Tool(
+            name="create_task_list",
+            description="Create a task list for the current analysis",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "description": {"type": "string"},
+                                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}
+                            }
+                        },
+                        "description": "List of tasks to complete"
+                    }
+                },
+                "required": ["tasks"]
+            }
+        ),
+        types.Tool(
+            name="update_task_status",
+            description="Update the status of a task and optionally add notes",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "ID of the task to update"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress", "completed"],
+                        "description": "New status for the task"
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Optional notes about the task progress"
+                    }
+                },
+                "required": ["task_id", "status"]
+            }
+        ),
     ]
 
 @server.call_tool()
@@ -297,6 +346,103 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             type="text",
             text=result.get("output", "No document content retrieved")
         )]
+   
+    elif name == "create_task_list":
+        if "tasks" not in arguments:
+            return [types.TextContent(
+                type="text",
+                text="Error: 'tasks' parameter is required"
+            )]
+        
+        # Format the task list as R comments
+        task_list_code = """
+    # ===== TASK LIST CREATED =====
+    # Generated: {}
+    # 
+    """.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        
+        for i, task in enumerate(arguments["tasks"], 1):
+            task_list_code += f"# Task {task['id']}: {task['description']} [{task['status'].upper()}]\n"
+        
+        task_list_code += "# ===========================\n"
+        
+        # Execute to print in console and log
+        result = await execute_r_code_via_addin(f'cat("{task_list_code}")')
+        
+        # Convert tasks to R list format with proper escaping
+        r_tasks = "list(\n"
+        for i, task in enumerate(arguments["tasks"]):
+            if i > 0:
+                r_tasks += ",\n"
+            r_tasks += f"""  list(
+        id = "{escape_r_string(task['id'])}",
+        description = "{escape_r_string(task['description'])}",
+        status = "{escape_r_string(task['status'])}"
+    )"""
+        r_tasks += "\n)"
+        
+        # Store task list in R environment for tracking
+        store_code = f"""
+    .claude_task_list <- list(
+    created = Sys.time(),
+    tasks = {r_tasks}
+    )
+    """
+        await execute_r_code_via_addin(store_code)
+        
+        return [types.TextContent(
+            type="text",
+            text=f"Task list created with {len(arguments['tasks'])} tasks"
+        )]
+
+    elif name == "update_task_status":
+        task_id = arguments.get("task_id")
+        status = arguments.get("status")
+        notes = arguments.get("notes", "")
+        
+        # Update the task in R environment and print update
+        update_code = f"""
+    if (exists(".claude_task_list")) {{
+        # Update task status
+        for (i in seq_along(.claude_task_list$tasks)) {{
+            if (.claude_task_list$tasks[[i]]$id == "{task_id}") {{
+                .claude_task_list$tasks[[i]]$status <- "{status}"
+                
+                # Print update to console
+                update_msg <- paste0(
+                    "\\n# ===== TASK UPDATE =====\\n",
+                    "# Time: ", format(Sys.time(), "%H:%M:%S"), "\\n",
+                    "# Task {task_id}: ", .claude_task_list$tasks[[i]]$description, "\\n",
+                    "# Status: {status.upper()}\\n"
+                )
+                
+                if ("{notes}" != "") {{
+                    update_msg <- paste0(update_msg, "# Notes: {notes}\\n")
+                }}
+                
+                update_msg <- paste0(update_msg, "# ======================\\n")
+                cat(update_msg)
+                
+                break
+            }}
+        }}
+        
+        # Return current task summary
+        completed <- sum(sapply(.claude_task_list$tasks, function(t) t$status == "completed"))
+        total <- length(.claude_task_list$tasks)
+        paste0("Progress: ", completed, "/", total, " tasks completed")
+    }} else {{
+        "No task list found"
+    }}
+    """
+        
+        result = await execute_r_code_via_addin(update_code)
+        
+        return [types.TextContent(
+            type="text",
+            text=result.get("output", "Task updated")
+        )]
+    
 
     elif name == "modify_code_section":
         if not all(k in arguments for k in ["search_pattern", "replacement"]):

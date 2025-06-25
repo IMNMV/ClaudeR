@@ -25,6 +25,8 @@ Claude has the following MCP tools:
 - get_active_document – Get the content of the active document in RStudio.
 - get_r_info – Get information about the R environment.
 - modify_code_section – Modify a specific section of code in the active document.
+- create_task_list - If told, Claude will generate a task list based on the prompt you provide. This is a guard against Claude omitting tasks after long-context instability.
+- update_task_status - A method for Claude to track where it's at for each task in the task list.
 
 From these, you are able to do the following:
 
@@ -35,6 +37,7 @@ From these, you are able to do the following:
 - Code Logging: All code executed by Claude can be saved to log files for future reference
 - Console Printing: Option to print Claude's code to the console before execution
 - Environment Integration: Claude can access variables and functions in your R environment
+- Summaries will (ideally) contain dynamically pulled results from the objects/data frames to safeguard the final results from hallucinations
 
 * Note: Claude is able to create Quarto Presentations. I recommend opening an active qmd file and asking for specific updates there. It is not perfect but I am actively working on improving this feature.
 
