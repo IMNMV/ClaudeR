@@ -215,6 +215,12 @@ Claude Can't See Results:
 - Check that the server status shows "Running"
 - Verify there are no error messages in the R console
 
+Plots won't display until the session ends:
+
+- Claude is likely using the execute_r tool without wrapping the object print() before executing it. Instructing it to wrap plots in print() before executing them should solve this
+- Another solution is to tell Claude to execute plots with the execute_r_with_plot function which should print the object correctly
+
+
 Warnings:
 
 - You may see a warning after installing dev tools, but it won't affect functionality. Bugs still exist, but I will work on fixing them as they arise.
