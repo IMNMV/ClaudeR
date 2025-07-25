@@ -468,6 +468,13 @@ validate_code_security <- function(code) {
       reason = "Security restriction: System command execution is not allowed"
     ))
   }
+      
+  if (grepl("rstudioapi::terminal", code)) {
+    return(list(
+      blocked = TRUE,
+      reason = "Security restriction: Direct terminal access via `rstudioapi` is disabled."
+    ))
+  }
 
   # File deletion via base functions
   file_deletion_patterns <- c(
