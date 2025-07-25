@@ -20,6 +20,32 @@ server = Server("r-studio")
 # Configuration
 R_ADDIN_URL = "http://127.0.0.1:8787"  # URL of the R addin server
 
+# Cache variable to store the result of the ggplot2 check
+_is_ggplot_installed = None
+
+
+
+async def check_ggplot_installed() -> bool:
+    """
+    Performs a one-time check to see if ggplot2 is installed in the R environment.
+    Caches the result for subsequent calls.
+    """
+    global _is_ggplot_installed
+    # If we've already checked, return the cached result immediately.
+    if _is_ggplot_installed is not None:
+        return _is_ggplot_installed
+
+    result = await execute_r_code_via_addin("print(requireNamespace('ggplot2', quietly = TRUE))")
+
+    if result.get("success") and "TRUE" in result.get("output", ""):
+        print("ggplot2 check successful.", file=sys.stderr)
+        _is_ggplot_installed = True
+    else:
+        print("ggplot2 not found in R environment.", file=sys.stderr)
+        _is_ggplot_installed = False
+    
+    return _is_ggplot_installed
+
 def escape_r_string(s: str) -> str:
     """Escape special characters for R strings."""
     return s.replace("\\", "\\\\").replace('"', '\\"').replace("'", "\\'").replace("\n", "\\n")
@@ -243,21 +269,16 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                 type="text",
                 text="Error: 'code' parameter is required"
             )]
-        
-        # For plots, we'll ensure there's a plot device opened
-        plot_code = f"""
-        # Ensure plot is displayed in RStudio
-        if (!("package:ggplot2" %in% search())) {{
-          if (requireNamespace("ggplot2", quietly = TRUE)) {{
-            library(ggplot2)
-          }}
-        }}
-        
-        # Execute the plot code
-        {arguments["code"]}
-        """
-        
-        result = await execute_r_code_via_addin(plot_code)
+
+        # First, perform the one-time check for ggplot2.
+        if not await check_ggplot_installed():
+            return [types.TextContent(
+                type="text",
+                text="Error: The 'ggplot2' package is required for this tool but is not installed. Please install it in RStudio."
+            )]
+
+        # The package is available, so just execute the user's code directly.
+        result = await execute_r_code_via_addin(arguments["code"])
         
         # Add text output
         if "output" in result and result["output"]:

@@ -236,6 +236,7 @@ execute_code_in_session <- function(code, settings = NULL) {
       success = TRUE,
       output = paste(output, collapse = "\n")
     )
+    
 
     # Include the result value if available
     if (exists("result") && !is.null(result$value)) {
