@@ -209,8 +209,8 @@ If you can do it with R, Claude can too.
 
 ## ⚠️ Limitations
 
-- The add-in window must remain open for the connection to work.
 - Each R session can only connect to one Claude session at a time.
+- You can stop the connection to the Shiny UI by clicking the Stop button in the console to make changes alongside Claude, but to stop the connection you will need to restart the RSession. 
 
 ## 📜 License
 
