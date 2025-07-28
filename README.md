@@ -14,7 +14,7 @@
 
 **ClaudeR** is an R package that forges a direct link between RStudio and Claude AI. This enables interactive coding sessions where Claude can execute code in your active RStudio environment and see the results in real-time. Whether you need an autonomous data explorer or a coding collaborator, ClaudeR adapts to your workflow.
 
-This package is also compatible with Cursor and other services that support MCP servers and can run RStudio.
+This package is also compatible with Cursor and other services that support MCP servers.
 
 ## 🎬 Demo
 
@@ -164,7 +164,7 @@ The ClaudeR add-in will appear in your RStudio Viewer pane.
 
 Now, open Claude Desktop or Cursor and start asking it to execute R code!
 
-Note: You can gain console/active document control by clicking the stop button in the console window. This will disable the shiny app in the viewer pane made by claudeAddin(), but the server will remain active. To bring the viewer pane back, simply re-run claudeAddin().
+Note: You can gain console/active document control by clicking the stop button in the console window. This will disable the shiny app in the viewer pane made by `claudeAddin()`, but the server will remain active. To bring the viewer pane back, simply re-run `claudeAddin()`. 
 
 ## 📝 Logging Options
 
