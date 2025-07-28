@@ -164,6 +164,8 @@ The ClaudeR add-in will appear in your RStudio Viewer pane.
 
 Now, open Claude Desktop or Cursor and start asking it to execute R code!
 
+Note: You can gain console/active document control by clicking the stop button in the console window. This will disable the shiny app in the viewer pane made by claudeAddin(), but the server will remain active. To bring the viewer pane back, simply re-run claudeAddin().
+
 ## 📝 Logging Options
 
 - **Print Code to Console**: See Claude's code in your R console before it runs.
@@ -171,6 +173,7 @@ Now, open Claude Desktop or Cursor and start asking it to execute R code!
 - **Custom Log Path**: Specify a custom location for log files.
 
 Each R session gets its own timestamped log file.
+Saving the log file with a different name that's actively being edited by Claude automatically creates a new log continuing on from the last command that was executed after being saved.
 
 ## 💬 Example Interactions
 
@@ -178,8 +181,9 @@ Each R session gets its own timestamped log file.
 - "Load the `mtcars` dataset and create a scatterplot of `mpg` vs. `hp` with a trend line."
 - "Fit a linear model to predict `mpg` based on `wt` and `hp`."
 - "Generate a correlation matrix for the `iris` dataset and visualize it."
+- "I have a qmd file active. Please make a nice quarto presentation on gradient descent. The audience is very technical. Make sure it looks smooth. Save the presentation in /Users/nyk/QuartoDocs/"
 
-If you can do it with R, Claude can too.
+If you can do it with R, Claude (or any other LLM you're using Cursor with) can too.
 
 ## 📌 Important Notes
 
