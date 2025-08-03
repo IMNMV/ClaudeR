@@ -20,6 +20,7 @@ server = Server("r-studio")
 # Configuration
 R_ADDIN_URL = "http://127.0.0.1:8787"  # URL of the R addin server
 
+
 # Cache variable to store the result of the ggplot2 check
 _is_ggplot_installed = None
 

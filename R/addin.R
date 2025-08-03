@@ -190,9 +190,9 @@ execute_code_in_session <- function(code, settings = NULL) {
 
   # Print code to console if enabled
   if (settings$print_to_console) {
-    cat("\n### Claude executing the following code ###\n")
+    cat("\n### LLM executing the following code ###\n")
     cat(code, "\n")
-    cat("### End of Claude code ###\n\n")
+    cat("### End of LLM code ###\n\n")
   }
 
   # Log code to file if enabled
