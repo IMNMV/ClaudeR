@@ -2,7 +2,6 @@
 
 export(claudeAddin)
 export(claude_rstudio_addin)
-export(configure_cli)
 export(execute_code_in_session)
 export(install_clauder)
 export(install_cli)
@@ -41,5 +40,4 @@ importFrom(shiny,stopApp)
 importFrom(shiny,tags)
 importFrom(shiny,textInput)
 importFrom(shiny,verbatimTextOutput)
-importFrom(utils,install.packages)
 importFrom(utils,modifyList)
