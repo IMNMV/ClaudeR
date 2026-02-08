@@ -2,7 +2,7 @@
   <img src="assets/ClaudeR_logo.png" alt="ClaudeR Logo" width="150"/>
   <h1>ClaudeR</h1>
   <p>
-    <b>Connect RStudio directly to Claude, Gemini, and other AI assistants for interactive coding and data analysis.</b>
+    <b>Connect RStudio directly to Claude Desktop, Claude Code, Codex, Gemini CLI, or any other MCP based AI assistant for interactive coding and data analysis.</b>
   </p>
   <p>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
@@ -12,9 +12,9 @@
 
 ---
 
-**ClaudeR** is an R package that forges a direct link between RStudio and AI assistants like Claude Code and Gemini CLI. This enables interactive coding sessions where the AI can execute code in your active RStudio environment and see the results in real-time. Whether you need an autonomous data explorer or a coding collaborator, ClaudeR adapts to your workflow.
+**ClaudeR** is an R package that forges a direct link between RStudio and MCP configured AI assistants like Claude Code or Codex. This enables interactive coding sessions where the AI can execute code in your active RStudio environment and see the results in real-time. Whether you need an autonomous data explorer or a coding collaborator, ClaudeR adapts to your workflow.
 
-This package is also compatible with Cursor and other services that support MCP servers.
+This package is also compatible with Cursor and any service that support MCP servers.
 
 ## 🎬 Demo
 
