@@ -6,6 +6,7 @@ import json
 import tempfile
 import os
 import base64
+import uuid
 from typing import Any, Dict, List
 import httpx
 import sys
@@ -20,6 +21,8 @@ server = Server("r-studio")
 # Configuration
 R_ADDIN_URL = "http://127.0.0.1:8787"  # URL of the R addin server
 
+# Background job storage for async execution
+_background_jobs: Dict[str, Dict[str, Any]] = {}
 
 # Cache variable to store the result of the ggplot2 check
 _is_ggplot_installed = None
@@ -48,8 +51,16 @@ async def check_ggplot_installed() -> bool:
     return _is_ggplot_installed
 
 def escape_r_string(s: str) -> str:
-    """Escape special characters for R strings."""
-    return s.replace("\\", "\\\\").replace('"', '\\"').replace("'", "\\'").replace("\n", "\\n")
+    """Escape special characters for safe inclusion in R double-quoted strings."""
+    s = s.replace("\\", "\\\\")   # Backslashes first (order matters)
+    s = s.replace('"', '\\"')      # Double quotes
+    s = s.replace("'", "\\'")      # Single quotes
+    s = s.replace("`", "\\`")      # Backticks (R evaluation)
+    s = s.replace("\n", "\\n")     # Newlines
+    s = s.replace("\r", "\\r")     # Carriage returns
+    s = s.replace("\t", "\\t")     # Tabs
+    s = s.replace("\0", "")        # Null bytes (strip entirely)
+    return s
 
 # Function to execute R code via the HTTP addin
 async def execute_r_code_via_addin(code: str) -> Dict[str, Any]:
@@ -59,7 +70,7 @@ async def execute_r_code_via_addin(code: str) -> Dict[str, Any]:
             response = await client.post(
                 R_ADDIN_URL,
                 json={"code": code},
-                timeout=30.0
+                timeout=120.0
             )
             response.raise_for_status()
             return response.json()
@@ -105,6 +116,12 @@ async def list_tools() -> List[types.Tool]:
                     }
                 },
                 "required": ["code"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
             }
         ),
         types.Tool(
@@ -119,6 +136,12 @@ async def list_tools() -> List[types.Tool]:
                     }
                 },
                 "required": ["code"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
             }
         ),
         types.Tool(
@@ -133,6 +156,12 @@ async def list_tools() -> List[types.Tool]:
                     }
                 },
                 "required": ["what"]
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
             }
         ),
         types.Tool(
@@ -141,6 +170,12 @@ async def list_tools() -> List[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {}
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
             }
         ),
         types.Tool(
@@ -167,6 +202,12 @@ async def list_tools() -> List[types.Tool]:
                     }
                 },
                 "required": ["search_pattern", "replacement"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": True,
+                "idempotentHint": False,
+                "openWorldHint": False,
             }
         ),
         types.Tool(
@@ -189,6 +230,12 @@ async def list_tools() -> List[types.Tool]:
                     }
                 },
                 "required": ["tasks"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
             }
         ),
         types.Tool(
@@ -212,6 +259,52 @@ async def list_tools() -> List[types.Tool]:
                     }
                 },
                 "required": ["task_id", "status"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="execute_r_async",
+            description="Execute long-running R code asynchronously. Returns a job ID immediately. Use get_async_result to poll for the result. Use this for code that may take longer than 25 seconds (e.g., large data processing, model fitting, simulations).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "R code to execute asynchronously"
+                    }
+                },
+                "required": ["code"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="get_async_result",
+            description="Check the result of an async R job. Waits ~10 seconds before checking to avoid excessive polling. If the job is still running, call this again.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "The job ID returned by execute_r_async"
+                    }
+                },
+                "required": ["job_id"]
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
             }
         ),
     ]
@@ -220,13 +313,16 @@ async def list_tools() -> List[types.Tool]:
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextContent | types.ImageContent]:
     """Handle R tool calls."""
     
-    # Check if the R addin is running
-    if not await check_addin_status():
-        return [types.TextContent(
-            type="text",
-            text="Error: RStudio addin is not running. Please start the Claude RStudio Connection addin in RStudio."
-        )]
-    
+    # get_async_result only checks Python-side state — skip addin check
+    # (R may be busy executing the background job)
+    if name != "get_async_result":
+        # Check if the R addin is running
+        if not await check_addin_status():
+            return [types.TextContent(
+                type="text",
+                text="Error: RStudio addin is not running. Please start the Claude RStudio Connection addin in RStudio."
+            )]
+
     result_contents = []
     
     if name == "execute_r":
@@ -389,7 +485,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         task_list_code += "# ===========================\n"
         
         # Execute to print in console and log
-        result = await execute_r_code_via_addin(f'cat("{task_list_code}")')
+        result = await execute_r_code_via_addin(f'cat("{escape_r_string(task_list_code)}")')
         
         # Convert tasks to R list format with proper escaping
         r_tasks = "list(\n"
@@ -418,9 +514,9 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         )]
 
     elif name == "update_task_status":
-        task_id = arguments.get("task_id")
-        status = arguments.get("status")
-        notes = arguments.get("notes", "")
+        task_id = escape_r_string(arguments.get("task_id", ""))
+        status = escape_r_string(arguments.get("status", ""))
+        notes = escape_r_string(arguments.get("notes", ""))
         
         # Update the task in R environment and print update
         update_code = f"""
@@ -465,6 +561,85 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             text=result.get("output", "Task updated")
         )]
     
+
+    elif name == "execute_r_async":
+        if "code" not in arguments:
+            return [types.TextContent(
+                type="text",
+                text="Error: 'code' parameter is required"
+            )]
+
+        code = arguments["code"]
+        job_id = uuid.uuid4().hex[:8]
+
+        # Launch the HTTP request as a background asyncio task
+        async def _run_job(jid: str, code: str):
+            result = await execute_r_code_via_addin(code)
+            _background_jobs[jid]["result"] = result
+            _background_jobs[jid]["status"] = "complete"
+
+        task = asyncio.create_task(_run_job(job_id, code))
+        _background_jobs[job_id] = {
+            "status": "running",
+            "result": None,
+            "task": task,
+            "started": datetime.now().isoformat(),
+        }
+
+        return [types.TextContent(
+            type="text",
+            text=f"Job {job_id} started. Use get_async_result(\"{job_id}\") to check status. The tool has a built-in 10-second delay to avoid excessive polling."
+        )]
+
+    elif name == "get_async_result":
+        job_id = arguments.get("job_id", "")
+
+        if job_id not in _background_jobs:
+            return [types.TextContent(
+                type="text",
+                text=f"No job found with ID '{job_id}'. Available jobs: {list(_background_jobs.keys()) or 'none'}"
+            )]
+
+        job = _background_jobs[job_id]
+
+        # Built-in delay to throttle polling
+        await asyncio.sleep(10)
+
+        if job["status"] == "running":
+            return [types.TextContent(
+                type="text",
+                text=f"Job {job_id} is still running (started {job['started']}). Call get_async_result(\"{job_id}\") again to check."
+            )]
+
+        # Job is complete — return results and clean up
+        result = job["result"]
+        del _background_jobs[job_id]
+
+        result_contents = []
+
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"R Error: {result.get('error', 'Unknown error')}"
+            )]
+
+        if "output" in result and result["output"]:
+            result_contents.append(types.TextContent(
+                type="text",
+                text=result["output"]
+            ))
+
+        if "plot" in result:
+            result_contents.append(types.ImageContent(
+                type="image",
+                data=result["plot"]["data"],
+                mimeType=result["plot"]["mime_type"]
+            ))
+
+        return result_contents or [types.TextContent(
+            type="text",
+            text="Async job completed successfully but produced no output."
+        )]
 
     elif name == "modify_code_section":
         if not all(k in arguments for k in ["search_pattern", "replacement"]):

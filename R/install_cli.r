@@ -83,14 +83,15 @@ install_cli <- function(tools = "claude", python_path = NULL, ...) {
 
   for (tool in tools) {
     if (tool == "claude") {
-      command_string <- sprintf(
-        'claude mcp add r-studio --scope user %s %s',
+      remove_string <- 'claude mcp remove r-studio -s user 2>/dev/null'
+      add_string <- sprintf(
+        'claude mcp add --transport stdio --scope user r-studio -- %s %s',
         shQuote(final_python_path, type = "cmd"),
         shQuote(mcp_script_path, type = "cmd")
       )
       cat("\n--- For Claude Code CLI ---\n")
       cat("Copy and paste this complete command into your terminal:\n\n")
-      cat(command_string, "\n\n")
+      cat(remove_string, "&&", add_string, "\n\n")
     }
 
     if (tool == "gemini") {

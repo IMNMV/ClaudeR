@@ -299,7 +299,7 @@ claudeAddin <- function() {
 #' @return A list containing the execution result and metadata
 #' @importFrom ggplot2 ggplot aes geom_bar geom_line theme_minimal ggsave
 #' @importFrom base64enc base64encode
-#' @importFrom grDevices dev.copy dev.list dev.off png
+#' @importFrom grDevices dev.copy dev.list dev.off png jpeg recordPlot
 #' @export
 
 execute_code_in_session <- function(code, settings = NULL) {
@@ -332,13 +332,18 @@ execute_code_in_session <- function(code, settings = NULL) {
   # Create a temporary environment for evaluation
   env <- .GlobalEnv
 
-  # Set up plot capture
-  plot_file <- tempfile(fileext = ".png")
+  # Set up plot capture files (PNG primary, JPEG fallback)
+  plot_file_png <- tempfile(fileext = ".png")
+  plot_file_jpeg <- tempfile(fileext = ".jpeg")
 
   tryCatch({
     # Create a connection to capture output
     output_file <- tempfile()
     sink(output_file, split = TRUE)  # split=TRUE sends output to console AND capture
+
+    # --- BEFORE eval: snapshot device state to detect stale plots ---
+    devices_before <- dev.list()
+    baseline_plot <- tryCatch(recordPlot(), error = function(e) NULL)
 
     # Execute code in the global environment
     result <- withVisible(eval(parse(text = code), envir = env))
@@ -354,29 +359,80 @@ execute_code_in_session <- function(code, settings = NULL) {
     # Read the captured output
     output <- readLines(output_file, warn = FALSE)
 
-    # Try to capture any plots that were created
+    # --- AFTER eval: only capture if a NEW plot was actually created ---
     captured_plot <- FALSE
     plot_data <- NULL
+    plot_mime <- "image/png"
 
     tryCatch({
-      # For ggplot objects
+      # For ggplot objects: always a new plot
       if (inherits(result$value, "ggplot")) {
-        # Save ggplot to file
-        ggsave(plot_file, result$value, width = 8, height = 6)
-        if (file.exists(plot_file) && file.info(plot_file)$size > 100) {
-          plot_data <- base64encode(plot_file)
-          captured_plot <- TRUE
-        }
+        # Try PNG first (sharp lines/text, often smaller for plots)
+        tryCatch({
+          ggsave(plot_file_png, result$value,
+                 device = "png", width = 6, height = 4, dpi = 100)
+          if (file.exists(plot_file_png) && file.info(plot_file_png)$size > 100) {
+            plot_data <- base64encode(plot_file_png)
+            plot_mime <- "image/png"
+            captured_plot <- TRUE
+          }
+        }, error = function(e) {
+          # JPEG fallback for ggplot
+          message("PNG ggsave failed, trying JPEG: ", e$message)
+          tryCatch({
+            ggsave(plot_file_jpeg, result$value,
+                   device = "jpeg", width = 6, height = 4,
+                   dpi = 100, quality = 80)
+            if (file.exists(plot_file_jpeg) && file.info(plot_file_jpeg)$size > 100) {
+              plot_data <<- base64encode(plot_file_jpeg)
+              plot_mime <<- "image/jpeg"
+              captured_plot <<- TRUE
+            }
+          }, error = function(e2) {
+            message("JPEG ggsave fallback also failed: ", e2$message)
+          })
+        })
       }
-      # For base graphics
+      # For base graphics: only capture if device state actually changed
       else if (!is.null(dev.list())) {
-        # Save the current plot
-        dev.copy(png, filename = plot_file, width = 800, height = 600)
-        dev.off()
+        devices_after <- dev.list()
+        current_plot <- tryCatch(recordPlot(), error = function(e) NULL)
 
-        if (file.exists(plot_file) && file.info(plot_file)$size > 100) {
-          plot_data <- base64encode(plot_file)
-          captured_plot <- TRUE
+        # Determine if a NEW plot was actually drawn by this execution
+        new_plot_exists <- FALSE
+        if (!identical(devices_before, devices_after)) {
+          new_plot_exists <- TRUE
+        } else if (!is.null(current_plot) && !identical(current_plot, baseline_plot)) {
+          new_plot_exists <- TRUE
+        }
+
+        if (new_plot_exists) {
+          # Try PNG first (sharp lines/text, often smaller for plots)
+          tryCatch({
+            dev.copy(png, filename = plot_file_png,
+                     width = 600, height = 400)
+            dev.off()
+            if (file.exists(plot_file_png) && file.info(plot_file_png)$size > 100) {
+              plot_data <- base64encode(plot_file_png)
+              plot_mime <- "image/png"
+              captured_plot <- TRUE
+            }
+          }, error = function(e) {
+            # JPEG fallback for base graphics
+            message("PNG dev.copy failed, trying JPEG: ", e$message)
+            tryCatch({
+              dev.copy(jpeg, filename = plot_file_jpeg,
+                       width = 600, height = 400, quality = 80)
+              dev.off()
+              if (file.exists(plot_file_jpeg) && file.info(plot_file_jpeg)$size > 100) {
+                plot_data <<- base64encode(plot_file_jpeg)
+                plot_mime <<- "image/jpeg"
+                captured_plot <<- TRUE
+              }
+            }, error = function(e2) {
+              message("JPEG fallback also failed: ", e2$message)
+            })
+          })
         }
       }
     }, error = function(e) {
@@ -416,7 +472,7 @@ execute_code_in_session <- function(code, settings = NULL) {
     if (captured_plot && !is.null(plot_data)) {
       response$plot <- list(
         data = plot_data,
-        mime_type = "image/png"
+        mime_type = plot_mime
       )
     }
 
@@ -446,8 +502,12 @@ execute_code_in_session <- function(code, settings = NULL) {
       try(file.remove(output_file), silent = TRUE)
     }
 
-    if (!is.null(plot_file) && file.exists(plot_file)) {
-      try(file.remove(plot_file), silent = TRUE)
+    if (!is.null(plot_file_jpeg) && file.exists(plot_file_jpeg)) {
+      try(file.remove(plot_file_jpeg), silent = TRUE)
+    }
+
+    if (!is.null(plot_file_png) && file.exists(plot_file_png)) {
+      try(file.remove(plot_file_png), silent = TRUE)
     }
   })
 }
