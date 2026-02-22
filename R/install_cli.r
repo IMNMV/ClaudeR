@@ -1,13 +1,14 @@
 #' @title Install and Set Up ClaudeR for CLI Tools
 #' @description An installer that configures ClaudeR to be used with command-line
-#'   AI tools like the Claude Code CLI and Google Gemini CLI.
+#'   AI tools like the Claude Code CLI, OpenAI Codex CLI, and Google Gemini CLI.
 #'
 #'   It follows a simple, non-interactive setup process. It will attempt to
 #'   find a system Python automatically, or you can provide a specific path for
 #'   custom environments (like Conda).
 #'
 #' @param tools A character vector specifying which CLI tools to configure.
-#'   Can be `"claude"`, `"gemini"`, or `c("claude", "gemini")`.
+#'   Can be `"claude"`, `"codex"`, `"gemini"`, or a combination like
+#'   `c("claude", "codex")`.
 #' @param python_path Optional. A character string specifying the absolute path
 #'   to the Python executable to use. If `NULL` (the default), the script will
 #'   attempt to find a system Python on the PATH. **This is the recommended
@@ -18,14 +19,14 @@
 #'   1. Check for and install required R packages.
 #'   2. Attempt to install required Python packages (`mcp`, `httpx`) using the
 #'      specified or found Python executable.
-#'   3. Provide you with the exact command to run (for Claude) or the exact
+#'   3. Provide you with the exact command to run (for Claude/Codex) or the exact
 #'      JSON to copy (for Gemini) to complete the setup.
 #' @export
 install_cli <- function(tools = "claude", python_path = NULL, ...) {
   # --- 1. Parameter Validation ---
-  tools <- try(match.arg(tools, choices = c("claude", "gemini"), several.ok = TRUE), silent = TRUE)
+  tools <- try(match.arg(tools, choices = c("claude", "codex", "gemini"), several.ok = TRUE), silent = TRUE)
   if (inherits(tools, "try-error")) {
-    stop("Invalid 'tools' argument. Please choose 'claude', 'gemini', or c('claude', 'gemini').", call. = FALSE)
+    stop("Invalid 'tools' argument. Please choose 'claude', 'codex', 'gemini', or a combination.", call. = FALSE)
   }
 
   # --- 2. Check R Dependencies ---
@@ -91,7 +92,19 @@ install_cli <- function(tools = "claude", python_path = NULL, ...) {
       )
       cat("\n--- For Claude Code CLI ---\n")
       cat("Copy and paste this complete command into your terminal:\n\n")
-      cat(remove_string, "&&", add_string, "\n\n")
+      cat(remove_string, ";", add_string, "\n\n")
+    }
+
+    if (tool == "codex") {
+      remove_string <- 'codex mcp remove r-studio 2>/dev/null'
+      add_string <- sprintf(
+        'codex mcp add r-studio -- %s %s',
+        shQuote(final_python_path, type = "cmd"),
+        shQuote(mcp_script_path, type = "cmd")
+      )
+      cat("\n--- For OpenAI Codex CLI ---\n")
+      cat("Copy and paste this complete command into your terminal:\n\n")
+      cat(remove_string, ";", add_string, "\n\n")
     }
 
     if (tool == "gemini") {

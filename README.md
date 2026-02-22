@@ -18,6 +18,7 @@ This package is also compatible with Cursor and any service that support MCP ser
 
 ## Recent Updates
 
+- **Codex CLI support** — `install_cli(tools = "codex")` generates the setup command for OpenAI Codex. Codex joins Claude Code and Gemini as a supported CLI agent.
 - **Multi-agent orchestration** — Run multiple AI agents on the same R session or spread them across separate RStudio windows. Each agent gets a unique ID on startup. Console output, log files, and execution history are all attributed per agent, so you always know who did what. On its very first tool call, each agent receives a context briefing with its own ID, any other agents active on the session, and the log file path — giving it full awareness of the shared environment without any manual setup. Agents can call `get_session_history` to review what other agents have done, or read the shared log file directly. The Shiny viewer tracks connected agents in real-time.
 - **Session discovery** — Each RStudio session writes a discovery file to `~/.claude_r_sessions/` on startup. AI agents find sessions automatically — no hardcoded ports. Name your sessions (e.g. "analysis", "modeling") and run them on different ports. Agents can call `list_sessions` to see what's available and `connect_session` to bind to a specific one. Single-session setups work with zero config.
 - **Redesigned Shiny viewer** — Cleaner UI with grouped panels for Session, Agents, Logging, and Advanced settings. Shows connected agents and execution count in real-time. Click the `?` button for a built-in guide on multi-session setup and agent identity.
@@ -97,7 +98,7 @@ This architecture ensures that the AI can only perform approved operations throu
 
 ## CLI Integration
 
-ClaudeR now supports command-line interface (CLI) tools like the **Claude Code CLI** and the **Google Gemini CLI**. This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
+ClaudeR now supports command-line interface (CLI) tools like the **Claude Code CLI**, the **OpenAI Codex CLI**, and the **Google Gemini CLI**. This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
 
 ## Security Restrictions
 
@@ -154,7 +155,7 @@ my_python_path <- "/path/to/your/conda/envs/my_env/bin/python"
 install_clauder(python_path = my_python_path)
 ```
 
-#### Option B: For CLI Tools (Claude Code / Gemini)
+#### Option B: For CLI Tools (Claude Code / Codex / Gemini)
 
 This non-interactive function generates the exact command or JSON configuration needed for your CLI tool.
 
@@ -163,6 +164,9 @@ library(ClaudeR)
 
 # For Claude Code CLI
 install_cli(tools = "claude")
+
+# For OpenAI Codex CLI
+install_cli(tools = "codex")
 
 # For Google Gemini CLI
 install_cli(tools = "gemini")
@@ -176,7 +180,7 @@ install_cli(tools = "claude", python_path = "/path/to/my/python")
 ```
 
 After running the function, you must **manually apply the configuration**:
-- **For Claude**: Copy the command printed in the R console and run it in your terminal.
+- **For Claude / Codex**: Copy the command printed in the R console and run it in your terminal.
 - **For Gemini**: Copy the generated JSON and manually add it to your `gemini.json` settings file.
 
 After setup, **quit and restart** any active Desktop Apps or terminal sessions for the new settings to load.
@@ -256,7 +260,6 @@ If you can do it with R, your AI assistant can too.
 
 ## Planned
 
-- **Automatic Codex installation support** — Streamlined setup for OpenAI Codex, similar to the existing `install_cli()` flow for Claude and Gemini.
 - **Non-blocking async execution** — Run long computations in a separate R process via `callr::r_bg()` so the main session stays responsive to other agents. Currently, async jobs block the R thread and prevent other agents from executing code until the job completes.
 - **Session continuity** — Point an agent at a previous session's log file and have it pick up where the last agent left off. The agent reads the log to rebuild context (what data was loaded, what models were fit, what decisions were made) and continues appending to the same log. Useful for multi-day academic analyses where you want to resume work across sessions without losing context.
 
