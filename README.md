@@ -258,6 +258,7 @@ If you can do it with R, your AI assistant can too.
 
 - **Automatic Codex installation support** — Streamlined setup for OpenAI Codex, similar to the existing `install_cli()` flow for Claude and Gemini.
 - **Non-blocking async execution** — Run long computations in a separate R process via `callr::r_bg()` so the main session stays responsive to other agents. Currently, async jobs block the R thread and prevent other agents from executing code until the job completes.
+- **Session continuity** — Point an agent at a previous session's log file and have it pick up where the last agent left off. The agent reads the log to rebuild context (what data was loaded, what models were fit, what decisions were made) and continues appending to the same log. Useful for multi-day academic analyses where you want to resume work across sessions without losing context.
 
 ## Limitations
 
