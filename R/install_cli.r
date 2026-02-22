@@ -31,7 +31,7 @@ install_cli <- function(tools = "claude", python_path = NULL, ...) {
 
   # --- 2. Check R Dependencies ---
   message("--- Step 1: Checking R dependencies ---")
-  r_deps <- c("jsonlite", "httpuv", "shiny", "miniUI")
+  r_deps <- c("jsonlite", "httpuv", "shiny", "miniUI", "callr")
   missing_r_deps <- r_deps[!sapply(r_deps, requireNamespace, quietly = TRUE)]
 
   if (length(missing_r_deps) > 0) {

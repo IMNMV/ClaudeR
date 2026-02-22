@@ -8,6 +8,7 @@ Encoding: UTF-8
 LazyData: true
 Imports:
     base64enc,
+    callr,
     ggplot2,
     grDevices,
     httpuv,

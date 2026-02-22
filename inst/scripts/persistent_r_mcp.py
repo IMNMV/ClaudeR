@@ -28,9 +28,6 @@ _agent_id: Optional[str] = None       # Set in main()
 _target_session: Optional[str] = None  # Set by connect_session tool
 _agent_introduced: bool = False        # First-call introduction flag
 
-# Background job storage for async execution
-_background_jobs: Dict[str, Dict[str, Any]] = {}
-
 # Cache variable to store the result of the ggplot2 check
 _is_ggplot_installed = None
 
@@ -143,6 +140,20 @@ async def execute_r_code_via_addin(code: str) -> Dict[str, Any]:
             "success": False,
             "error": f"Error communicating with RStudio: {str(e)}"
         }
+
+async def post_to_r_addin(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Send an arbitrary JSON payload to the R addin HTTP server."""
+    url = get_r_addin_url()
+    if url is None:
+        return {"success": False, "error": "No R sessions found. Start the ClaudeR addin in RStudio first."}
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, timeout=10.0)
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        return {"success": False, "error": f"Error communicating with RStudio: {str(e)}"}
+
 
 # Check if the R addin is running and return status info
 async def check_addin_status(return_info: bool = False):
@@ -361,7 +372,7 @@ async def list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="execute_r_async",
-            description="Execute long-running R code asynchronously. Returns a job ID immediately. Use get_async_result to poll for the result. Use this for code that may take longer than 25 seconds (e.g., large data processing, model fitting, simulations).",
+            description="Execute long-running R code in a separate background R process. Returns a job ID immediately and the main session stays fully responsive. Use this for code that may take longer than 25 seconds (e.g., model fitting, simulations, large data processing). IMPORTANT: The background process does NOT have access to the main session's environment. Write self-contained code: use saveRDS() to pass data in and write results out, then load them back in the main session after the job completes. You can continue executing other code with execute_r while the job runs. Use get_async_result to check status when ready.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -464,7 +475,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
     global _target_session, _agent_introduced
 
     # These tools check Python-side state only — skip addin check
-    _skip_addin_check = {"get_async_result", "list_sessions", "connect_session"}
+    _skip_addin_check = {"list_sessions", "connect_session"}
     if name not in _skip_addin_check:
         # Check if the R addin is running
         if not await check_addin_status():
@@ -731,68 +742,64 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         code = arguments["code"]
         job_id = uuid.uuid4().hex[:8]
 
-        # Launch the HTTP request as a background asyncio task
-        async def _run_job(jid: str, code: str):
-            result = await execute_r_code_via_addin(code)
-            _background_jobs[jid]["result"] = result
-            _background_jobs[jid]["status"] = "complete"
-
-        task = asyncio.create_task(_run_job(job_id, code))
-        _background_jobs[job_id] = {
-            "status": "running",
-            "result": None,
-            "task": task,
-            "started": datetime.now().isoformat(),
+        # Send to R — R launches callr::r_bg() and returns immediately
+        payload = {
+            "code": code,
+            "async": True,
+            "job_id": job_id,
         }
+        if _agent_id:
+            payload["agent_id"] = _agent_id
+
+        result = await post_to_r_addin(payload)
+
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error starting async job: {result.get('error', 'Unknown error')}"
+            )]
 
         return [types.TextContent(
             type="text",
-            text=f"Job {job_id} started. Use get_async_result(\"{job_id}\") to check status. The tool has a built-in 10-second delay to avoid excessive polling."
+            text=f"Job {job_id} started in a background R process. The main R session remains available — you can continue running other code with execute_r while this job runs. Use get_async_result(\"{job_id}\") to check status when ready."
         )]
 
     elif name == "get_async_result":
         job_id = arguments.get("job_id", "")
 
-        if job_id not in _background_jobs:
-            return [types.TextContent(
-                type="text",
-                text=f"No job found with ID '{job_id}'. Available jobs: {list(_background_jobs.keys()) or 'none'}"
-            )]
-
-        job = _background_jobs[job_id]
-
-        # Built-in delay to throttle polling
+        # Throttle polling — wait before checking
         await asyncio.sleep(10)
 
-        if job["status"] == "running":
+        # Ask R for the job status
+        result = await post_to_r_addin({"check_job": job_id})
+
+        status = result.get("status", "unknown")
+
+        if status == "not_found":
             return [types.TextContent(
                 type="text",
-                text=f"Job {job_id} is still running (started {job['started']}). Call get_async_result(\"{job_id}\") again to check."
+                text=f"No job found with ID '{job_id}'. It may have already completed or the ID is incorrect."
             )]
 
-        # Job is complete — return results and clean up
-        result = job["result"]
-        del _background_jobs[job_id]
+        if status == "running":
+            elapsed = result.get("elapsed_seconds", "?")
+            return [types.TextContent(
+                type="text",
+                text=f"Job {job_id} is still running ({elapsed}s elapsed). Call get_async_result(\"{job_id}\") again to check."
+            )]
 
-        result_contents = []
-
+        # Job is complete
         if not result.get("success", False):
             return [types.TextContent(
                 type="text",
-                text=f"R Error: {result.get('error', 'Unknown error')}"
+                text=f"Async job error: {result.get('error', 'Unknown error')}"
             )]
 
+        result_contents = []
         if "output" in result and result["output"]:
             result_contents.append(types.TextContent(
                 type="text",
                 text=result["output"]
-            ))
-
-        if "plot" in result:
-            result_contents.append(types.ImageContent(
-                type="image",
-                data=result["plot"]["data"],
-                mimeType=result["plot"]["mime_type"]
             ))
 
         return result_contents or [types.TextContent(

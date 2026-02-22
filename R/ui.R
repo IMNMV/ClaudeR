@@ -26,12 +26,9 @@ cleanup_stale_discovery_files <- function() {
   for (f in files) {
     tryCatch({
       info <- jsonlite::fromJSON(f)
-      # Check if the PID is still alive
-      pid_alive <- tryCatch(
-        { tools::pskill(info$pid, signal = 0); TRUE },
-        error = function(e) FALSE
-      )
-      if (!pid_alive) file.remove(f)
+      # signal = 0 checks if PID exists without killing it
+      pid_alive <- tools::pskill(info$pid, signal = 0)
+      if (!isTRUE(pid_alive)) file.remove(f)
     }, error = function(e) {
       # Corrupted file, remove it
       file.remove(f)
@@ -45,6 +42,92 @@ cleanup_stale_discovery_files <- function() {
 .claude_history_env <- new.env(parent = emptyenv())
 .claude_history_env$entries <- list()
 .claude_history_env$max_entries <- 500L
+
+# --- Background Jobs (callr) ---
+# Package-level environment for non-blocking async execution.
+.claude_bg_jobs <- new.env(parent = emptyenv())
+
+#' Start a background R job via callr
+#' @param code R code to execute in a separate process
+#' @param job_id Unique identifier for the job
+#' @param settings ClaudeR settings list
+#' @param agent_id Optional agent identifier
+start_background_job <- function(code, job_id, settings = NULL, agent_id = NULL) {
+  if (is.null(settings)) settings <- load_claude_settings()
+
+  # Security check
+  validation <- validate_code_security(code)
+  if (validation$blocked) {
+    return(list(success = FALSE, error = validation$reason))
+  }
+
+  # Log / print
+  if (settings$print_to_console) {
+    agent_label <- if (!is.null(agent_id)) paste0(" [", agent_id, "]") else ""
+    cat(sprintf("\n### LLM%s submitted async job %s ###\n", agent_label, job_id))
+    cat(code, "\n")
+    cat("### End of async job code ###\n\n")
+  }
+  if (settings$log_to_file && !is.null(settings$log_file_path) && settings$log_file_path != "") {
+    log_code_to_file(paste0("# [ASYNC JOB ", job_id, "]\n", code), settings$log_file_path, agent_id = agent_id)
+  }
+
+  # Launch in a separate R process (skip .Rprofile to avoid startup noise in stderr)
+  job <- callr::r_bg(function(code) {
+    output_lines <- utils::capture.output({
+      result <- withVisible(eval(parse(text = code)))
+      if (result$visible) print(result$value)
+    })
+    list(success = TRUE, output = paste(output_lines, collapse = "\n"))
+  }, args = list(code = code), supervise = TRUE, user_profile = FALSE)
+
+  .claude_bg_jobs[[job_id]] <- list(
+    process = job,
+    started = Sys.time(),
+    code = code,
+    agent_id = agent_id
+  )
+
+  # Record in history
+  history_entry <- list(
+    timestamp = Sys.time(),
+    agent_id = if (!is.null(agent_id)) agent_id else "unknown",
+    code = code,
+    success = TRUE,
+    has_plot = FALSE
+  )
+  .claude_history_env$entries <- c(.claude_history_env$entries, list(history_entry))
+
+  list(success = TRUE, job_id = job_id)
+}
+
+#' Check the status of a background job
+#' @param job_id The job identifier to check
+check_background_job <- function(job_id) {
+  if (!exists(job_id, envir = .claude_bg_jobs)) {
+    return(list(status = "not_found"))
+  }
+
+  job_info <- .claude_bg_jobs[[job_id]]
+  job <- job_info$process
+
+  if (job$is_alive()) {
+    elapsed <- as.numeric(difftime(Sys.time(), job_info$started, units = "secs"))
+    return(list(status = "running", elapsed_seconds = round(elapsed)))
+  }
+
+  # Job finished — get result
+  tryCatch({
+    result <- job$get_result()
+    rm(list = job_id, envir = .claude_bg_jobs)
+    return(c(list(status = "complete"), result))
+  }, error = function(e) {
+    # callr wraps errors — dig out the original message
+    err_msg <- if (!is.null(e$parent)) e$parent$message else e$message
+    rm(list = job_id, envir = .claude_bg_jobs)
+    return(list(status = "complete", success = FALSE, error = err_msg))
+  })
+}
 
 #' Claude R Studio Add-in using HTTP server
 #'
@@ -92,9 +175,33 @@ claudeAddin <- function() {
             body_raw <- req$rook.input$read()
             body <- fromJSON(rawToChar(body_raw))
 
+            # --- Check background job status ---
+            if (!is.null(body$check_job)) {
+              result <- check_background_job(body$check_job)
+              response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
+              return(list(
+                status = 200L,
+                headers = list('Content-Type' = 'application/json'),
+                body = response_body
+              ))
+            }
+
             if (!is.null(body$code)) {
-              # Execute the code in the global environment
               agent_id <- body$agent_id  # NULL if not provided (backwards compatible)
+
+              # --- Async: launch in background via callr ---
+              if (isTRUE(body$async) && !is.null(body$job_id)) {
+                result <- start_background_job(body$code, body$job_id, settings, agent_id = agent_id)
+                execution_count <<- execution_count + 1
+                response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
+                return(list(
+                  status = 200L,
+                  headers = list('Content-Type' = 'application/json'),
+                  body = response_body
+                ))
+              }
+
+              # --- Sync: execute in main session ---
               result <- execute_code_in_session(body$code, settings, agent_id = agent_id)
               execution_count <<- execution_count + 1
 
@@ -111,7 +218,7 @@ claudeAddin <- function() {
             return(list(
               status = 400L,
               headers = list('Content-Type' = 'application/json'),
-              body = '{"error": "Missing code parameter"}'
+              body = '{"error": "Missing code or check_job parameter"}'
             ))
           }
 
