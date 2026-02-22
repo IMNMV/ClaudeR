@@ -1,9 +1,57 @@
+# --- Discovery File System ---
+# Allows Python MCP servers to discover active R sessions dynamically.
+
+DISCOVERY_DIR <- file.path(path.expand("~"), ".claude_r_sessions")
+
+write_discovery_file <- function(session_name, port) {
+  if (!dir.exists(DISCOVERY_DIR)) dir.create(DISCOVERY_DIR, recursive = TRUE)
+  info <- list(
+    session_name = session_name,
+    port = port,
+    pid = Sys.getpid(),
+    started_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%S")
+  )
+  jsonlite::write_json(info, file.path(DISCOVERY_DIR, paste0(session_name, ".json")),
+                       auto_unbox = TRUE, pretty = TRUE)
+}
+
+remove_discovery_file <- function(session_name) {
+  f <- file.path(DISCOVERY_DIR, paste0(session_name, ".json"))
+  if (file.exists(f)) file.remove(f)
+}
+
+cleanup_stale_discovery_files <- function() {
+  if (!dir.exists(DISCOVERY_DIR)) return(invisible(NULL))
+  files <- list.files(DISCOVERY_DIR, pattern = "\\.json$", full.names = TRUE)
+  for (f in files) {
+    tryCatch({
+      info <- jsonlite::fromJSON(f)
+      # Check if the PID is still alive
+      pid_alive <- tryCatch(
+        { tools::pskill(info$pid, signal = 0); TRUE },
+        error = function(e) FALSE
+      )
+      if (!pid_alive) file.remove(f)
+    }, error = function(e) {
+      # Corrupted file, remove it
+      file.remove(f)
+    })
+  }
+  invisible(NULL)
+}
+
+# --- Agent History Environment ---
+# Package-level environment for tracking per-agent execution history.
+.claude_history_env <- new.env(parent = emptyenv())
+.claude_history_env$entries <- list()
+.claude_history_env$max_entries <- 500L
+
 #' Claude R Studio Add-in using HTTP server
 #'
 #' @importFrom shiny observeEvent reactiveValues renderText verbatimTextOutput
 #'   actionButton numericInput checkboxInput textInput conditionalPanel
 #'   showNotification invalidateLater runGadget paneViewer stopApp
-#'   observe tags
+#'   observe tags wellPanel
 #' @importFrom miniUI gadgetTitleBar miniContentPanel miniPage
 #' @importFrom httpuv startServer stopServer
 #' @importFrom jsonlite fromJSON toJSON
@@ -15,6 +63,7 @@ claudeAddin <- function() {
   server_state <- NULL
   running <- FALSE
   execution_count <- 0
+  active_session_name <- NULL  # tracks discovery file for cleanup
 
   # Load settings
   settings <- load_claude_settings()
@@ -45,7 +94,8 @@ claudeAddin <- function() {
 
             if (!is.null(body$code)) {
               # Execute the code in the global environment
-              result <- execute_code_in_session(body$code, settings)
+              agent_id <- body$agent_id  # NULL if not provided (backwards compatible)
+              result <- execute_code_in_session(body$code, settings, agent_id = agent_id)
               execution_count <<- execution_count + 1
 
               # Return the result as JSON
@@ -67,9 +117,17 @@ claudeAddin <- function() {
 
           # Handle GET requests (status checks)
           if (req$REQUEST_METHOD == "GET") {
+            agent_ids <- unique(vapply(
+              .claude_history_env$entries,
+              function(e) e$agent_id, character(1)
+            ))
             status <- list(
               running = running,
-              execution_count = execution_count
+              execution_count = execution_count,
+              connected_agents = agent_ids,
+              history_size = length(.claude_history_env$entries),
+              session_name = active_session_name,
+              log_file_path = if (settings$log_to_file) settings$log_file_path else NULL
             )
 
             return(list(
@@ -95,33 +153,57 @@ claudeAddin <- function() {
   ui <- miniPage(
     gadgetTitleBar("Claude R Connection"),
     miniContentPanel(
-      tags$h4("Server Status"),
-      verbatimTextOutput("serverStatus"),
-      tags$hr(),
-      tags$h4("Connection Settings"),
-      numericInput("port", "Port", value = 8787, min = 1024, max = 65535),
-      tags$hr(),
-      tags$h4("Logging Settings"),
-      checkboxInput("print_to_console", "Print code to console before execution",
-                           value = settings$print_to_console),
-      checkboxInput("log_to_file", "Log code to file",
-                           value = settings$log_to_file),
-      conditionalPanel(
-        condition = "input.log_to_file == true",
-        textInput("log_file_path", "Log file path",
-                         value = settings$log_file_path),
-        actionButton("open_log", "Open Log File")
+      tags$style("
+        .section-label { font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #555; }
+        .well { padding: 12px; margin-bottom: 10px; }
+        .status-text { font-family: monospace; font-size: 12px; margin: 4px 0; }
+        .btn { margin-right: 4px; }
+      "),
+
+      # --- Session ---
+      tags$div(class = "section-label",
+        "SESSION",
+        actionButton("session_help", "?",
+          class = "btn-default btn-xs",
+          style = "margin-left: 6px; padding: 1px 6px; font-size: 11px; vertical-align: middle;"
+        )
       ),
-      shiny::tags$hr(),
-      shiny::tags$h4("Execution Statistics"),
-      shiny::verbatimTextOutput("executionStats"),
-      shiny::tags$hr(),
-      shiny::actionButton("startServer", "Start Server", class = "btn-primary"),
-      shiny::actionButton("stopServer", "Stop Server", class = "btn-danger"),
-      shiny::tags$hr(),
-      shiny::tags$h4("Process Management"),
-      shiny::actionButton("kill_process", "Force Kill Server Process", class = "btn-warning"),
-      shiny::helpText("Use this only if you're experiencing 'address already in use' errors.")
+      wellPanel(
+        textInput("session_name", "Session Name", value = "default"),
+        numericInput("port", "Port", value = 8787, min = 1024, max = 65535),
+        verbatimTextOutput("serverStatus"),
+        actionButton("startServer", "Start Server", class = "btn-primary btn-sm"),
+        actionButton("stopServer", "Stop Server", class = "btn-danger btn-sm")
+      ),
+
+      # --- Agents ---
+      tags$div(class = "section-label", "AGENTS"),
+      wellPanel(
+        verbatimTextOutput("agentInfo")
+      ),
+
+      # --- Logging ---
+      tags$div(class = "section-label", "LOGGING"),
+      wellPanel(
+        checkboxInput("print_to_console", "Print code to console before execution",
+                             value = settings$print_to_console),
+        checkboxInput("log_to_file", "Log code to file",
+                             value = settings$log_to_file),
+        conditionalPanel(
+          condition = "input.log_to_file == true",
+          textInput("log_file_path", "Log file path",
+                           value = settings$log_file_path),
+          actionButton("open_log", "Open Log File", class = "btn-sm")
+        )
+      ),
+
+      # --- Advanced ---
+      tags$div(class = "section-label", "ADVANCED"),
+      wellPanel(
+        actionButton("kill_process", "Force Kill Server Process", class = "btn-warning btn-sm"),
+        tags$br(), tags$br(),
+        shiny::helpText("Use only if you're experiencing 'address already in use' errors.")
+      )
     )
   )
 
@@ -159,27 +241,81 @@ claudeAddin <- function() {
       }
     })
 
-    # Update execution stats
-    output$executionStats <- renderText({
-      sprintf("Code executions: %d", state$execution_count)
-    })
-
     # Server status output
     output$serverStatus <- renderText({
+      invalidateLater(2000)
       if (state$running) {
-        sprintf("HTTP Server running on http://127.0.0.1:%d", input$port)
+        sprintf("Running on http://127.0.0.1:%d", input$port)
       } else {
-        "Server is not running"
+        "Not running"
       }
+    })
+
+    # Agent info output
+    output$agentInfo <- renderText({
+      invalidateLater(2000)
+      entries <- .claude_history_env$entries
+      agent_ids <- unique(vapply(entries, function(e) e$agent_id, character(1)))
+      n_agents <- length(agent_ids)
+      n_exec <- length(entries)
+
+      if (n_agents == 0) {
+        "No agents connected yet"
+      } else {
+        agents_str <- paste(agent_ids, collapse = ", ")
+        sprintf("Connected: %s\nExecutions: %d", agents_str, n_exec)
+      }
+    })
+
+    # Session help popup
+    observeEvent(input$session_help, {
+      shiny::showModal(shiny::modalDialog(
+        title = "Multi-Session & Agent Guide",
+        tags$div(
+          tags$h5("Single Session (Default)"),
+          tags$p("Just click Start Server. AI agents will auto-discover your session."),
+
+          tags$h5("Multiple Sessions"),
+          tags$p("To run separate RStudio windows with different AI agents:"),
+          tags$ol(
+            tags$li(tags$b("Window 1:"), " Set Session Name to e.g. 'analysis', keep port 8787, click Start."),
+            tags$li(tags$b("Window 2:"), " Set Session Name to e.g. 'modeling', change port to 8788, click Start."),
+            tags$li("Each agent auto-connects to the first available session. To assign an agent to a specific session, tell it: ",
+              tags$em("\"Connect to the 'modeling' session using connect_session.\""))
+          ),
+
+          tags$h5("Agent Identity"),
+          tags$p("Each AI agent is assigned a unique ID (e.g. agent-a3f92b1c) on startup.",
+            "All code it executes is logged under that ID.",
+            "If you see multiple agent IDs in the Agents panel, multiple AI tools are sharing this R session."),
+
+          tags$h5("Checking Agent Activity"),
+          tags$p("Agents can call ", tags$code("get_session_history"),
+            " to see what other agents have done.",
+            "If logging is enabled, the log file also shows which agent executed each block of code.")
+        ),
+        easyClose = TRUE,
+        footer = shiny::modalButton("Got it")
+      ))
     })
 
     # Start server
     observeEvent(input$startServer, {
       if (!state$running) {
         tryCatch({
+          # Clean up any stale discovery files from crashed sessions
+          cleanup_stale_discovery_files()
+
           server_state <<- start_http_server(input$port)
           running <<- TRUE
           state$running <- TRUE
+
+          # Write discovery file so Python MCP servers can find us
+          session_name <- trimws(input$session_name)
+          if (session_name == "") session_name <- paste0("session_", input$port)
+          active_session_name <<- session_name
+          write_discovery_file(session_name, input$port)
+
           showNotification("HTTP server started successfully", type = "message")
         }, error = function(e) {
           message("Error starting HTTP server: ", e$message)
@@ -199,6 +335,12 @@ claudeAddin <- function() {
           running <<- FALSE
           state$running <- FALSE
           server_state <<- NULL
+
+          # Remove discovery file
+          if (!is.null(active_session_name)) {
+            remove_discovery_file(active_session_name)
+            active_session_name <<- NULL
+          }
 
           # Force garbage collection to ensure port is released
           gc()
@@ -253,7 +395,13 @@ claudeAddin <- function() {
             }
             running <<- FALSE
             state$running <- FALSE
-            
+
+            # Remove discovery file
+            if (!is.null(active_session_name)) {
+              remove_discovery_file(active_session_name)
+              active_session_name <<- NULL
+            }
+
             # Force garbage collection
             gc()
           } else {
@@ -266,10 +414,10 @@ claudeAddin <- function() {
         shiny::showNotification(paste0("Error killing process: ", e$message), type = "error")
       })
     })
-        # Update execution count periodically
+    # Update execution count periodically
     observe({
       state$execution_count <- execution_count
-      invalidateLater(1000)
+      invalidateLater(2000)
     })
 
     # Close handler
@@ -281,6 +429,11 @@ claudeAddin <- function() {
         }, error = function(e) {
           message("Error stopping server: ", e$message)
         })
+      }
+      # Clean up discovery file
+      if (!is.null(active_session_name)) {
+        remove_discovery_file(active_session_name)
+        active_session_name <<- NULL
       }
       invisible(stopApp())
     })
@@ -296,13 +449,14 @@ claudeAddin <- function() {
 #'
 #' @param code The R code to execute
 #' @param settings The settings list with logging preferences
+#' @param agent_id Optional agent identifier for attribution
 #' @return A list containing the execution result and metadata
 #' @importFrom ggplot2 ggplot aes geom_bar geom_line theme_minimal ggsave
 #' @importFrom base64enc base64encode
 #' @importFrom grDevices dev.copy dev.list dev.off png jpeg recordPlot
 #' @export
 
-execute_code_in_session <- function(code, settings = NULL) {
+execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
   # Default settings if not provided
   if (is.null(settings)) {
     settings <- load_claude_settings()
@@ -319,14 +473,15 @@ execute_code_in_session <- function(code, settings = NULL) {
 
   # Print code to console if enabled
   if (settings$print_to_console) {
-    cat("\n### LLM executing the following code ###\n")
+    agent_label <- if (!is.null(agent_id)) paste0(" [", agent_id, "]") else ""
+    cat(sprintf("\n### LLM%s executing the following code ###\n", agent_label))
     cat(code, "\n")
     cat("### End of LLM code ###\n\n")
   }
 
   # Log code to file if enabled
   if (settings$log_to_file && !is.null(settings$log_file_path) && settings$log_file_path != "") {
-    log_code_to_file(code, settings$log_file_path)
+    log_code_to_file(code, settings$log_file_path, agent_id = agent_id)
   }
 
   # Create a temporary environment for evaluation
@@ -476,6 +631,19 @@ execute_code_in_session <- function(code, settings = NULL) {
       )
     }
 
+    # Record to agent history
+    history_entry <- list(
+      timestamp = Sys.time(),
+      agent_id = if (!is.null(agent_id)) agent_id else "unknown",
+      code = code,
+      success = TRUE,
+      has_plot = captured_plot
+    )
+    .claude_history_env$entries <- c(.claude_history_env$entries, list(history_entry))
+    if (length(.claude_history_env$entries) > .claude_history_env$max_entries) {
+      .claude_history_env$entries <- tail(.claude_history_env$entries, .claude_history_env$max_entries)
+    }
+
     return(response)
   }, error = function(e) {
     # Make sure to close the sink if there was an error
@@ -483,11 +651,24 @@ execute_code_in_session <- function(code, settings = NULL) {
 
     # Log error if logging is enabled
     if (settings$log_to_file && !is.null(settings$log_file_path) && settings$log_file_path != "") {
-      log_error_to_file(code, e$message, settings$log_file_path)
+      log_error_to_file(code, e$message, settings$log_file_path, agent_id = agent_id)
     }
 
     # Display the error in the console
     cat("Error:", e$message, "\n")
+
+    # Record error to agent history
+    history_entry <- list(
+      timestamp = Sys.time(),
+      agent_id = if (!is.null(agent_id)) agent_id else "unknown",
+      code = code,
+      success = FALSE,
+      has_plot = FALSE
+    )
+    .claude_history_env$entries <- c(.claude_history_env$entries, list(history_entry))
+    if (length(.claude_history_env$entries) > .claude_history_env$max_entries) {
+      .claude_history_env$entries <- tail(.claude_history_env$entries, .claude_history_env$max_entries)
+    }
 
     return(list(
       success = FALSE,
@@ -510,6 +691,46 @@ execute_code_in_session <- function(code, settings = NULL) {
       try(file.remove(plot_file_png), silent = TRUE)
     }
   })
+}
+
+#' Query agent execution history
+#'
+#' @param agent_filter "all", or a specific agent ID to filter by
+#' @param requesting_agent The agent making the request (for context)
+#' @param last_n Number of entries to return
+#' @return Character string with formatted history
+
+query_agent_history <- function(agent_filter = "all", requesting_agent = NULL, last_n = 20) {
+  entries <- .claude_history_env$entries
+
+  if (length(entries) == 0) {
+    return("No execution history recorded yet.")
+  }
+
+  # Filter by agent if requested
+  if (agent_filter != "all") {
+    entries <- Filter(function(e) e$agent_id == agent_filter, entries)
+  }
+
+  if (length(entries) == 0) {
+    return(sprintf("No history found for agent '%s'.", agent_filter))
+  }
+
+  # Take last N
+  if (length(entries) > last_n) {
+    entries <- tail(entries, last_n)
+  }
+
+  # Format output
+  lines <- vapply(entries, function(e) {
+    status <- if (e$success) "OK" else "ERR"
+    plot_flag <- if (e$has_plot) " [plot]" else ""
+    code_preview <- substr(gsub("\n", " ", e$code), 1, 80)
+    sprintf("[%s] %s (%s%s): %s",
+            format(e$timestamp, "%H:%M:%S"), e$agent_id, status, plot_flag, code_preview)
+  }, character(1))
+
+  paste(lines, collapse = "\n")
 }
 
 #' Validate code for security issues
@@ -564,12 +785,13 @@ validate_code_security <- function(code) {
 #' @param log_path The path to the log file
 #' @return Invisible NULL
 
-log_code_to_file <- function(code, log_path) {
+log_code_to_file <- function(code, log_path, agent_id = NULL) {
   # Create timestamp
   timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
 
-  # Format the log entry
-  log_entry <- sprintf("# --- [%s] ---\n# Code executed by Claude:\n%s\n\n", timestamp, code)
+  # Format the log entry with agent attribution
+  agent_label <- if (!is.null(agent_id)) agent_id else "Claude"
+  log_entry <- sprintf("# --- [%s] ---\n# Code executed by %s:\n%s\n\n", timestamp, agent_label, code)
 
   # Create directory if it doesn't exist
   log_dir <- dirname(log_path)
@@ -603,13 +825,14 @@ log_code_to_file <- function(code, log_path) {
 #' @param log_path The path to the log file
 #' @return Invisible NULL
 
-log_error_to_file <- function(code, error_message, log_path) {
+log_error_to_file <- function(code, error_message, log_path, agent_id = NULL) {
   # Create timestamp
   timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
 
-  # Format the log entry
-  log_entry <- sprintf("# --- [%s] ---\n# Code executed by Claude (ERROR):\n%s\n# Error: %s\n\n",
-                      timestamp, code, error_message)
+  # Format the log entry with agent attribution
+  agent_label <- if (!is.null(agent_id)) agent_id else "Claude"
+  log_entry <- sprintf("# --- [%s] ---\n# Code executed by %s (ERROR):\n%s\n# Error: %s\n\n",
+                      timestamp, agent_label, code, error_message)
 
   # Create directory if it doesn't exist
   log_dir <- dirname(log_path)

@@ -47,7 +47,8 @@ claude_rstudio_addin <- function(port = 8787) {
 
           if (!is.null(body$code)) {
             # Execute the code in the global environment
-            result <- execute_code_in_session(body$code, settings)
+            agent_id <- body$agent_id  # NULL if not provided (backwards compatible)
+            result <- execute_code_in_session(body$code, settings, agent_id = agent_id)
             state$execution_count <- state$execution_count + 1
 
             # Return the result as JSON

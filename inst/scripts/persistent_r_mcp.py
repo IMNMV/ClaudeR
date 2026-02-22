@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # persistent_r_mcp.py
 
+import argparse
 import asyncio
 import json
 import tempfile
 import os
 import base64
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import httpx
 import sys
 from datetime import datetime
@@ -18,14 +19,61 @@ import mcp.types as types
 # Configure the server instance
 server = Server("r-studio")
 
-# Configuration
-R_ADDIN_URL = "http://127.0.0.1:8787"  # URL of the R addin server
+# Configuration — overwritten in main() after arg parsing
+R_ADDIN_URL = "http://127.0.0.1:8787"  # Fallback if no discovery files found
+
+# Session discovery
+SESSIONS_DIR = os.path.expanduser("~/.claude_r_sessions")
+_agent_id: Optional[str] = None       # Set in main()
+_target_session: Optional[str] = None  # Set by connect_session tool
+_agent_introduced: bool = False        # First-call introduction flag
 
 # Background job storage for async execution
 _background_jobs: Dict[str, Dict[str, Any]] = {}
 
 # Cache variable to store the result of the ggplot2 check
 _is_ggplot_installed = None
+
+
+def discover_sessions() -> List[Dict[str, Any]]:
+    """Read all discovery files and return list of available R sessions."""
+    sessions = []
+    if not os.path.isdir(SESSIONS_DIR):
+        return sessions
+    for f in os.listdir(SESSIONS_DIR):
+        if f.endswith(".json"):
+            try:
+                with open(os.path.join(SESSIONS_DIR, f)) as fh:
+                    sessions.append(json.load(fh))
+            except Exception:
+                pass
+    return sessions
+
+
+def get_r_addin_url() -> Optional[str]:
+    """Get the URL for the active R session via discovery files.
+    Falls back to hardcoded R_ADDIN_URL if no discovery files found."""
+    sessions = discover_sessions()
+    if len(sessions) == 0:
+        # Fallback to hardcoded default for backwards compatibility
+        return R_ADDIN_URL
+    if len(sessions) == 1:
+        return f"http://127.0.0.1:{sessions[0]['port']}"
+    # Multiple sessions — use _target_session if set
+    if _target_session:
+        for s in sessions:
+            if s["session_name"] == _target_session:
+                return f"http://127.0.0.1:{s['port']}"
+    # Default to first session
+    return f"http://127.0.0.1:{sessions[0]['port']}"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="R Studio MCP Server")
+    parser.add_argument("--agent-id", type=str,
+                        default=os.environ.get("CLAUDER_AGENT_ID", None),
+                        help="Unique identifier for this agent instance")
+    return parser.parse_args()
 
 
 
@@ -65,11 +113,20 @@ def escape_r_string(s: str) -> str:
 # Function to execute R code via the HTTP addin
 async def execute_r_code_via_addin(code: str) -> Dict[str, Any]:
     """Execute R code through the RStudio addin HTTP server."""
+    url = get_r_addin_url()
+    if url is None:
+        return {
+            "success": False,
+            "error": "No R sessions found. Start the ClaudeR addin in RStudio first."
+        }
     try:
+        payload: Dict[str, Any] = {"code": code}
+        if _agent_id:
+            payload["agent_id"] = _agent_id
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                R_ADDIN_URL,
-                json={"code": code},
+                url,
+                json=payload,
                 timeout=120.0
             )
             response.raise_for_status()
@@ -87,17 +144,52 @@ async def execute_r_code_via_addin(code: str) -> Dict[str, Any]:
             "error": f"Error communicating with RStudio: {str(e)}"
         }
 
-# Check if the R addin is running
-async def check_addin_status() -> bool:
-    """Check if the RStudio addin is running."""
+# Check if the R addin is running and return status info
+async def check_addin_status(return_info: bool = False):
+    """Check if the RStudio addin is running.
+    If return_info is True, returns the full status dict or None.
+    Otherwise returns a bool."""
+    url = get_r_addin_url()
+    if url is None:
+        return None if return_info else False
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(R_ADDIN_URL, timeout=2.0)
+            response = await client.get(url, timeout=2.0)
             if response.status_code == 200:
+                if return_info:
+                    return response.json()
                 return True
     except:
         pass
-    return False
+    return None if return_info else False
+
+
+async def get_agent_introduction() -> str:
+    """Build a one-time context message for the agent's first tool call."""
+    info = await check_addin_status(return_info=True)
+
+    lines = [
+        f"[ClaudeR Agent Context]",
+        f"Your agent ID: {_agent_id}",
+        f"This ID uniquely identifies you in this R session. All code you execute is attributed to this ID.",
+    ]
+
+    if info:
+        other_agents = [a for a in info.get("connected_agents", []) if a != _agent_id and a != "unknown"]
+        if other_agents:
+            lines.append(f"Other agents active on this session: {', '.join(other_agents)}")
+            lines.append("These are other AI agents executing code in the same R environment. Coordinate to avoid conflicts.")
+
+        log_path = info.get("log_file_path")
+        if log_path:
+            lines.append(f"Session log file: {log_path}")
+            lines.append("This log contains all code executed by all agents. Read it to see what others have done.")
+
+        session_name = info.get("session_name", "unknown")
+        lines.append(f"Session: {session_name}")
+
+    lines.append("[End ClaudeR Agent Context]")
+    return "\n".join(lines)
 
 # Define available tools
 @server.list_tools()
@@ -307,15 +399,73 @@ async def list_tools() -> List[types.Tool]:
                 "openWorldHint": False,
             }
         ),
+        types.Tool(
+            name="list_sessions",
+            description="List available RStudio sessions that this agent can connect to. Shows session name, port, and PID for each active session.",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="connect_session",
+            description="Connect to a specific RStudio session by name. Use list_sessions first to see available sessions. Subsequent tool calls will be routed to this session.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_name": {
+                        "type": "string",
+                        "description": "Name of the R session to connect to"
+                    }
+                },
+                "required": ["session_name"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="get_session_history",
+            description="Get execution history for the current R session. Can filter by agent to see what a specific agent has done.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "agent_filter": {
+                        "type": "string",
+                        "description": "Filter history by agent ID. Use 'self' for own history, 'all' for everything, or a specific agent ID."
+                    },
+                    "last_n": {
+                        "type": "number",
+                        "description": "Number of recent entries to return (default 20)"
+                    }
+                }
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
     ]
 
 @server.call_tool()
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextContent | types.ImageContent]:
     """Handle R tool calls."""
-    
-    # get_async_result only checks Python-side state — skip addin check
-    # (R may be busy executing the background job)
-    if name != "get_async_result":
+    global _target_session, _agent_introduced
+
+    # These tools check Python-side state only — skip addin check
+    _skip_addin_check = {"get_async_result", "list_sessions", "connect_session"}
+    if name not in _skip_addin_check:
         # Check if the R addin is running
         if not await check_addin_status():
             return [types.TextContent(
@@ -324,7 +474,16 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             )]
 
     result_contents = []
-    
+
+    # First tool call: prepend agent context so the model knows its identity
+    if not _agent_introduced:
+        _agent_introduced = True
+        try:
+            intro = await get_agent_introduction()
+            result_contents.append(types.TextContent(type="text", text=intro))
+        except Exception:
+            pass  # Don't block tool execution if introduction fails
+
     if name == "execute_r":
         if "code" not in arguments:
             return [types.TextContent(
@@ -641,6 +800,80 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             text="Async job completed successfully but produced no output."
         )]
 
+    elif name == "list_sessions":
+        sessions = discover_sessions()
+        if not sessions:
+            return [types.TextContent(
+                type="text",
+                text="No active R sessions found. Start the ClaudeR addin in RStudio first."
+            )]
+
+        lines = []
+        for s in sessions:
+            target_marker = " (connected)" if _target_session == s.get("session_name") else ""
+            lines.append(
+                f"  {s.get('session_name', '?')} — port {s.get('port', '?')}, "
+                f"pid {s.get('pid', '?')}, started {s.get('started_at', '?')}{target_marker}"
+            )
+
+        header = f"Active R sessions ({len(sessions)}):"
+        current = f"Current agent: {_agent_id}"
+        target = f"Connected to: {_target_session or 'auto (first available)'}"
+        return [types.TextContent(
+            type="text",
+            text=f"{header}\n" + "\n".join(lines) + f"\n\n{current}\n{target}"
+        )]
+
+    elif name == "connect_session":
+        session_name = arguments.get("session_name", "")
+        if not session_name:
+            return [types.TextContent(
+                type="text",
+                text="Error: 'session_name' is required"
+            )]
+
+        sessions = discover_sessions()
+        found = any(s.get("session_name") == session_name for s in sessions)
+
+        if not found:
+            available = [s.get("session_name", "?") for s in sessions]
+            return [types.TextContent(
+                type="text",
+                text=f"Session '{session_name}' not found. Available: {available or 'none'}"
+            )]
+
+        _target_session = session_name
+        return [types.TextContent(
+            type="text",
+            text=f"Connected to session '{session_name}'. All subsequent tool calls will be routed there."
+        )]
+
+    elif name == "get_session_history":
+        agent_filter = arguments.get("agent_filter", "all")
+        last_n = int(arguments.get("last_n", 20))
+
+        # Translate "self" to this agent's actual ID
+        if agent_filter == "self":
+            filter_value = escape_r_string(_agent_id or "unknown")
+        elif agent_filter == "all":
+            filter_value = "all"
+        else:
+            filter_value = escape_r_string(agent_filter)
+
+        r_code = f'ClaudeR:::query_agent_history("{filter_value}", "{escape_r_string(_agent_id or "unknown")}", {last_n})'
+        result = await execute_r_code_via_addin(r_code)
+
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error querying history: {result.get('error', 'Unknown error')}"
+            )]
+
+        return [types.TextContent(
+            type="text",
+            text=result.get("output", "No history available")
+        )]
+
     elif name == "modify_code_section":
         if not all(k in arguments for k in ["search_pattern", "replacement"]):
             return [types.TextContent(
@@ -747,7 +980,16 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
 
 # Run the server
 async def main():
-    print("Starting R Studio MCP server...", file=sys.stderr)
+    global _agent_id
+
+    args = parse_args()
+    _agent_id = args.agent_id or f"agent-{uuid.uuid4().hex[:8]}"
+
+    # Discover sessions
+    sessions = discover_sessions()
+    session_info = f", {len(sessions)} session(s) found" if sessions else ", no sessions yet"
+
+    print(f"Starting R Studio MCP server (agent={_agent_id}{session_info})...", file=sys.stderr)
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
             read_stream,
