@@ -252,6 +252,7 @@ If you can do it with R, your AI assistant can too.
 - **Long-Running Code Timing Out**:
     - Ask the AI to use `execute_r_async` for code that takes longer than 25 seconds.
     - The AI will automatically poll for results using `get_async_result`.
+    - Async jobs run in a separate R process via `callr` — they do **not** have access to your main session's environment. The AI must write self-contained code that uses `saveRDS()` to pass data in and write results out, then loads them back into the main session after the job completes.
 - **Server Restart Issues**:
     - If you see an "address already in use" error after restarting the server, it's a UI bug. The server is still active. If you encounter connection issues, switch the port number in the Viewer Pane or restart RStudio.
     - If the AI still can't connect, save your work and click **"Force Kill Server"** in the viewer pane. This will terminate the active RStudio window.
