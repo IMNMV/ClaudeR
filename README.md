@@ -18,6 +18,7 @@ This package is also compatible with Cursor and any service that support MCP ser
 
 ## Recent Updates
 
+- **PyPI package (`clauder-mcp`).** The Python MCP bridge is now available as a standalone package on PyPI. Run it with `uvx clauder-mcp` for zero-config setup with no Python path or pip install needed. The installers (`install_cli()` and `install_clauder()`) default to uvx, with a `use_uvx = FALSE` fallback for legacy setups.
 - **`read_file` tool.** Agents can now read any text file from disk (.R, .qmd, .csv, .log, etc.) without it being open in RStudio. Enables session continuity workflows: point an agent at a previous log file and tell it to pick up where the last session left off.
 - **Codex CLI support.** `install_cli(tools = "codex")` generates the setup command for OpenAI Codex. Codex joins Claude Code and Gemini as a supported CLI agent.
 - **Multi-agent orchestration.** Run multiple AI agents on the same R session or spread them across separate RStudio windows. Each agent gets a unique ID on startup. Console output, log files, and execution history are all attributed per agent, so you always know who did what. On its very first tool call, each agent receives a context briefing with its own ID, any other agents active on the session, and the log file path, giving it full awareness of the shared environment without any manual setup. Agents can call `get_session_history` to review what other agents have done, or read the shared log file directly. The Shiny viewer tracks connected agents in real-time.
@@ -136,7 +137,7 @@ Choose the option that matches your workflow.
 
 #### Option A: For Desktop Apps (Claude Desktop / Cursor)
 
-This function installs the necessary R and Python libraries and configures the `config` file automatically for desktop applications.
+This function configures the MCP config file automatically for desktop applications. By default it uses `uvx` to run the `clauder-mcp` PyPI package, which handles all Python dependencies automatically.
 
 ```R
 # Load the package
@@ -149,12 +150,11 @@ install_clauder()
 # install_clauder(for_cursor = TRUE)
 ```
 
-For **Conda / Virtual Environment** users, provide the full path to your Python executable:
+For users who cannot use `uvx` (e.g. restricted environments), fall back to the legacy Python path method:
 
 ```R
 library(ClaudeR)
-my_python_path <- "/path/to/your/conda/envs/my_env/bin/python"
-install_clauder(python_path = my_python_path)
+install_clauder(use_uvx = FALSE, python_path = "/path/to/your/python")
 ```
 
 #### Option B: For CLI Tools (Claude Code / Codex / Gemini)
@@ -174,11 +174,10 @@ install_cli(tools = "codex")
 install_cli(tools = "gemini")
 ```
 
-For **Conda / Virtual Environment** users, you **must** provide the path to your Python executable:
+For users who cannot use `uvx`, fall back to the legacy Python path method:
 
 ```R
-# Example for Claude with a specific Python path
-install_cli(tools = "claude", python_path = "/path/to/my/python")
+install_cli(tools = "claude", use_uvx = FALSE, python_path = "/path/to/my/python")
 ```
 
 After running the function, you must **manually apply the configuration**:
@@ -245,7 +244,7 @@ If you can do it with R, your AI assistant can too.
     - Restart RStudio if the port is in use.
 - **Python Dependency Issues**:
     - **`could not find function install_clauder`**: Restart your R session (`Session -> Restart R`) and try again.
-    - **MCP Server Failed to Start**: This usually means the wrong Python environment was detected. Re-run the installer with the correct `python_path`.
+    - **MCP Server Failed to Start**: If using `uvx`, ensure `uv` is installed (`curl -LsSf https://astral.sh/uv/install.sh | sh`). If using the legacy method, this usually means the wrong Python environment was detected. Re-run the installer with the correct `python_path` or switch to `use_uvx = TRUE`.
 - **AI Can't See Results**:
     - Ensure the add-in window is open and the server is running.
 - **Plots Not Displaying**:

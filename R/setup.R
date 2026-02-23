@@ -4,40 +4,49 @@
 #' for macOS, Windows, and Linux.
 #' @param for_cursor Logical. If TRUE, configures for Cursor instead of Claude Desktop.
 #'   Defaults to FALSE.
-#' @param python_path Optional. A character string specifying the absolute path
-#'   to the Python executable to use. If NULL (the default), the script will
-#'   attempt to find a system Python in the PATH.
+#' @param use_uvx Logical. If TRUE (the default), configures using `uvx clauder-mcp`
+#'   which handles Python dependencies automatically. If FALSE, falls back to
+#'   finding a Python executable and pointing to the bundled script.
+#' @param python_path Optional. Only used when `use_uvx = FALSE`. A character
+#'   string specifying the absolute path to the Python executable.
 #' @return Invisibly returns the path to the configuration file that was modified.
 #' @keywords internal
-configure <- function(for_cursor = FALSE, python_path = NULL) {
+configure <- function(for_cursor = FALSE, use_uvx = TRUE, python_path = NULL) {
   message("Starting ClaudeR configuration...")
 
-  # --- Find the Python executable ---
-  # This is the updated logic.
-  if (is.null(python_path)) {
-    message("No specific Python path provided. Searching system PATH...")
-    python_path <- Sys.which("python3")
-    if (python_path == "" || !nzchar(python_path)) {
-      python_path <- Sys.which("python")
-    }
-    if (python_path == "" || !nzchar(python_path)) {
-      stop("Could not automatically find a Python executable. Please provide the path via the 'python_path' argument in install_clauder().")
-    }
+  if (use_uvx) {
+    message("Using uvx (recommended). Python dependencies are handled automatically.")
+    mcp_command <- "uvx"
+    mcp_args <- list("clauder-mcp")
   } else {
-    if (!file.exists(python_path)) {
-      stop(paste("The provided Python path does not exist:", python_path))
+    # --- Legacy: Find the Python executable ---
+    if (is.null(python_path)) {
+      message("No specific Python path provided. Searching system PATH...")
+      python_path <- Sys.which("python3")
+      if (python_path == "" || !nzchar(python_path)) {
+        python_path <- Sys.which("python")
+      }
+      if (python_path == "" || !nzchar(python_path)) {
+        stop("Could not automatically find a Python executable. Please provide the path via the 'python_path' argument in install_clauder().")
+      }
+    } else {
+      if (!file.exists(python_path)) {
+        stop(paste("The provided Python path does not exist:", python_path))
+      }
+      message(paste("Using user-specified Python path:", python_path))
     }
-    message(paste("Using user-specified Python path:", python_path))
-  }
-  message(paste("Found Python at:", python_path))
+    message(paste("Found Python at:", python_path))
 
+    # --- Find the Python MCP script within the R package ---
+    mcp_script_path <- system.file("scripts", "persistent_r_mcp.py", package = "ClaudeR")
+    if (mcp_script_path == "") {
+      stop("Could not find the MCP script in the ClaudeR package. Please try reinstalling ClaudeR.")
+    }
+    message(paste("Found MCP script at:", mcp_script_path))
 
-  # --- Find the Python MCP script within the R package ---
-  mcp_script_path <- system.file("scripts", "persistent_r_mcp.py", package = "ClaudeR")
-  if (mcp_script_path == "") {
-    stop("Could not find the MCP script in the ClaudeR package. Please try reinstalling ClaudeR.")
+    mcp_command <- unname(python_path)
+    mcp_args <- list(mcp_script_path)
   }
-  message(paste("Found MCP script at:", mcp_script_path))
 
 
   # --- Determine the config file path based on the OS and application ---
@@ -85,9 +94,8 @@ configure <- function(for_cursor = FALSE, python_path = NULL) {
   
   # --- Add or update the r-studio server entry ---
   config$mcpServers$`r-studio` <- list(
-    command = unname(python_path),
-    args = list(mcp_script_path),
-    env = list(PYTHONUNBUFFERED = "1")
+    command = mcp_command,
+    args = mcp_args
   )
 
   
@@ -104,17 +112,18 @@ configure <- function(for_cursor = FALSE, python_path = NULL) {
 #' @description A helper function that installs all necessary R and Python
 #'   dependencies, and then automatically configures ClaudeR for the user.
 #' @param for_cursor Logical. If TRUE, configures for Cursor. Defaults to FALSE.
-#' @param python_path Optional. A character string specifying the absolute path
-#'   to the Python executable to use. If NULL (the default), the script will
-#'   attempt to find a system Python.
+#' @param use_uvx Logical. If TRUE (the default), configures using `uvx clauder-mcp`
+#'   which handles Python dependencies automatically. If FALSE, falls back to
+#'   finding a Python executable and installing dependencies via pip.
+#' @param python_path Optional. Only used when `use_uvx = FALSE`. A character
+#'   string specifying the absolute path to the Python executable.
 #' @param ... Additional arguments passed to `install.packages`.
 #' @details This function will:
 #'   1. Check for and install required R packages.
-#'   2. Attempt to install required Python packages (`mcp`, `httpx`) using the
-#'      specified or found Python.
+#'   2. If `use_uvx = FALSE`, attempt to install required Python packages.
 #'   3. Call `configure()` to set up the MCP connection automatically.
 #' @export
-install_clauder <- function(for_cursor = FALSE, python_path = NULL, ...) {
+install_clauder <- function(for_cursor = FALSE, use_uvx = TRUE, python_path = NULL, ...) {
   # --- 1. Install R Dependencies ---
   message("--- Step 1: Checking R dependencies ---")
   r_deps <- c("base64enc", "httpuv", "jsonlite", "miniUI", "rstudioapi", "shiny")
@@ -127,42 +136,43 @@ install_clauder <- function(for_cursor = FALSE, python_path = NULL, ...) {
     message("All required R dependencies are already installed.")
   }
 
-  
-  # --- 2. Install Python Dependencies ---
-  message("\n--- Step 2: Checking Python dependencies ---")
-  # Use the same logic as configure() to find the python path
-  if (is.null(python_path)) {
-    temp_python_path <- Sys.which("python3")
-    if (temp_python_path == "" || !nzchar(temp_python_path)) {
-      temp_python_path <- Sys.which("python")
+  if (!use_uvx) {
+    # --- 2. Install Python Dependencies (legacy mode) ---
+    message("\n--- Step 2: Checking Python dependencies ---")
+    if (is.null(python_path)) {
+      temp_python_path <- Sys.which("python3")
+      if (temp_python_path == "" || !nzchar(temp_python_path)) {
+        temp_python_path <- Sys.which("python")
+      }
+    } else {
+      temp_python_path <- python_path
+    }
+
+    if (nzchar(temp_python_path)) {
+      message(paste("Attempting to install 'mcp' and 'httpx' using pip from:", temp_python_path))
+      tryCatch({
+        system2(temp_python_path, args = c("-m", "pip", "install", "--upgrade", "mcp", "httpx"))
+      }, warning = function(w) {
+        message("\nWarning during pip install: ", w$message)
+        if (grepl("externally-managed-environment", w$message)) {
+          message("This Python is system-managed. If you need to install packages, please use a virtual environment and provide its path to `install_clauder(python_path = ...)`.")
+        }
+      }, error = function(e) {
+        message("\nError during pip install: ", e$message)
+      })
+    } else {
+      warning("Could not find a Python executable. Please install 'mcp' and 'httpx' manually using pip.")
     }
   } else {
-    temp_python_path <- python_path
+    message("\n--- Step 2: Using uvx (recommended) ---")
+    message("Python dependencies are handled automatically by uvx. No pip install needed.")
   }
-  
-  if (nzchar(temp_python_path)) {
-    message(paste("Attempting to install 'mcp' and 'httpx' using pip from:", temp_python_path))
-    # Use tryCatch to handle the PEP 668 error gracefully
-    tryCatch({
-      system2(temp_python_path, args = c("-m", "pip", "install", "--upgrade", "mcp", "httpx"))
-    }, warning = function(w) {
-      message("\nWarning during pip install: ", w$message)
-      if (grepl("externally-managed-environment", w$message)) {
-        message("This Python is system-managed. If you need to install packages, please use a virtual environment and provide its path to `install_clauder(python_path = ...)`.")
-      }
-    }, error = function(e) {
-      message("\nError during pip install: ", e$message)
-    })
-  } else {
-    warning("Could not find a Python executable. Please install 'mcp' and 'httpx' manually using pip.")
-  }
-  
 
   # --- 3. Run Automatic Configuration ---
-  message("\n--- Step 3: Running automatic MCP configuration ---")
+  step_num <- if (use_uvx) "Step 3" else "Step 3"
+  message(paste0("\n--- ", step_num, ": Running automatic MCP configuration ---"))
   tryCatch({
-    # Pass the python_path argument along to configure
-    ClaudeR:::configure(for_cursor = for_cursor, python_path = python_path)
+    ClaudeR:::configure(for_cursor = for_cursor, use_uvx = use_uvx, python_path = python_path)
   }, error = function(e) {
     message("\nConfiguration failed with an error:")
     stop(e$message)

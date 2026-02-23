@@ -1,0 +1,20 @@
+[project]
+name = "clauder-mcp"
+version = "0.2.0"
+description = "MCP server connecting AI assistants to RStudio for interactive R coding and data analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Nykko Vitali" }]
+keywords = ["r", "rstudio", "mcp", "llm", "data-science"]
+license = { text = "MIT" }
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx",
+]
+
+[project.scripts]
+clauder-mcp = "clauder_mcp:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
