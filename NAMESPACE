@@ -3,6 +3,7 @@
 export(claudeAddin)
 export(claude_rstudio_addin)
 export(execute_code_in_session)
+export(export_log_as_script)
 export(install_clauder)
 export(install_cli)
 importFrom(base64enc,base64encode)

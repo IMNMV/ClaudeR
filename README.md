@@ -18,6 +18,8 @@ This package is also compatible with Cursor and any service that support MCP ser
 
 ## Recent Updates
 
+- **Reproducibility metadata in logs.** When logging is enabled, each new session log starts with a header containing the date, working directory, and full `sessionInfo()` output (R version, platform, attached packages). Anyone who receives the log can see exactly what environment the code ran in.
+- **Export clean script.** Click "Export Clean Script" in the Shiny addin to strip all timestamps, agent labels, and log headers from a session log, producing a runnable `.R` file with just the code. Error blocks are preserved as comments. Also available programmatically via `export_log_as_script()`.
 - **PyPI package (`clauder-mcp`).** The Python MCP bridge is now available as a standalone package on PyPI. Run it with `uvx clauder-mcp` for zero-config setup with no Python path or pip install needed. The installers (`install_cli()` and `install_clauder()`) default to uvx, with a `use_uvx = FALSE` fallback for legacy setups.
 - **`read_file` tool.** Agents can now read any text file from disk (.R, .qmd, .csv, .log, etc.) without it being open in RStudio. Enables session continuity workflows: point an agent at a previous log file and tell it to pick up where the last session left off.
 - **Codex CLI support.** `install_cli(tools = "codex")` generates the setup command for OpenAI Codex. Codex joins Claude Code and Gemini as a supported CLI agent.
@@ -215,6 +217,8 @@ The ClaudeR add-in will appear in your RStudio Viewer pane. Click **"Start Serve
 - **Print Code to Console**: See the AI's code in your R console before it runs. The code will be preceded by the header: `### LLM [agent-id] executing the following code ###`.
 - **Log Code to File**: Save all executed code to a log file. Each entry is tagged with the agent ID that executed it, so you can trace which AI agent ran what.
 - **Custom Log Path**: Specify a custom location for log files.
+- **Reproducibility Header**: Each new session log automatically starts with a header containing the date, working directory, and full `sessionInfo()` output (R version, platform, attached/loaded packages). This makes logs self-documenting for reproducibility.
+- **Export Clean Script**: Click "Export Clean Script" in the logging panel to produce a runnable `.R` file stripped of all timestamps and log headers. Error blocks are kept as comments so you can see what went wrong. Also callable from the console with `export_log_as_script()`.
 
 Each R session gets its own timestamped log file. Saving the log file with a different name that's actively being edited by the AI automatically creates a new log continuing on from the last command that was executed after being saved.
 

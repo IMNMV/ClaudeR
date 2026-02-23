@@ -160,6 +160,9 @@ claudeAddin <- function() {
     )
     # Save updated settings
     save_claude_settings(settings)
+
+    # Write reproducibility header with session info
+    write_log_header(settings$log_file_path)
   }
 
   # Start HTTP server function
@@ -300,7 +303,8 @@ claudeAddin <- function() {
           condition = "input.log_to_file == true",
           textInput("log_file_path", "Log file path",
                            value = settings$log_file_path),
-          actionButton("open_log", "Open Log File", class = "btn-sm")
+          actionButton("open_log", "Open Log File", class = "btn-sm"),
+          actionButton("export_script", "Export Clean Script", class = "btn-sm")
         )
       ),
 
@@ -343,6 +347,23 @@ claudeAddin <- function() {
         } else {
           file.show(input$log_file_path)
         }
+      } else {
+        showNotification("Log file does not exist yet.", type = "warning")
+      }
+    })
+
+    # Export clean script button
+    observeEvent(input$export_script, {
+      if (file.exists(input$log_file_path)) {
+        tryCatch({
+          out <- export_log_as_script(input$log_file_path)
+          showNotification(paste("Exported to:", basename(out)), type = "message")
+          if (requireNamespace("rstudioapi", quietly = TRUE)) {
+            navigateToFile(out)
+          }
+        }, error = function(e) {
+          showNotification(paste("Export failed:", e$message), type = "error")
+        })
       } else {
         showNotification("Log file does not exist yet.", type = "warning")
       }
@@ -951,6 +972,130 @@ log_error_to_file <- function(code, error_message, log_path, agent_id = NULL) {
   cat(log_entry, file = log_path, append = TRUE)
 
   invisible(NULL)
+}
+
+#' Write reproducibility header to a new log file
+#'
+#' Captures sessionInfo(), working directory, and timestamp at the top of the log.
+#' Called once when a new log file is created.
+#'
+#' @param log_path The path to the log file
+#' @return Invisible NULL
+
+write_log_header <- function(log_path) {
+  log_dir <- dirname(log_path)
+  if (!dir.exists(log_dir)) {
+    dir.create(log_dir, recursive = TRUE)
+  }
+
+  # Capture sessionInfo as text
+  si <- utils::capture.output(utils::sessionInfo())
+
+  header <- paste0(
+    "# ============================================================\n",
+    "# ClaudeR Session Log\n",
+    "# Date: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"), "\n",
+    "# Working Directory: ", getwd(), "\n",
+    "# ============================================================\n",
+    "#\n",
+    "# Session Info:\n",
+    paste0("# ", si, collapse = "\n"), "\n",
+    "#\n",
+    "# ============================================================\n\n"
+  )
+
+  cat(header, file = log_path, append = FALSE)
+  invisible(NULL)
+}
+
+#' Export a ClaudeR log file as a clean, runnable R script
+#'
+#' Strips timestamps, agent labels, and comment headers from a session log,
+#' leaving only the executed R code. Error blocks are included as comments.
+#'
+#' @param log_path Path to the ClaudeR session log file. If NULL, uses the
+#'   current session's log file from settings.
+#' @param output_path Path to write the clean script. If NULL, writes to
+#'   the same directory with "_clean.R" suffix.
+#' @param include_errors If TRUE (default), include errored code blocks as
+#'   comments. If FALSE, skip them entirely.
+#' @return The output path (invisibly).
+#' @export
+
+export_log_as_script <- function(log_path = NULL, output_path = NULL, include_errors = TRUE) {
+  # Default to current session log
+
+  if (is.null(log_path)) {
+    settings <- load_claude_settings()
+    if (!settings$log_to_file || is.null(settings$log_file_path)) {
+      stop("Logging is not enabled. Pass a log_path explicitly.")
+    }
+    log_path <- settings$log_file_path
+  }
+
+  if (!file.exists(log_path)) {
+    stop("Log file not found: ", log_path)
+  }
+
+  # Default output path
+  if (is.null(output_path)) {
+    output_path <- sub("\\.R$", "_clean.R", log_path)
+    if (output_path == log_path) {
+      output_path <- paste0(log_path, "_clean.R")
+    }
+  }
+
+  lines <- readLines(log_path, warn = FALSE)
+
+  # Parse log into blocks
+  # Blocks start with "# --- [timestamp] ---"
+  block_starts <- grep("^# --- \\[", lines)
+
+  if (length(block_starts) == 0) {
+    message("No code blocks found in log file.")
+    return(invisible(output_path))
+  }
+
+  # Determine block boundaries
+  block_ends <- c(block_starts[-1] - 1, length(lines))
+
+  clean_lines <- character(0)
+
+  # Write a header for the clean script
+  clean_lines <- c(
+    "# Clean R script exported from ClaudeR session log",
+    paste0("# Source: ", basename(log_path)),
+    paste0("# Exported: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+    ""
+  )
+
+  for (i in seq_along(block_starts)) {
+    block <- lines[block_starts[i]:block_ends[i]]
+
+    # Check if this is an error block
+    is_error <- any(grepl("(ERROR)", block, fixed = TRUE))
+
+    # Extract code lines (skip the header comments)
+    # Header lines: "# --- [timestamp] ---", "# Code executed by ...", "# Error: ..."
+    code_lines <- block[!grepl("^# --- \\[|^# Code executed by |^# Error: |^#\\s*$", block)]
+
+    # Remove trailing blank lines
+    while (length(code_lines) > 0 && code_lines[length(code_lines)] == "") {
+      code_lines <- code_lines[-length(code_lines)]
+    }
+
+    if (length(code_lines) == 0) next
+
+    if (is_error && include_errors) {
+      clean_lines <- c(clean_lines, "# [The following block produced an error]", paste0("# ", code_lines), "")
+    } else if (!is_error) {
+      clean_lines <- c(clean_lines, code_lines, "")
+    }
+  }
+
+  writeLines(clean_lines, output_path)
+  message("Exported clean script to: ", output_path)
+  invisible(output_path)
 }
 
 #' Load Claude settings
