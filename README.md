@@ -18,17 +18,18 @@ This package is also compatible with Cursor and any service that support MCP ser
 
 ## Recent Updates
 
-- **Codex CLI support** — `install_cli(tools = "codex")` generates the setup command for OpenAI Codex. Codex joins Claude Code and Gemini as a supported CLI agent.
-- **Multi-agent orchestration** — Run multiple AI agents on the same R session or spread them across separate RStudio windows. Each agent gets a unique ID on startup. Console output, log files, and execution history are all attributed per agent, so you always know who did what. On its very first tool call, each agent receives a context briefing with its own ID, any other agents active on the session, and the log file path — giving it full awareness of the shared environment without any manual setup. Agents can call `get_session_history` to review what other agents have done, or read the shared log file directly. The Shiny viewer tracks connected agents in real-time.
-- **Session discovery** — Each RStudio session writes a discovery file to `~/.claude_r_sessions/` on startup. AI agents find sessions automatically — no hardcoded ports. Name your sessions (e.g. "analysis", "modeling") and run them on different ports. Agents can call `list_sessions` to see what's available and `connect_session` to bind to a specific one. Single-session setups work with zero config.
-- **Redesigned Shiny viewer** — Cleaner UI with grouped panels for Session, Agents, Logging, and Advanced settings. Shows connected agents and execution count in real-time. Click the `?` button for a built-in guide on multi-session setup and agent identity.
-- **Non-blocking async execution** — `execute_r_async` now runs long-running code in a separate R process via `callr`, keeping the main session fully responsive. Other agents can continue working while a job runs. The agent writes self-contained code (explicitly saving/loading data via `saveRDS`), submits it, and polls with `get_async_result`. No environment copying, no memory doubling — only the data the job needs gets serialized.
-- **Stale plot detection** — Fixed a bug where the last generated plot image would persist and re-appear on every subsequent `execute_r` call, even when no new plot was created.
-- **Reduced plot token usage** — Plot capture now uses smaller dimensions (600x400, dpi 100) to reduce base64 image size and avoid token overflow errors.
-- **MCP tool annotations** — All tools now include `readOnlyHint`, `destructiveHint`, and `idempotentHint` annotations per the current MCP spec.
-- **Hardened string escaping** — `escape_r_string` now handles backticks, carriage returns, tabs, and null bytes. Applied to task tool inputs to prevent injection.
-- **Fixed `install_cli()` command syntax** — Updated to use `--transport stdio` flag and `--` separator for current Claude Code CLI. Now removes stale MCP registrations before adding fresh ones, preventing issues when upgrading R versions.
-- **Consolidated duplicate code** — Removed duplicate function definitions across files; single source of truth in `ui.R`.
+- **`read_file` tool.** Agents can now read any text file from disk (.R, .qmd, .csv, .log, etc.) without it being open in RStudio. Enables session continuity workflows: point an agent at a previous log file and tell it to pick up where the last session left off.
+- **Codex CLI support.** `install_cli(tools = "codex")` generates the setup command for OpenAI Codex. Codex joins Claude Code and Gemini as a supported CLI agent.
+- **Multi-agent orchestration.** Run multiple AI agents on the same R session or spread them across separate RStudio windows. Each agent gets a unique ID on startup. Console output, log files, and execution history are all attributed per agent, so you always know who did what. On its very first tool call, each agent receives a context briefing with its own ID, any other agents active on the session, and the log file path, giving it full awareness of the shared environment without any manual setup. Agents can call `get_session_history` to review what other agents have done, or read the shared log file directly. The Shiny viewer tracks connected agents in real-time.
+- **Session discovery.** Each RStudio session writes a discovery file to `~/.claude_r_sessions/` on startup. AI agents find sessions automatically with no hardcoded ports. Name your sessions (e.g. "analysis", "modeling") and run them on different ports. Agents can call `list_sessions` to see what's available and `connect_session` to bind to a specific one. Single-session setups work with zero config.
+- **Redesigned Shiny viewer.** Cleaner UI with grouped panels for Session, Agents, Logging, and Advanced settings. Shows connected agents and execution count in real-time. Click the `?` button for a built-in guide on multi-session setup and agent identity.
+- **Non-blocking async execution.** `execute_r_async` now runs long-running code in a separate R process via `callr`, keeping the main session fully responsive. Other agents can continue working while a job runs. The agent writes self-contained code (explicitly saving/loading data via `saveRDS`), submits it, and polls with `get_async_result`. No environment copying and no memory doubling, only the data the job needs gets serialized.
+- **Stale plot detection.** Fixed a bug where the last generated plot image would persist and re-appear on every subsequent `execute_r` call, even when no new plot was created.
+- **Reduced plot token usage.** Plot capture now uses smaller dimensions (600x400, dpi 100) to reduce base64 image size and avoid token overflow errors.
+- **MCP tool annotations.** All tools now include `readOnlyHint`, `destructiveHint`, and `idempotentHint` annotations per the current MCP spec.
+- **Hardened string escaping.** `escape_r_string` now handles backticks, carriage returns, tabs, and null bytes. Applied to task tool inputs to prevent injection.
+- **Fixed `install_cli()` command syntax.** Updated to use `--transport stdio` flag and `--` separator for current Claude Code CLI. Now removes stale MCP registrations before adding fresh ones, preventing issues when upgrading R versions.
+- **Consolidated duplicate code.** Removed duplicate function definitions across files; single source of truth in `ui.R`.
 
 ## Demo
 
@@ -64,6 +65,7 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`list_sessions`**: List all active RStudio sessions the agent can connect to.
 - **`connect_session`**: Connect to a specific RStudio session by name for multi-session workflows.
 - **`get_session_history`**: View execution history filtered by agent ID.
+- **`read_file`**: Read any text file from disk (.R, .qmd, .csv, .log, etc.) without needing it open in RStudio.
 - **`get_active_document`**: Get the content of the active document in RStudio.
 - **`get_r_info`**: Get information about the R environment.
 - **`modify_code_section`**: Modify a specific section of code in the active document.
@@ -252,7 +254,7 @@ If you can do it with R, your AI assistant can too.
 - **Long-Running Code Timing Out**:
     - Ask the AI to use `execute_r_async` for code that takes longer than 25 seconds.
     - The AI will automatically poll for results using `get_async_result`.
-    - Async jobs run in a separate R process via `callr` — they do **not** have access to your main session's environment. The AI must write self-contained code that uses `saveRDS()` to pass data in and write results out, then loads them back into the main session after the job completes.
+    - Async jobs run in a separate R process via `callr` and do **not** have access to your main session's environment. The AI must write self-contained code that uses `saveRDS()` to pass data in and write results out, then loads them back into the main session after the job completes.
 - **Server Restart Issues**:
     - If you see an "address already in use" error after restarting the server, it's a UI bug. The server is still active. If you encounter connection issues, switch the port number in the Viewer Pane or restart RStudio.
     - If the AI still can't connect, save your work and click **"Force Kill Server"** in the viewer pane. This will terminate the active RStudio window.
@@ -261,13 +263,13 @@ If you can do it with R, your AI assistant can too.
 
 ## Planned
 
-- **Session continuity** — Point an agent at a previous session's log file and have it pick up where the last agent left off. The agent reads the log to rebuild context (what data was loaded, what models were fit, what decisions were made) and continues appending to the same log. Useful for multi-day academic analyses where you want to resume work across sessions without losing context.
+- **Session continuity.** Point an agent at a previous session's log file (using `read_file`) and have it pick up where the last agent left off. The agent reads the log to rebuild context (what data was loaded, what models were fit, what decisions were made) and continues appending to the same log. Useful for multi-day academic analyses where you want to resume work across sessions without losing context.
 
 ## Limitations
 
 - Each R session can connect to one Claude Desktop/Cursor app at a time. However, multiple CLI agents (Claude Code, Gemini CLI) can share the same session alongside a Desktop app. To isolate agents, run separate RStudio windows with different session names and ports.
 - You can stop the connection to the Shiny UI by clicking the Stop button in the console to make changes alongside the AI, but to stop the connection you will need to restart the RSession.
-- R is single-threaded, but async jobs run in a separate process via `callr` so the main session stays responsive. The background process does not share the main session's environment — async code must be self-contained.
+- R is single-threaded, but async jobs run in a separate process via `callr` so the main session stays responsive. The background process does not share the main session's environment, so async code must be self-contained.
 
 ## License
 

@@ -445,6 +445,26 @@ async def list_tools() -> List[types.Tool]:
             }
         ),
         types.Tool(
+            name="read_file",
+            description="Read the contents of a file from disk. Use this to read R scripts, log files, data files (.csv, .txt), or any text file. The file does not need to be open in RStudio. Returns the file contents with line numbers. To modify and save changes back, use execute_r with writeLines().",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the file to read. Supports absolute paths and ~ for home directory."
+                    }
+                },
+                "required": ["file_path"]
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
             name="get_session_history",
             description="Get execution history for the current R session. Can filter by agent to see what a specific agent has done.",
             inputSchema={
@@ -880,6 +900,38 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             type="text",
             text=result.get("output", "No history available")
         )]
+
+    elif name == "read_file":
+        if "file_path" not in arguments:
+            return [types.TextContent(type="text", text="Error: 'file_path' parameter is required")]
+
+        file_path = escape_r_string(arguments["file_path"])
+        read_code = f'''
+        tryCatch({{
+            fpath <- path.expand("{file_path}")
+            if (!file.exists(fpath)) {{
+                list(success = FALSE, error = paste0("File not found: ", fpath))
+            }} else {{
+                lines <- readLines(fpath, warn = FALSE)
+                numbered <- paste0(seq_along(lines), ": ", lines)
+                list(success = TRUE, output = paste(numbered, collapse = "\\n"))
+            }}
+        }}, error = function(e) {{
+            list(success = FALSE, error = e$message)
+        }})
+        '''
+        result = await execute_r_code_via_addin(read_code)
+
+        if not result.get("success", False):
+            error_msg = result.get("error", "Unknown error")
+            result_contents.append(types.TextContent(type="text", text=f"Error reading file: {error_msg}"))
+            return result_contents
+
+        result_contents.append(types.TextContent(
+            type="text",
+            text=result.get("output", "File is empty")
+        ))
+        return result_contents
 
     elif name == "modify_code_section":
         if not all(k in arguments for k in ["search_pattern", "replacement"]):
