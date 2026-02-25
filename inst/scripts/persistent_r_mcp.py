@@ -48,21 +48,24 @@ def discover_sessions() -> List[Dict[str, Any]]:
 
 
 def get_r_addin_url() -> Optional[str]:
-    """Get the URL for the active R session via discovery files.
-    Falls back to hardcoded R_ADDIN_URL if no discovery files found."""
+    """Get the URL for the active R session. Binds on first resolution and
+    stays sticky. Prefers the 'default' session when no target is set."""
+    global _target_session
     sessions = discover_sessions()
-    if len(sessions) == 0:
-        # Fallback to hardcoded default for backwards compatibility
+    if not sessions:
         return R_ADDIN_URL
-    if len(sessions) == 1:
-        return f"http://127.0.0.1:{sessions[0]['port']}"
-    # Multiple sessions — use _target_session if set
     if _target_session:
         for s in sessions:
             if s["session_name"] == _target_session:
                 return f"http://127.0.0.1:{s['port']}"
-    # Default to first session
-    return f"http://127.0.0.1:{sessions[0]['port']}"
+        _target_session = None  # bound session gone, re-pick
+    # Pick: prefer "default" name, else lowest port
+    pick = next((s for s in sessions if s.get("session_name") == "default"), None)
+    if not pick:
+        sessions.sort(key=lambda s: s.get("port", 99999))
+        pick = sessions[0]
+    _target_session = pick["session_name"]
+    return f"http://127.0.0.1:{pick['port']}"
 
 
 def parse_args():
