@@ -32,17 +32,35 @@ _agent_introduced: bool = False        # First-call introduction flag
 _is_ggplot_installed = None
 
 
+def _pid_alive(pid: int) -> bool:
+    """Check if a process is running (signal 0 doesn't kill, just checks)."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
 def discover_sessions() -> List[Dict[str, Any]]:
-    """Read all discovery files and return list of available R sessions."""
+    """Read discovery files, pruning any whose R process is dead."""
     sessions = []
     if not os.path.isdir(SESSIONS_DIR):
         return sessions
     for f in os.listdir(SESSIONS_DIR):
-        if f.endswith(".json"):
+        if not f.endswith(".json"):
+            continue
+        fpath = os.path.join(SESSIONS_DIR, f)
+        try:
+            with open(fpath) as fh:
+                info = json.load(fh)
+            if not _pid_alive(info.get("pid", -1)):
+                os.remove(fpath)
+                continue
+            sessions.append(info)
+        except Exception:
             try:
-                with open(os.path.join(SESSIONS_DIR, f)) as fh:
-                    sessions.append(json.load(fh))
-            except Exception:
+                os.remove(fpath)
+            except OSError:
                 pass
     return sessions
 
