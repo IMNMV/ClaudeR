@@ -33,7 +33,6 @@ This package is also compatible with Cursor and any service that support MCP ser
 - **MCP tool annotations.** All tools now include `readOnlyHint`, `destructiveHint`, and `idempotentHint` annotations per the current MCP spec.
 - **Hardened string escaping.** `escape_r_string` now handles backticks, carriage returns, tabs, and null bytes. Applied to task tool inputs to prevent injection.
 - **Fixed `install_cli()` command syntax.** Updated to use `--transport stdio` flag and `--` separator for current Claude Code CLI. Now removes stale MCP registrations before adding fresh ones, preventing issues when upgrading R versions.
-- **Consolidated duplicate code.** Removed duplicate function definitions across files; single source of truth in `ui.R`.
 
 ## Demo
 
@@ -264,10 +263,6 @@ If you can do it with R, your AI assistant can too.
     - If the AI still can't connect, save your work and click **"Force Kill Server"** in the viewer pane. This will terminate the active RStudio window.
 - **Stale MCP Path After R Upgrade**:
     - If tools stop working after upgrading R, re-run `install_cli()` or `install_clauder()` to update the script path.
-
-## Planned
-
-- **Session continuity.** Point an agent at a previous session's log file (using `read_file`) and have it pick up where the last agent left off. The agent reads the log to rebuild context (what data was loaded, what models were fit, what decisions were made) and continues appending to the same log. Useful for multi-day academic analyses where you want to resume work across sessions without losing context.
 
 ## Limitations
 
