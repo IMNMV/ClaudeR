@@ -335,6 +335,34 @@ async def list_tools() -> List[types.Tool]:
             }
         ),
         types.Tool(
+            name="insert_text",
+            description="Insert text at the current cursor position in the active RStudio document, or at a specific line and column.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The text to insert"
+                    },
+                    "line": {
+                        "type": "number",
+                        "description": "Optional: Line number to insert at (1-based). If omitted, inserts at current cursor position."
+                    },
+                    "column": {
+                        "type": "number",
+                        "description": "Optional: Column number to insert at (1-based). Defaults to 1 if line is specified but column is omitted."
+                    }
+                },
+                "required": ["text"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
             name="create_task_list",
             description="Create a task list for the current analysis",
             inputSchema={
@@ -486,6 +514,29 @@ async def list_tools() -> List[types.Tool]:
             }
         ),
         types.Tool(
+            name="get_viewer_content",
+            description="Get HTML content from the RStudio Viewer pane (HTML widgets like plotly, DT, leaflet). Returns paginated chunks. Call with offset to get more.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "max_length": {
+                        "type": "number",
+                        "description": "Maximum characters to return (default 10000)"
+                    },
+                    "offset": {
+                        "type": "number",
+                        "description": "Character offset to start from (default 0). Use to paginate through large content."
+                    }
+                }
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
             name="get_session_history",
             description="Get execution history for the current R session. Can filter by agent to see what a specific agent has done.",
             inputSchema={
@@ -565,12 +616,19 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                 data=result["plot"]["data"],
                 mimeType=result["plot"]["mime_type"]
             ))
-        
+
+        # Hint about captured viewer content (htmlwidgets)
+        if result.get("viewer_captured"):
+            result_contents.append(types.TextContent(
+                type="text",
+                text="[Interactive HTML widget was rendered. Use get_viewer_content tool to read the HTML.]"
+            ))
+
         return result_contents or [types.TextContent(
             type="text",
             text="Code executed successfully but produced no output."
         )]
-    
+
     elif name == "execute_r_with_plot":
         if "code" not in arguments:
             return [types.TextContent(
@@ -609,12 +667,19 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                 data=result["plot"]["data"],
                 mimeType=result["plot"]["mime_type"]
             ))
-        
+
+        # Hint about captured viewer content (htmlwidgets)
+        if result.get("viewer_captured"):
+            result_contents.append(types.TextContent(
+                type="text",
+                text="[Interactive HTML widget was rendered. Use get_viewer_content tool to read the HTML.]"
+            ))
+
         return result_contents or [types.TextContent(
             type="text",
             text="Code executed but no plot was generated. Make sure your code creates a plot."
         )]
-    
+
     elif name == "get_r_info":
         what = arguments.get("what", "all")
         
@@ -954,6 +1019,32 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         ))
         return result_contents
 
+    elif name == "get_viewer_content":
+        max_length = int(arguments.get("max_length", 10000))
+        offset = int(arguments.get("offset", 0))
+
+        result = await post_to_r_addin({
+            "get_viewer": True,
+            "max_length": max_length,
+            "offset": offset
+        })
+
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error: {result.get('error', 'No viewer content available')}"
+            )]
+
+        total = result.get("total_chars", 0)
+        returned = result.get("returned_chars", 0)
+        content = result.get("content", "")
+
+        result_contents.append(types.TextContent(
+            type="text",
+            text=f"HTML content ({offset}-{offset + returned} of {total} chars):\n\n{content}"
+        ))
+        return result_contents
+
     elif name == "modify_code_section":
         if not all(k in arguments for k in ["search_pattern", "replacement"]):
             return [types.TextContent(
@@ -1052,7 +1143,50 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             type="text",
             text=result.get("output", "No result returned from code modification")
         )]
-    
+
+    elif name == "insert_text":
+        if "text" not in arguments:
+            return [types.TextContent(type="text", text="Error: 'text' parameter is required")]
+
+        text = escape_r_string(arguments["text"])
+        line = arguments.get("line")
+        column = arguments.get("column")
+
+        if line is not None:
+            col = int(column) if column is not None else 1
+            insert_code = f'''
+if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {{
+    pos <- rstudioapi::document_position({int(line)}, {col})
+    rstudioapi::insertText(location = pos, text = "{text}")
+    paste0("Inserted text at line ", {int(line)}, ", column ", {col})
+}} else {{
+    stop("RStudio API not available")
+}}
+'''
+        else:
+            insert_code = f'''
+if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {{
+    rstudioapi::insertText(text = "{text}")
+    "Inserted text at current cursor position"
+}} else {{
+    stop("RStudio API not available")
+}}
+'''
+
+        result = await execute_r_code_via_addin(insert_code)
+
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error inserting text: {result.get('error', 'Unknown error')}"
+            )]
+
+        result_contents.append(types.TextContent(
+            type="text",
+            text=result.get("output", "Text inserted successfully")
+        ))
+        return result_contents
+
     return [types.TextContent(
         type="text",
         text=f"Unknown tool: {name}"

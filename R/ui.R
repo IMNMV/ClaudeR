@@ -43,6 +43,40 @@ cleanup_stale_discovery_files <- function() {
 .claude_history_env$entries <- list()
 .claude_history_env$max_entries <- 500L
 
+# --- Viewer Tracking ---
+# Wraps RStudio's viewer to capture the last URL displayed.
+.claude_viewer_env <- new.env(parent = emptyenv())
+.claude_viewer_env$last_url <- NULL
+.claude_viewer_env$original_viewer <- NULL
+.claude_viewer_env$suppress <- FALSE
+
+wrap_viewer <- function() {
+  orig <- getOption("viewer")
+  if (is.function(orig)) {
+    .claude_viewer_env$original_viewer <- orig
+    options(viewer = function(url, height = NULL) {
+      .claude_viewer_env$last_url <- url
+      if (isTRUE(.claude_viewer_env$suppress)) {
+        # Agent execution: open in browser instead of stealing the viewer pane
+        # Ensure file:// prefix so browser can load local temp files
+        if (file.exists(url) && !grepl("^(http|file):", url)) {
+          url <- paste0("file://", normalizePath(url, winslash = "/"))
+        }
+        utils::browseURL(url)
+      } else {
+        .claude_viewer_env$original_viewer(url, height)
+      }
+    })
+  }
+}
+
+unwrap_viewer <- function() {
+  if (!is.null(.claude_viewer_env$original_viewer)) {
+    options(viewer = .claude_viewer_env$original_viewer)
+    .claude_viewer_env$original_viewer <- NULL
+  }
+}
+
 # --- Background Jobs (callr) ---
 # Package-level environment for non-blocking async execution.
 .claude_bg_jobs <- new.env(parent = emptyenv())
@@ -189,6 +223,32 @@ claudeAddin <- function() {
               ))
             }
 
+            # --- Get viewer content (paginated) ---
+            if (!is.null(body$get_viewer)) {
+              max_length <- if (!is.null(body$max_length)) as.integer(body$max_length) else 10000L
+              offset <- if (!is.null(body$offset)) as.integer(body$offset) else 0L
+
+              last_url <- .claude_viewer_env$last_url
+              if (is.null(last_url) || !file.exists(last_url)) {
+                result <- list(success = FALSE, error = "No viewer content available.")
+              } else {
+                html <- paste(readLines(last_url, warn = FALSE), collapse = "\n")
+                total <- nchar(html)
+                start_pos <- offset + 1L
+                end_pos <- min(offset + max_length, total)
+                chunk <- if (start_pos > total) "" else substr(html, start_pos, end_pos)
+                result <- list(success = TRUE, content = chunk,
+                               total_chars = total, offset = offset,
+                               returned_chars = nchar(chunk))
+              }
+              response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
+              return(list(
+                status = 200L,
+                headers = list('Content-Type' = 'application/json'),
+                body = response_body
+              ))
+            }
+
             if (!is.null(body$code)) {
               agent_id <- body$agent_id  # NULL if not provided (backwards compatible)
 
@@ -283,11 +343,24 @@ claudeAddin <- function() {
         numericInput("port", "Port", value = 8787, min = 1024, max = 65535),
         verbatimTextOutput("serverStatus"),
         actionButton("startServer", "Start Server", class = "btn-primary btn-sm"),
-        actionButton("stopServer", "Stop Server", class = "btn-danger btn-sm")
+        actionButton("stopServer", "Stop Server", class = "btn-danger btn-sm"),
+        tags$div(style = "display: flex; align-items: center; gap: 6px;",
+          checkboxInput("fresh_start", "Fresh start on restart", value = FALSE),
+          actionButton("fresh_start_help", "?",
+            class = "btn-default btn-xs",
+            style = "padding: 1px 6px; font-size: 11px; margin-top: -15px;"
+          )
+        )
       ),
 
       # --- Agents ---
-      tags$div(class = "section-label", "AGENTS"),
+      tags$div(class = "section-label",
+        "AGENTS",
+        actionButton("agents_help", "?",
+          class = "btn-default btn-xs",
+          style = "margin-left: 6px; padding: 1px 6px; font-size: 11px; vertical-align: middle;"
+        )
+      ),
       wellPanel(
         verbatimTextOutput("agentInfo")
       ),
@@ -427,12 +500,84 @@ claudeAddin <- function() {
       ))
     })
 
+    # Fresh start help popup
+    observeEvent(input$fresh_start_help, {
+      shiny::showModal(shiny::modalDialog(
+        title = "Fresh Start",
+        tags$div(
+          tags$p("Check this box before clicking ", tags$b("Start Server"), " to reset the session to a clean state."),
+          tags$p("What gets reset:"),
+          tags$ul(
+            tags$li(tags$b("Log file"), " - a new timestamped log is created with a fresh sessionInfo() header."),
+            tags$li(tags$b("Agent history"), " - the execution history is cleared. get_session_history returns empty."),
+            tags$li(tags$b("Execution count"), " - resets to 0."),
+            tags$li(tags$b("Console history"), " - clears the R console command history.")
+          ),
+          tags$p("Your R environment (variables, loaded packages) is ", tags$b("not"), " cleared.",
+            "To also clear the environment, run ", tags$code("rm(list = ls())"), " before restarting.")
+        ),
+        easyClose = TRUE,
+        footer = shiny::modalButton("Got it")
+      ))
+    })
+
+    # Agents help popup
+    observeEvent(input$agents_help, {
+      shiny::showModal(shiny::modalDialog(
+        title = "Agents Panel",
+        tags$div(
+          tags$p("This panel shows AI agents that have executed code in the current session."),
+          tags$h5("What you'll see"),
+          tags$ul(
+            tags$li(tags$b("Connected:"), " lists the unique agent IDs (e.g. agent-a3f92b1c) that have run code this session."),
+            tags$li(tags$b("Executions:"), " total number of code blocks executed across all agents.")
+          ),
+          tags$h5("How it works"),
+          tags$p("Each AI tool (Claude Code, Codex, Gemini, etc.) is assigned a unique agent ID when it first connects.",
+            "If you see multiple IDs, multiple agents are sharing this R session.",
+            "They can see each other's work through ", tags$code("get_session_history"), " and the shared log file."),
+          tags$p("Use ", tags$b("Fresh start on restart"), " to clear agent history when starting a new task.")
+        ),
+        easyClose = TRUE,
+        footer = shiny::modalButton("Got it")
+      ))
+    })
+
     # Start server
     observeEvent(input$startServer, {
       if (!state$running) {
         tryCatch({
           # Clean up any stale discovery files from crashed sessions
           cleanup_stale_discovery_files()
+
+          # Fresh start: reset log, agent history, execution count, console history
+          if (isTRUE(input$fresh_start)) {
+            execution_count <<- 0
+            state$execution_count <- 0
+            .claude_history_env$entries <- list()
+
+            # Create a new log file
+            if (settings$log_to_file) {
+              session_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+              settings$log_file_path <- file.path(
+                dirname(settings$log_file_path),
+                paste0("claude_r_session_", session_timestamp, ".R")
+              )
+              save_claude_settings(settings)
+              write_log_header(settings$log_file_path)
+              updateTextInput(session, "log_file_path", value = settings$log_file_path)
+            }
+
+            # Clear R console history
+            tryCatch({
+              tmp_hist <- tempfile()
+              writeLines("", tmp_hist)
+              utils::loadhistory(tmp_hist)
+              unlink(tmp_hist)
+            }, error = function(e) NULL)  # silently skip if not supported
+
+            showNotification("Fresh start: log, history, and agents reset", type = "message")
+          }
 
           server_state <<- start_http_server(input$port)
           running <<- TRUE
@@ -443,6 +588,9 @@ claudeAddin <- function() {
           if (session_name == "") session_name <- paste0("session_", input$port)
           active_session_name <<- session_name
           write_discovery_file(session_name, input$port)
+
+          # Wrap viewer to capture HTML widget URLs
+          wrap_viewer()
 
           showNotification("HTTP server started successfully", type = "message")
         }, error = function(e) {
@@ -469,6 +617,9 @@ claudeAddin <- function() {
             remove_discovery_file(active_session_name)
             active_session_name <<- NULL
           }
+
+          # Restore original viewer
+          unwrap_viewer()
 
           # Force garbage collection to ensure port is released
           gc()
@@ -558,11 +709,12 @@ claudeAddin <- function() {
           message("Error stopping server: ", e$message)
         })
       }
-      # Clean up discovery file
+      # Clean up discovery file and viewer
       if (!is.null(active_session_name)) {
         remove_discovery_file(active_session_name)
         active_session_name <<- NULL
       }
+      unwrap_viewer()
       invisible(stopApp())
     })
   }
@@ -627,6 +779,12 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
     # --- BEFORE eval: snapshot device state to detect stale plots ---
     devices_before <- dev.list()
     baseline_plot <- tryCatch(recordPlot(), error = function(e) NULL)
+
+    # Suppress viewer during agent execution so htmlwidgets don't steal the pane
+    # Reset last_url so viewer_captured only flags for THIS execution
+    .claude_viewer_env$last_url <- NULL
+    .claude_viewer_env$suppress <- TRUE
+    on.exit(.claude_viewer_env$suppress <- FALSE, add = TRUE)
 
     # Execute code in the global environment
     result <- withVisible(eval(parse(text = code), envir = env))
@@ -757,6 +915,12 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
         data = plot_data,
         mime_type = plot_mime
       )
+    }
+
+    # Flag if viewer content was captured (htmlwidgets)
+    if (!is.null(.claude_viewer_env$last_url) &&
+        file.exists(.claude_viewer_env$last_url)) {
+      response$viewer_captured <- TRUE
     }
 
     # Record to agent history

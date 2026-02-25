@@ -18,6 +18,7 @@ This package is also compatible with Cursor and any service that support MCP ser
 
 ## Recent Updates
 
+- **Viewer content capture & `insert_text` tool.** Two new tools: `get_viewer_content` reads HTML from interactive widgets (plotly, DT, leaflet) with pagination so agents can inspect htmlwidget output without blowing up context. `insert_text` inserts text at the cursor position or a specific line/column in the active document. During agent execution, htmlwidgets open in the browser instead of stealing the Shiny addin's viewer pane.
 - **Multi-session routing fix.** Agents now prefer the session named "default" when multiple sessions are active, preventing misrouting caused by non-deterministic discovery order. Once bound, agents stay sticky to their session. Non-default agents should call `connect_session` to target a specific session.
 - **Reproducibility metadata in logs.** When logging is enabled, each new session log starts with a header containing the date, working directory, and full `sessionInfo()` output (R version, platform, attached packages). Anyone who receives the log can see exactly what environment the code ran in.
 - **Export clean script.** Click "Export Clean Script" in the Shiny addin to strip all timestamps, agent labels, and log headers from a session log, producing a runnable `.R` file with just the code. Error blocks are preserved as comments. Also available programmatically via `export_log_as_script()`.
@@ -52,7 +53,6 @@ Check out this YouTube video for a quick demonstration of what to expect when yo
 - [Example Interactions](#example-interactions)
 - [Important Notes](#important-notes)
 - [Troubleshooting](#troubleshooting)
-- [Planned](#planned)
 - [Limitations](#limitations)
 - [License](#license)
 - [Contributing](#contributing)
@@ -72,6 +72,8 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`get_active_document`**: Get the content of the active document in RStudio.
 - **`get_r_info`**: Get information about the R environment.
 - **`modify_code_section`**: Modify a specific section of code in the active document.
+- **`insert_text`**: Insert text at the current cursor position or a specific line/column in the active document.
+- **`get_viewer_content`**: Read HTML content from the viewer pane (plotly, DT, leaflet widgets) with pagination support.
 - **`create_task_list`**: Generate a task list based on your prompt to prevent omissions in long-context tasks.
 - **`update_task_status`**: Track progress for each task in the generated list.
 
