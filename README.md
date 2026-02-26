@@ -7,6 +7,11 @@
   <p>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
     <a href="https://github.com/IMNMV/ClaudeR/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
+    <a href="https://github.com/IMNMV/ClaudeR/stargazers"><img src="https://img.shields.io/github/stars/IMNMV/ClaudeR?style=social" alt="GitHub stars"></a>
+    <br/>
+    <a href="https://github.com/IMNMV/ClaudeR/commits/main"><img src="https://img.shields.io/github/last-commit/IMNMV/ClaudeR" alt="GitHub last commit"></a>
+    <a href="https://pypi.org/project/clauder-mcp/"><img src="https://img.shields.io/pypi/v/clauder-mcp" alt="PyPI version"></a>
+    <img src="https://img.shields.io/badge/R-%3E%3D4.0-blue?logo=r" alt="R version">
   </p>
 </div>
 
@@ -16,7 +21,24 @@
 
 This package is also compatible with Cursor and any service that support MCP servers.
 
-## Recent Updates
+## Quick Start
+
+```r
+# Install
+if (!require("devtools")) install.packages("devtools")
+devtools::install_github("IMNMV/ClaudeR")
+
+# Set up your AI tool
+library(ClaudeR)
+install_clauder()          # For Claude Desktop / Cursor
+install_cli(tools = "claude")  # For Claude Code CLI
+
+# Start the server in RStudio
+claudeAddin()
+```
+
+<details>
+<summary><b>Recent Updates</b> (click to expand)</summary>
 
 - **Viewer content capture & `insert_text` tool.** Two new tools: `get_viewer_content` reads HTML from interactive widgets (plotly, DT, leaflet) with pagination so agents can inspect htmlwidget output without blowing up context. `insert_text` inserts text at the cursor position or a specific line/column in the active document. During agent execution, htmlwidgets open in the browser instead of stealing the Shiny addin's viewer pane.
 - **Multi-session routing fix.** Agents now prefer the session named "default" when multiple sessions are active, preventing misrouting caused by non-deterministic discovery order. Once bound, agents stay sticky to their session. Non-default agents should call `connect_session` to target a specific session.
@@ -35,6 +57,8 @@ This package is also compatible with Cursor and any service that support MCP ser
 - **Hardened string escaping.** `escape_r_string` now handles backticks, carriage returns, tabs, and null bytes. Applied to task tool inputs to prevent injection.
 - **Fixed `install_cli()` command syntax.** Updated to use `--transport stdio` flag and `--` separator for current Claude Code CLI. Now removes stale MCP registrations before adding fresh ones, preventing issues when upgrading R versions.
 
+</details>
+
 ## Demo
 
 Check out this YouTube video for a quick demonstration of what to expect when you use ClaudeR:
@@ -43,6 +67,7 @@ Check out this YouTube video for a quick demonstration of what to expect when yo
 
 ## Table of Contents
 
+- [Quick Start](#quick-start)
 - [Features](#features)
 - [How It Works](#how-it-works)
 - [CLI Integration](#cli-integration)
