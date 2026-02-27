@@ -37,6 +37,8 @@ install_cli(tools = "claude")  # For Claude Code CLI
 claudeAddin()
 ```
 
+> **AI agents:** See [llms-install.md](llms-install.md) for automated setup instructions.
+
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
