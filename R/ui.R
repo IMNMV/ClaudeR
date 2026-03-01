@@ -51,6 +51,9 @@ cleanup_stale_discovery_files <- function() {
 .claude_viewer_env$suppress <- FALSE
 
 wrap_viewer <- function() {
+  # Don't double-wrap — if we already saved the original, skip
+
+  if (!is.null(.claude_viewer_env$original_viewer)) return(invisible())
   orig <- getOption("viewer")
   if (is.function(orig)) {
     .claude_viewer_env$original_viewer <- orig
@@ -76,6 +79,15 @@ unwrap_viewer <- function() {
     .claude_viewer_env$original_viewer <- NULL
   }
 }
+
+# --- Server State ---
+# Package-level state that persists across addin UI restarts.
+.claude_server_env <- new.env(parent = emptyenv())
+.claude_server_env$server <- NULL
+.claude_server_env$running <- FALSE
+.claude_server_env$port <- NULL
+.claude_server_env$session_name <- NULL
+.claude_server_env$execution_count <- 0L
 
 # --- Background Jobs (callr) ---
 # Package-level environment for non-blocking async execution.
@@ -176,28 +188,21 @@ check_background_job <- function(job_id) {
 #' @export
 
 claudeAddin <- function() {
-  # Create server state
-  server_state <- NULL
-  running <- FALSE
-  execution_count <- 0
-  active_session_name <- NULL  # tracks discovery file for cleanup
+  # Restore viewer wrapper state (unwrap stale, will re-wrap on server start)
+  unwrap_viewer()
+
+  # Restore state from a still-running server (UI was closed but server kept going)
+  resuming <- isTRUE(.claude_server_env$running) && !is.null(.claude_server_env$server)
+  server_state <- if (resuming) .claude_server_env$server else NULL
+  running <- resuming
+  execution_count <- .claude_server_env$execution_count
+  active_session_name <- .claude_server_env$session_name
 
   # Load settings
   settings <- load_claude_settings()
 
-  # Create a unique log file name for this session if logging is enabled
-  if (settings$log_to_file) {
-    session_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-    settings$log_file_path <- file.path(
-      dirname(settings$log_file_path),
-      paste0("claude_r_session_", session_timestamp, ".R")
-    )
-    # Save updated settings
-    save_claude_settings(settings)
-
-    # Write reproducibility header with session info
-    write_log_header(settings$log_file_path)
-  }
+  # Log file is created when the server starts (in the Start Server handler)
+  # so we know the session name to include in the filename.
 
   # Start HTTP server function
   start_http_server <- function(port) {
@@ -339,8 +344,11 @@ claudeAddin <- function() {
         )
       ),
       wellPanel(
-        textInput("session_name", "Session Name", value = "default"),
-        numericInput("port", "Port", value = 8787, min = 1024, max = 65535),
+        textInput("session_name", "Session Name",
+          value = if (resuming && !is.null(active_session_name)) active_session_name else "default"),
+        numericInput("port", "Port",
+          value = if (resuming && !is.null(.claude_server_env$port)) .claude_server_env$port else 8787,
+          min = 1024, max = 65535),
         verbatimTextOutput("serverStatus"),
         actionButton("startServer", "Start Server", class = "btn-primary btn-sm"),
         actionButton("stopServer", "Stop Server", class = "btn-danger btn-sm"),
@@ -395,22 +403,30 @@ claudeAddin <- function() {
   server <- function(input, output, session) {
     # State management
     state <- reactiveValues(
-      running = FALSE,
-      execution_count = 0
+      running = resuming,
+      execution_count = execution_count
     )
 
-    # Update settings reactively
-    observe_settings <- function() {
-      settings$print_to_console <- input$print_to_console
-      settings$log_to_file <- input$log_to_file
-      settings$log_file_path <- input$log_file_path
-      save_claude_settings(settings)
+    # If resuming, re-wrap viewer since we unwrapped at startup
+    if (resuming) {
+      wrap_viewer()
     }
 
-    # Watch for settings changes
-    observeEvent(input$print_to_console, observe_settings())
-    observeEvent(input$log_to_file, observe_settings())
-    observeEvent(input$log_file_path, observe_settings())
+    # Update settings reactively
+    # Watch for settings changes (ignoreInit prevents overwriting on UI load)
+    # Use <<- so the HTTP handler closure sees updated values
+    observeEvent(input$print_to_console, {
+      settings$print_to_console <<- input$print_to_console
+      save_claude_settings(settings)
+    }, ignoreInit = TRUE)
+    observeEvent(input$log_to_file, {
+      settings$log_to_file <<- input$log_to_file
+      save_claude_settings(settings)
+    }, ignoreInit = TRUE)
+    observeEvent(input$log_file_path, {
+      settings$log_file_path <<- input$log_file_path
+      save_claude_settings(settings)
+    }, ignoreInit = TRUE)
 
     # Open log file button
     observeEvent(input$open_log, {
@@ -550,23 +566,11 @@ claudeAddin <- function() {
           # Clean up any stale discovery files from crashed sessions
           cleanup_stale_discovery_files()
 
-          # Fresh start: reset log, agent history, execution count, console history
+          # Fresh start: also reset agent history, execution count, console history
           if (isTRUE(input$fresh_start)) {
             execution_count <<- 0
             state$execution_count <- 0
             .claude_history_env$entries <- list()
-
-            # Create a new log file
-            if (settings$log_to_file) {
-              session_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-              settings$log_file_path <- file.path(
-                dirname(settings$log_file_path),
-                paste0("claude_r_session_", session_timestamp, ".R")
-              )
-              save_claude_settings(settings)
-              write_log_header(settings$log_file_path)
-              updateTextInput(session, "log_file_path", value = settings$log_file_path)
-            }
 
             # Clear R console history
             tryCatch({
@@ -583,11 +587,31 @@ claudeAddin <- function() {
           running <<- TRUE
           state$running <- TRUE
 
-          # Write discovery file so Python MCP servers can find us
+          # Resolve session name
           session_name <- trimws(input$session_name)
           if (session_name == "") session_name <- paste0("session_", input$port)
           active_session_name <<- session_name
           write_discovery_file(session_name, input$port)
+
+          # Create log file with session name in the filename
+          # Use <<- so the HTTP handler closure sees the updated path
+          if (settings$log_to_file) {
+            session_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+            safe_name <- gsub("[^a-zA-Z0-9_-]", "_", session_name)
+            settings$log_file_path <<- file.path(
+              dirname(settings$log_file_path),
+              paste0("clauder_", safe_name, "_", input$port, "_", session_timestamp, ".R")
+            )
+            save_claude_settings(settings)
+            write_log_header(settings$log_file_path)
+            updateTextInput(session, "log_file_path", value = settings$log_file_path)
+          }
+
+          # Persist state for UI resume
+          .claude_server_env$server <- server_state
+          .claude_server_env$running <- TRUE
+          .claude_server_env$port <- input$port
+          .claude_server_env$session_name <- active_session_name
 
           # Wrap viewer to capture HTML widget URLs
           wrap_viewer()
@@ -611,6 +635,13 @@ claudeAddin <- function() {
           running <<- FALSE
           state$running <- FALSE
           server_state <<- NULL
+
+          # Clear persisted state
+          .claude_server_env$server <- NULL
+          .claude_server_env$running <- FALSE
+          .claude_server_env$port <- NULL
+          .claude_server_env$session_name <- NULL
+          .claude_server_env$execution_count <- 0L
 
           # Remove discovery file
           if (!is.null(active_session_name)) {
@@ -672,6 +703,11 @@ claudeAddin <- function() {
               try(httpuv::stopServer(server_state), silent = TRUE)
               server_state <<- NULL
             }
+            .claude_server_env$server <- NULL
+            .claude_server_env$running <- FALSE
+            .claude_server_env$port <- NULL
+            .claude_server_env$session_name <- NULL
+            .claude_server_env$execution_count <- 0L
             running <<- FALSE
             state$running <- FALSE
 
@@ -696,25 +732,14 @@ claudeAddin <- function() {
     # Update execution count periodically
     observe({
       state$execution_count <- execution_count
+      .claude_server_env$execution_count <- execution_count
       invalidateLater(2000)
     })
 
-    # Close handler
+    # Close handler — just close the UI, keep the server running
     observeEvent(input$done, {
-      if (state$running) {
-        tryCatch({
-          stopServer(server_state)
-          running <<- FALSE
-        }, error = function(e) {
-          message("Error stopping server: ", e$message)
-        })
-      }
-      # Clean up discovery file and viewer
-      if (!is.null(active_session_name)) {
-        remove_discovery_file(active_session_name)
-        active_session_name <<- NULL
-      }
-      unwrap_viewer()
+      # Persist execution count so it survives UI restart
+      .claude_server_env$execution_count <- execution_count
       invisible(stopApp())
     })
   }

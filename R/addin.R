@@ -22,15 +22,15 @@ claude_rstudio_addin <- function(port = 8787) {
   # Load settings or set defaults
   settings <- load_claude_settings()
 
-  # Create a unique log file name for this session if logging is enabled
+  # Create log file for this session if logging is enabled
   if (settings$log_to_file) {
     session_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
     settings$log_file_path <- file.path(
       dirname(settings$log_file_path),
-      paste0("claude_r_session_", session_timestamp, ".R")
+      paste0("clauder_default_", port, "_", session_timestamp, ".R")
     )
-    # Save updated settings
     save_claude_settings(settings)
+    write_log_header(settings$log_file_path)
   }
 
   # Create the HTTP server

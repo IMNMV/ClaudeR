@@ -42,6 +42,8 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
+- **Persistent server across UI restarts.** Closing the Shiny addin (console stop or Done button) no longer kills the MCP server. Re-running `claudeAddin()` reconnects to the still-running server with the correct port, session name, and execution count. Only clicking "Stop Server" in the UI actually stops the server.
+- **Descriptive log filenames.** Log files now include the session name, port, and timestamp: `clauder_default_8787_20260301_143022.R`. A new log file is created each time you click Start Server — all subsequent code execution appends to that file.
 - **Viewer content capture & `insert_text` tool.** Two new tools: `get_viewer_content` reads HTML from interactive widgets (plotly, DT, leaflet) with pagination so agents can inspect htmlwidget output without blowing up context. `insert_text` inserts text at the cursor position or a specific line/column in the active document. During agent execution, htmlwidgets open in the browser instead of stealing the Shiny addin's viewer pane.
 - **Multi-session routing fix.** Agents now prefer the session named "default" when multiple sessions are active, preventing misrouting caused by non-deterministic discovery order. Once bound, agents stay sticky to their session. Non-default agents should call `connect_session` to target a specific session.
 - **Reproducibility metadata in logs.** When logging is enabled, each new session log starts with a header containing the date, working directory, and full `sessionInfo()` output (R version, platform, attached packages). Anyone who receives the log can see exactly what environment the code ran in.
@@ -239,17 +241,18 @@ The ClaudeR add-in will appear in your RStudio Viewer pane. Click **"Start Serve
 - **For Desktop Apps**: Open the Claude Desktop App or Cursor and begin your session.
 - **For CLI Tools**: Open your terminal and use the `claude` or `gemini` commands to start interacting with your AI assistant.
 
-> Note: You can regain console/active document control by clicking the stop button in the RStudio console. This will disable the Shiny app in the viewer pane, but the server will remain active. To bring the viewer pane back, simply re-run `claudeAddin()`.
+> Note: You can regain console/active document control by clicking the stop button in the RStudio console. This closes the Shiny UI but the MCP server keeps running in the background — your AI agents stay connected. Re-run `claudeAddin()` to bring the viewer pane back with the same server state (port, session name, execution count). To fully stop the server, click **"Stop Server"** in the UI before closing.
 
 ## Logging Options
 
 - **Print Code to Console**: See the AI's code in your R console before it runs. The code will be preceded by the header: `### LLM [agent-id] executing the following code ###`.
 - **Log Code to File**: Save all executed code to a log file. Each entry is tagged with the agent ID that executed it, so you can trace which AI agent ran what.
 - **Custom Log Path**: Specify a custom location for log files.
-- **Reproducibility Header**: Each new session log automatically starts with a header containing the date, working directory, and full `sessionInfo()` output (R version, platform, attached/loaded packages). This makes logs self-documenting for reproducibility.
+- **Descriptive Filenames**: Log files are named `clauder_<session>_<port>_<timestamp>.R` (e.g., `clauder_default_8787_20260301_143022.R`) so you can tell at a glance which session produced which log.
+- **Reproducibility Header**: Each log starts with a header containing the date, working directory, and full `sessionInfo()` output (R version, platform, attached/loaded packages). This makes logs self-documenting for reproducibility.
 - **Export Clean Script**: Click "Export Clean Script" in the logging panel to produce a runnable `.R` file stripped of all timestamps and log headers. Error blocks are kept as comments so you can see what went wrong. Also callable from the console with `export_log_as_script()`.
 
-Each R session gets its own timestamped log file. Saving the log file with a different name that's actively being edited by the AI automatically creates a new log continuing on from the last command that was executed after being saved.
+A new log file is created each time you click **Start Server**. All code executed by agents appends to that file until you stop and start the server again.
 
 ## Example Interactions
 
