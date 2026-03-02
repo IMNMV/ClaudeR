@@ -42,6 +42,7 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
+- **`clean_error_log` tool.** Point the agent at a session log and it will parse every code block, find errors, check whether a fix follows each one, then strip the error blocks and any duplicate code that preceded them. The result is a clean log with only the working code. Accepts an optional `output_path` to write to a separate file instead of overwriting the original.
 - **Persistent server across UI restarts.** Closing the Shiny addin (console stop or Done button) no longer kills the MCP server. Re-running `claudeAddin()` reconnects to the still-running server with the correct port, session name, and execution count. Only clicking "Stop Server" in the UI actually stops the server.
 - **Descriptive log filenames.** Log files now include the session name, port, and timestamp: `clauder_default_8787_20260301_143022.R`. A new log file is created each time you click Start Server — all subsequent code execution appends to that file.
 - **Viewer content capture & `insert_text` tool.** Two new tools: `get_viewer_content` reads HTML from interactive widgets (plotly, DT, leaflet) with pagination so agents can inspect htmlwidget output without blowing up context. `insert_text` inserts text at the cursor position or a specific line/column in the active document. During agent execution, htmlwidgets open in the browser instead of stealing the Shiny addin's viewer pane.
@@ -103,6 +104,7 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`modify_code_section`**: Modify a specific section of code in the active document.
 - **`insert_text`**: Insert text at the current cursor position or a specific line/column in the active document.
 - **`get_viewer_content`**: Read HTML content from the viewer pane (plotly, DT, leaflet widgets) with pagination support.
+- **`clean_error_log`**: Clean a session log by removing error blocks and their duplicate predecessors, leaving only working code and the fixes that followed.
 - **`create_task_list`**: Generate a task list based on your prompt to prevent omissions in long-context tasks.
 - **`update_task_status`**: Track progress for each task in the generated list.
 
@@ -292,7 +294,7 @@ If you can do it with R, your AI assistant can too.
     - Async jobs run in a separate R process via `callr` and do **not** have access to your main session's environment. The AI must write self-contained code that uses `saveRDS()` to pass data in and write results out, then loads them back into the main session after the job completes.
 - **Server Restart Issues**:
     - If you see an "address already in use" error after restarting the server, it's a UI bug. The server is still active. If you encounter connection issues, switch the port number in the Viewer Pane or restart RStudio.
-    - If the AI still can't connect, save your work and click **"Force Kill Server"** in the viewer pane. This will terminate the active RStudio window.
+    - If the AI still can't connect, click **"Force Release Port"** under the Advanced section. This force-kills whatever process is holding the port so you can start fresh.
 - **Stale MCP Path After R Upgrade**:
     - If tools stop working after upgrading R, re-run `install_cli()` or `install_clauder()` to update the script path.
 

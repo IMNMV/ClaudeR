@@ -2,6 +2,7 @@
 
 export(claudeAddin)
 export(claude_rstudio_addin)
+export(clean_clauder_log)
 export(execute_code_in_session)
 export(export_log_as_script)
 export(install_clauder)

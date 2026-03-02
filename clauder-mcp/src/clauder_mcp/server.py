@@ -420,6 +420,30 @@ async def list_tools() -> List[types.Tool]:
             }
         ),
         types.Tool(
+            name="clean_error_log",
+            description="Clean a ClaudeR session log by removing error blocks and their duplicates. Parses the log, finds errors, checks if a fix follows each error, removes the error blocks and any duplicate code blocks that preceded them. Returns a report of what was found and removed.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "log_path": {
+                        "type": "string",
+                        "description": "Path to the ClaudeR session log file"
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Optional path to write the cleaned log. If omitted, overwrites the original file."
+                    }
+                },
+                "required": ["log_path"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": True,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
             name="execute_r_async",
             description="Execute long-running R code in a separate background R process. Returns a job ID immediately and the main session stays fully responsive. Use this for code that may take longer than 25 seconds (e.g., model fitting, simulations, large data processing). IMPORTANT: The background process does NOT have access to the main session's environment. Write self-contained code: use saveRDS() to pass data in and write results out, then load them back in the main session after the job completes. You can continue executing other code with execute_r while the job runs. Use get_async_result to check status when ready.",
             inputSchema={
@@ -837,6 +861,24 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             text=result.get("output", "Task updated")
         )]
     
+
+    elif name == "clean_error_log":
+        log_path = arguments.get("log_path", "")
+        output_path = arguments.get("output_path")
+        if not log_path:
+            return [types.TextContent(type="text", text="Error: 'log_path' parameter is required")]
+        escaped_log = log_path.replace("\\", "\\\\").replace('"', '\\"')
+        code = f'ClaudeR::clean_clauder_log("{escaped_log}"'
+        if output_path:
+            escaped_out = output_path.replace("\\", "\\\\").replace('"', '\\"')
+            code += f', output_path = "{escaped_out}"'
+        code += ")"
+        result = await execute_r_code_via_addin(code)
+        if result.get("success", False):
+            output = result.get("output", "Log cleaned successfully.")
+            return [types.TextContent(type="text", text=output)]
+        else:
+            return [types.TextContent(type="text", text=f"Error: {result.get('error', 'Unknown error')}")]
 
     elif name == "execute_r_async":
         if "code" not in arguments:

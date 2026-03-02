@@ -390,11 +390,15 @@ claudeAddin <- function() {
       ),
 
       # --- Advanced ---
-      tags$div(class = "section-label", "ADVANCED"),
+      tags$div(class = "section-label",
+        "ADVANCED",
+        actionButton("advanced_help", "?",
+          class = "btn-default btn-xs",
+          style = "margin-left: 6px; padding: 1px 6px; font-size: 11px; vertical-align: middle;"
+        )
+      ),
       wellPanel(
-        actionButton("kill_process", "Force Kill Server Process", class = "btn-warning btn-sm"),
-        tags$br(), tags$br(),
-        shiny::helpText("Use only if you're experiencing 'address already in use' errors.")
+        actionButton("kill_process", "Force Release Port", class = "btn-warning btn-sm")
       )
     )
   )
@@ -537,6 +541,27 @@ claudeAddin <- function() {
       ))
     })
 
+    # Advanced help popup
+    observeEvent(input$advanced_help, {
+      shiny::showModal(shiny::modalDialog(
+        title = "Advanced",
+        tags$div(
+          tags$p(tags$b("Force Release Port"), " is a last-resort option for when ",
+            tags$b("Stop Server"), " fails to free the port."),
+          tags$p("What it does:"),
+          tags$ul(
+            tags$li("Finds whatever process is holding the port using ", tags$code("lsof"), "."),
+            tags$li("Force-kills that process with ", tags$code("kill -9"), "."),
+            tags$li("Clears all server state so you can start fresh.")
+          ),
+          tags$p(tags$b("When to use it:"), " Only if you see an 'address already in use' error ",
+            "and Stop Server doesn't fix it (e.g., a zombie process from a crashed session is squatting on the port).")
+        ),
+        easyClose = TRUE,
+        footer = shiny::modalButton("Got it")
+      ))
+    })
+
     # Agents help popup
     observeEvent(input$agents_help, {
       shiny::showModal(shiny::modalDialog(
@@ -664,12 +689,12 @@ claudeAddin <- function() {
     })
 
     
-    # Kill process button handler
+    # Force release port button handler
     shiny::observeEvent(input$kill_process, {
       # Create a confirmation dialog
       shiny::showModal(shiny::modalDialog(
-        title = "Warning: This will restart your R session",
-        "Please make sure to save your work before continuing as it will restart the current R session.",
+        title = "Force Release Port",
+        "This will force-kill whatever process is holding the port. Your R environment and variables will not be affected.",
         footer = shiny::tagList(
           shiny::modalButton("Cancel"),
           shiny::actionButton("confirm_kill", "Continue", class = "btn-danger")
@@ -1285,6 +1310,133 @@ export_log_as_script <- function(log_path = NULL, output_path = NULL, include_er
   writeLines(clean_lines, output_path)
   message("Exported clean script to: ", output_path)
   invisible(output_path)
+}
+
+#' Clean a ClaudeR session log by removing error blocks and their duplicates
+#'
+#' Parses a ClaudeR log file, identifies error blocks, checks whether a fix
+#' follows each error, removes the error blocks and any duplicate code blocks
+#' that precede them, and writes the cleaned log. Returns a report of what
+#' was found and removed.
+#'
+#' @param log_path Path to the ClaudeR session log file.
+#' @param output_path Path to write the cleaned log. If NULL, overwrites the
+#'   original file.
+#' @return A data frame summarizing the errors found, invisibly.
+#' @export
+
+clean_clauder_log <- function(log_path, output_path = NULL) {
+  if (!file.exists(log_path)) {
+    stop("Log file not found: ", log_path)
+  }
+
+  lines <- readLines(log_path, warn = FALSE)
+
+  # Identify block boundaries by header pattern
+  header_pattern <- "^# --- \\[.*\\] ---$"
+  header_idx <- grep(header_pattern, lines)
+  n_blocks <- length(header_idx)
+
+  if (n_blocks == 0) {
+    message("No code blocks found in log.")
+    return(invisible(data.frame()))
+  }
+
+  block_starts <- header_idx
+  block_ends <- c(header_idx[-1] - 1, length(lines))
+
+  # The agent line is the line after the header
+  agent_lines <- header_idx + 1
+  is_error <- grepl("\\(ERROR\\)", lines[agent_lines])
+
+  if (sum(is_error) == 0) {
+    message("No error blocks found. Log is clean.")
+    return(invisible(data.frame()))
+  }
+
+  # Extract code from a block (skip header, agent line, and error messages)
+  extract_code <- function(block_idx) {
+    s <- block_starts[block_idx] + 2  # skip header + agent line
+    e <- block_ends[block_idx]
+    if (s > e) return("")
+    code_lines <- lines[s:e]
+    code_lines <- code_lines[!grepl("^# Error:", code_lines)]
+    code_lines <- code_lines[trimws(code_lines) != ""]
+    trimws(paste(code_lines, collapse = "\n"))
+  }
+
+  blocks_to_remove <- c()
+  error_report <- list()
+
+  for (i in which(is_error)) {
+    err_code <- extract_code(i)
+
+    # Always remove the error block
+    blocks_to_remove <- c(blocks_to_remove, i)
+
+    # Check if the previous block has identical code (duplicate from logging)
+    dup_status <- "No previous block"
+    if (i > 1) {
+      prev_code <- extract_code(i - 1)
+      if (identical(trimws(err_code), trimws(prev_code))) {
+        blocks_to_remove <- c(blocks_to_remove, i - 1)
+        dup_status <- "Removed duplicate"
+      } else {
+        dup_status <- "No duplicate"
+      }
+    }
+
+    # Check if a non-error block follows (the fix)
+    fix_exists <- FALSE
+    fix_preview <- "N/A (last block)"
+    if (i < n_blocks) {
+      fix_exists <- !grepl("\\(ERROR\\)", lines[agent_lines[i + 1]])
+      fix_preview <- substr(extract_code(i + 1), 1, 120)
+    }
+
+    # Extract the error message
+    err_msg_lines <- lines[block_starts[i]:block_ends[i]]
+    err_msg <- paste(err_msg_lines[grepl("^# Error:", err_msg_lines)], collapse = " ")
+
+    error_report[[length(error_report) + 1]] <- data.frame(
+      block = i,
+      line = block_starts[i],
+      error = err_msg,
+      duplicate_before = dup_status,
+      fix_follows = fix_exists,
+      fix_preview = fix_preview,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  report <- do.call(rbind, error_report)
+
+  # Print report
+  cat("=== ClaudeR Log Error Report ===\n\n")
+  for (r in seq_len(nrow(report))) {
+    cat(sprintf("Error %d (block %d, line %d):\n  %s\n  Duplicate: %s | Fix follows: %s\n\n",
+        r, report$block[r], report$line[r], report$error[r],
+        report$duplicate_before[r], report$fix_follows[r]))
+  }
+
+  # Remove error blocks and their duplicates
+  blocks_to_remove <- sort(unique(blocks_to_remove))
+  lines_to_remove <- c()
+  for (b in blocks_to_remove) {
+    lines_to_remove <- c(lines_to_remove, block_starts[b]:block_ends[b])
+  }
+
+  clean_lines <- lines[-lines_to_remove]
+
+  cat(sprintf("Removed %d blocks (%d lines). %d lines remain.\n",
+      length(blocks_to_remove), length(lines_to_remove), length(clean_lines)))
+
+  # Write output
+  out <- if (!is.null(output_path)) output_path else log_path
+  writeLines(clean_lines, out)
+  cat("Written to:", out, "\n")
+
+  invisible(report)
 }
 
 #' Load Claude settings
