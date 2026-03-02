@@ -236,7 +236,7 @@ claudeAddin()
 
 The ClaudeR add-in will appear in your RStudio Viewer pane. Click **"Start Server"**. Keep this window active while using your preferred tool.
 
-![ClaudeR Addin Interface](assets/ui_interface.png)
+![ClaudeR Addin Interface](assets/shiny_ui.png)
 
 ### Part 2: In Your AI Tool
 
