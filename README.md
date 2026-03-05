@@ -9,7 +9,7 @@
     <a href="https://github.com/IMNMV/ClaudeR/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
     <a href="https://github.com/IMNMV/ClaudeR/stargazers"><img src="https://img.shields.io/github/stars/IMNMV/ClaudeR?style=social" alt="GitHub stars"></a>
     <br/>
-    <a href="https://github.com/IMNMV/ClaudeR/commits/main"><img src="https://img.shields.io/github/last-commit/IMNMV/ClaudeR" alt="GitHub last commit"></a>
+    <a href="https://github.com/IMNMV/ClaudeR/commits/main"><img src="https://img.shields.io/github/last-commit/IMNMV/ClaudeR/main" alt="GitHub last commit"></a>
     <a href="https://pypi.org/project/clauder-mcp/"><img src="https://img.shields.io/pypi/v/clauder-mcp" alt="PyPI version"></a>
     <img src="https://img.shields.io/badge/R-%3E%3D4.0-blue?logo=r" alt="R version">
   </p>
