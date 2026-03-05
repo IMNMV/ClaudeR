@@ -668,6 +668,11 @@ claudeAddin <- function() {
           .claude_server_env$session_name <- NULL
           .claude_server_env$execution_count <- 0L
 
+          # Reset execution count and agent history
+          execution_count <<- 0
+          state$execution_count <- 0
+          .claude_history_env$entries <- list()
+
           # Remove discovery file
           if (!is.null(active_session_name)) {
             remove_discovery_file(active_session_name)
