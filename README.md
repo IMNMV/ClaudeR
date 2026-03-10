@@ -121,7 +121,8 @@ With these tools, you can:
 - **Environment Integration**: The AI can access variables and functions in your R environment.
 - **Dynamic Summaries**: Summaries can dynamically pull results from objects and data frames to safeguard against hallucinations.
 - **Quarto Renders**: The AI can create and render Quarto presentations. For best results, ask for a .qmd file and for it to be rendered in HTML when it's finished.
-
+- **Get Creative!**: With the reticulate package in R, you're able to use Python within the R environment. This gives you the best of both coding worlds in one unified location. This is especially helpful for libraries that are Python native. You'd be surprised what an agent can do with the power of an R console and a can do attitude :)
+  
 ## How It Works
 
 ClaudeR uses the **Model Context Protocol (MCP)** to create a bidirectional connection between an AI assistant and your RStudio environment. MCP is an open protocol from Anthropic that allows the AI to safely interact with local tools and data.
