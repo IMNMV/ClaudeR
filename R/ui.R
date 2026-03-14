@@ -1444,6 +1444,125 @@ clean_clauder_log <- function(log_path, output_path = NULL) {
   invisible(report)
 }
 
+#' Search project source files for a pattern
+#'
+#' @param pattern Regex pattern to search for
+#' @param extensions Comma-separated file extensions (default "R,Rmd,qmd")
+#' @param root_dir Root directory to search (default ".")
+#' @param max_results Maximum matches to return (default 50)
+#' @param ignore_case Case-insensitive search (default FALSE)
+#' @return Character string of matches
+search_project_code_impl <- function(pattern, extensions = "R,Rmd,qmd",
+                                     root_dir = ".", max_results = 50L,
+                                     ignore_case = FALSE) {
+  exts <- trimws(strsplit(extensions, ",")[[1]])
+  ext_pattern <- paste0("\\.(", paste(exts, collapse = "|"), ")$")
+
+  all_files <- list.files(root_dir, pattern = ext_pattern,
+                          recursive = TRUE, full.names = TRUE,
+                          ignore.case = TRUE)
+  # Exclude common non-source directories
+  all_files <- all_files[!grepl("/(renv|packrat|\\.git)/", all_files)]
+
+  if (length(all_files) == 0) {
+    return(paste0("No files with extensions [", extensions, "] found under: ",
+                  normalizePath(root_dir, mustWork = FALSE)))
+  }
+
+  results <- character(0)
+  for (fpath in all_files) {
+    lines <- tryCatch(readLines(fpath, warn = FALSE), error = function(e) character(0))
+    if (length(lines) == 0) next
+    hits <- tryCatch(
+      grep(pattern, lines, ignore.case = ignore_case),
+      error = function(e) {
+        warning("Invalid regex: ", e$message)
+        integer(0)
+      }
+    )
+    if (length(hits) == 0) next
+    rel_path <- sub(paste0("^", normalizePath(root_dir, mustWork = FALSE), "/?"), "",
+                    normalizePath(fpath, mustWork = FALSE))
+    for (ln in hits) {
+      results <- c(results, sprintf("%s:%d: %s", rel_path, ln, trimws(lines[ln])))
+      if (length(results) >= max_results) break
+    }
+    if (length(results) >= max_results) break
+  }
+
+  if (length(results) == 0) {
+    return(paste0("No matches for pattern '", pattern, "' in ", length(all_files), " files."))
+  }
+
+  header <- sprintf("Found %d match(es) across %d file(s):\n",
+                    length(results), length(unique(sub(":.*", "", results))))
+  paste0(header, paste(results, collapse = "\n"))
+}
+
+#' Probe R scripts in a clean background session
+#'
+#' @param script_paths Character vector of script paths to source
+#' @param timeout Seconds before timing out (default 60)
+#' @return Character string describing objects created by each script
+probe_scripts_impl <- function(script_paths, timeout = 60) {
+  results <- character(0)
+  for (sp in script_paths) {
+    sp_expanded <- path.expand(sp)
+    if (!file.exists(sp_expanded)) {
+      results <- c(results, sprintf("--- %s ---\nFile not found.\n", sp))
+      next
+    }
+    probe_result <- tryCatch({
+      callr::r(function(script_path) {
+        env <- new.env(parent = globalenv())
+        tryCatch({
+          source(script_path, local = env)
+          obj_names <- ls(env)
+          if (length(obj_names) == 0) return("No objects created.")
+          info <- vapply(obj_names, function(nm) {
+            obj <- get(nm, envir = env)
+            cl <- paste(class(obj), collapse = "/")
+            dims <- if (is.data.frame(obj) || is.matrix(obj)) {
+              paste0(" [", nrow(obj), " x ", ncol(obj), "]")
+            } else if (is.vector(obj) && !is.list(obj)) {
+              paste0(" [length ", length(obj), "]")
+            } else {
+              ""
+            }
+            paste0(nm, " : ", cl, dims)
+          }, character(1))
+          paste(info, collapse = "\n")
+        }, error = function(e) {
+          paste0("Error sourcing: ", e$message)
+        })
+      }, args = list(script_path = sp_expanded),
+         user_profile = FALSE, timeout = timeout)
+    }, error = function(e) {
+      paste0("callr error: ", e$message)
+    })
+    results <- c(results, sprintf("--- %s ---\n%s\n", sp, probe_result))
+  }
+  paste(results, collapse = "\n")
+}
+
+#' Print the Reviewer Zero prompt template
+#'
+#' Displays the built-in Reviewer Zero academic auditing protocol.
+#' This prompt guides an AI assistant through a 3-pass verification of
+#' quantitative claims in a manuscript against source code.
+#'
+#' @return The prompt text (invisibly), printed to the console.
+#' @export
+reviewer_zero_prompt <- function() {
+  prompt_path <- system.file("prompts", "reviewer_zero.md", package = "ClaudeR")
+  if (!nzchar(prompt_path) || !file.exists(prompt_path)) {
+    stop("Reviewer Zero prompt template not found. Is ClaudeR installed correctly?")
+  }
+  txt <- paste(readLines(prompt_path, warn = FALSE), collapse = "\n")
+  cat(txt, "\n")
+  invisible(txt)
+}
+
 #' Load Claude settings
 #'
 #' @return A list containing Claude settings

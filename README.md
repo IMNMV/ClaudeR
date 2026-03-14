@@ -2,7 +2,7 @@
   <img src="assets/ClaudeR_logo.png" alt="ClaudeR Logo" width="150"/>
   <h1>ClaudeR</h1>
   <p>
-    <b>Connect RStudio directly to Claude Desktop, Claude Code, Codex, Gemini CLI, or any other MCP based AI assistant for interactive coding and data analysis.</b>
+    <b>Connect RStudio to Claude Code, Codex, Gemini CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, and automated manuscript auditing.</b>
   </p>
   <p>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
@@ -17,9 +17,9 @@
 
 ---
 
-**ClaudeR** is an R package that forges a direct link between RStudio and MCP configured AI assistants like Claude Code or Codex. This enables interactive coding sessions where the AI can execute code in your active RStudio environment and see the results in real-time. Whether you need an autonomous data explorer or a coding collaborator, ClaudeR adapts to your workflow.
+**ClaudeR** is an R package that forges a direct link between RStudio and MCP configured LLM agents like Claude Code or Codex. This allows interactive coding sessions where the agent can execute code in your active RStudio environment so it can see the executed code and any generated plots in real-time. If you need help editing a script, a quick analysis done, or an LLM to audit your statistical claims against any manuscript before submission — ClaudeR has got your back.
 
-This package is also compatible with Cursor and any service that support MCP servers.
+This package, additionally, allows multiple agents to work on one script, or it can make multiple RStudio windows siloed so multiple agents can operate independently on different datasets. It's also compatible with Cursor and any service that support MCP servers.
 
 ## Quick Start
 
@@ -42,6 +42,7 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
+- **Reviewer Zero: Automated Academic Audits.** New 3-pass protocol for AI-driven manuscript verification. The agent extracts every statistical claim, verifies its extraction, then recomputes values against the author's R code. Powered by three new/upgraded tools: `read_file` now supports `start_line`/`end_line` pagination, `search_project_code` searches across project files via base R grep, and `probe_scripts` sources scripts in a clean background session to discover what objects they create. Run `reviewer_zero_prompt()` to get the full protocol.
 - **`clean_error_log` tool.** Point the agent at a session log and it will parse every code block, find errors, check whether a fix follows each one, then strip the error blocks and any duplicate code that preceded them. The result is a clean log with only the working code. Accepts an optional `output_path` to write to a separate file instead of overwriting the original.
 - **Persistent server across UI restarts.** Closing the Shiny addin (console stop or Done button) no longer kills the MCP server. Re-running `claudeAddin()` reconnects to the still-running server with the correct port, session name, and execution count. Only clicking "Stop Server" in the UI actually stops the server.
 - **Descriptive log filenames.** Log files now include the session name, port, and timestamp: `clauder_default_8787_20260301_143022.R`. A new log file is created each time you click Start Server — all subsequent code execution appends to that file.
@@ -75,6 +76,7 @@ Check out this YouTube video for a quick demonstration of what to expect when yo
 - [Quick Start](#quick-start)
 - [Features](#features)
 - [How It Works](#how-it-works)
+- [Reviewer Zero](#reviewer-zero-automated-academic-audits)
 - [CLI Integration](#cli-integration)
 - [Security Restrictions](#security-restrictions)
 - [Installation](#installation)
@@ -98,13 +100,15 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`list_sessions`**: List all active RStudio sessions the agent can connect to.
 - **`connect_session`**: Connect to a specific RStudio session by name for multi-session workflows.
 - **`get_session_history`**: View execution history filtered by agent ID.
-- **`read_file`**: Read any text file from disk (.R, .qmd, .csv, .log, etc.) without needing it open in RStudio.
+- **`read_file`**: Read any text file from disk (.R, .qmd, .csv, .log, etc.) without needing it open in RStudio. Supports `start_line`/`end_line` pagination for large files.
 - **`get_active_document`**: Get the content of the active document in RStudio.
 - **`get_r_info`**: Get information about the R environment.
 - **`modify_code_section`**: Modify a specific section of code in the active document.
 - **`insert_text`**: Insert text at the current cursor position or a specific line/column in the active document.
 - **`get_viewer_content`**: Read HTML content from the viewer pane (plotly, DT, leaflet widgets) with pagination support.
 - **`clean_error_log`**: Clean a session log by removing error blocks and their duplicate predecessors, leaving only working code and the fixes that followed.
+- **`search_project_code`**: Search for a regex pattern across project source files (.R, .Rmd, .qmd). Returns file, line number, and snippet.
+- **`probe_scripts`**: Source R scripts in a clean background session and report what objects are created (names, classes, dimensions) without affecting your main session.
 - **`create_task_list`**: Generate a task list based on your prompt to prevent omissions in long-context tasks.
 - **`update_task_status`**: Track progress for each task in the generated list.
 
@@ -121,8 +125,25 @@ With these tools, you can:
 - **Environment Integration**: The AI can access variables and functions in your R environment.
 - **Dynamic Summaries**: Summaries can dynamically pull results from objects and data frames to safeguard against hallucinations.
 - **Quarto Renders**: The AI can create and render Quarto presentations. For best results, ask for a .qmd file and for it to be rendered in HTML when it's finished.
-- **Get Creative!**: With the reticulate package in R, you're able to use Python within the R environment. This gives you the best of both coding worlds in one unified location. This is especially helpful for libraries that are Python native. You'd be surprised what an agent can do with the power of an R console and a can do attitude :)
-  
+- **Reviewer Zero**: A built-in protocol for automated academic auditing. The AI reads a manuscript block-by-block, extracts every statistical claim into a registry, verifies its extraction, then recomputes each claim against the author's R code. Run `reviewer_zero_prompt()` for the full protocol. See the [Reviewer Zero](#reviewer-zero-automated-academic-audits) section below.
+
+## Reviewer Zero: Automated Academic Audits
+
+ClaudeR includes a built-in protocol for AI-driven technical review of academic manuscripts. The AI acts as "Reviewer Zero" — systematically verifying that every p-value, coefficient, and confidence interval in your paper matches the code that produced it.
+
+**How it works (3-pass protocol):**
+1. **Extract** — The AI reads your manuscript block-by-block using paginated `read_file`, extracting every quantitative claim into a structured registry (a data.frame visible in your RStudio Environment pane).
+2. **Verify** — The AI re-reads the source lines for each claim to confirm it didn't misread values. No code runs until every claim is verified.
+3. **Recompute** — The AI uses `search_project_code` and `probe_scripts` to locate the relevant R scripts, then `execute_r` to rerun the analyses and compare recomputed values against the manuscript.
+
+**To get started:**
+```r
+# Print the full protocol prompt to give to your AI agent
+reviewer_zero_prompt()
+```
+
+The protocol works with `.qmd`, `.Rmd`, `.tex`, or plain text manuscripts and supports multi-script R projects.
+
 ## How It Works
 
 ClaudeR uses the **Model Context Protocol (MCP)** to create a bidirectional connection between an AI assistant and your RStudio environment. MCP is an open protocol from Anthropic that allows the AI to safely interact with local tools and data.

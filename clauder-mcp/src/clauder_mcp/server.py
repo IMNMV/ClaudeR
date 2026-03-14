@@ -519,16 +519,85 @@ async def list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="read_file",
-            description="Read the contents of a file from disk. Use this to read R scripts, log files, data files (.csv, .txt), or any text file. The file does not need to be open in RStudio. Returns the file contents with line numbers. To modify and save changes back, use execute_r with writeLines().",
+            description="Read the contents of a file from disk. Use this to read R scripts, log files, data files (.csv, .txt), or any text file. The file does not need to be open in RStudio. Returns the file contents with line numbers. Supports pagination via start_line/end_line for large files. To modify and save changes back, use execute_r with writeLines().",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
                         "description": "Path to the file to read. Supports absolute paths and ~ for home directory."
+                    },
+                    "start_line": {
+                        "type": "number",
+                        "description": "Optional: first line to return (1-based). Omit to start from beginning."
+                    },
+                    "end_line": {
+                        "type": "number",
+                        "description": "Optional: last line to return (1-based, inclusive). Omit to read to end of file."
                     }
                 },
                 "required": ["file_path"]
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="search_project_code",
+            description="Search for a regex pattern across project source files (.R, .Rmd, .qmd). Returns matching file, line number, and code snippet. Uses base R grep — safe to use even with system() blocked.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regular expression pattern to search for."
+                    },
+                    "file_extensions": {
+                        "type": "string",
+                        "description": "Comma-separated file extensions to search. Default: 'R,Rmd,qmd'"
+                    },
+                    "root_dir": {
+                        "type": "string",
+                        "description": "Root directory to search from. Default: current working directory."
+                    },
+                    "max_results": {
+                        "type": "number",
+                        "description": "Maximum number of matching lines to return. Default: 50."
+                    },
+                    "ignore_case": {
+                        "type": "boolean",
+                        "description": "Whether to ignore case. Default: false."
+                    }
+                },
+                "required": ["pattern"]
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="probe_scripts",
+            description="Source one or more R scripts in a clean background session and report what objects are created (names, classes, dimensions). Does NOT affect the main R session. Useful for understanding what a script produces before sourcing it.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "script_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Paths to R scripts to source, each in isolation."
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "description": "Seconds before timing out per script. Default: 60."
+                    }
+                },
+                "required": ["script_paths"]
             },
             annotations={
                 "readOnlyHint": True,
@@ -880,6 +949,40 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         else:
             return [types.TextContent(type="text", text=f"Error: {result.get('error', 'Unknown error')}")]
 
+    elif name == "search_project_code":
+        pattern = arguments.get("pattern", "")
+        if not pattern:
+            return [types.TextContent(type="text", text="Error: 'pattern' parameter is required")]
+        extensions = arguments.get("file_extensions", "R,Rmd,qmd")
+        root_dir = arguments.get("root_dir", ".")
+        max_results = int(arguments.get("max_results", 50))
+        ignore_case = arguments.get("ignore_case", False)
+        escaped_pattern = escape_r_string(pattern)
+        escaped_root = escape_r_string(root_dir)
+        code = f'ClaudeR:::search_project_code_impl("{escaped_pattern}", extensions = "{extensions}", root_dir = "{escaped_root}", max_results = {max_results}L, ignore_case = {"TRUE" if ignore_case else "FALSE"})'
+        result = await execute_r_code_via_addin(code)
+        if result.get("success", False):
+            output = result.get("output", "No results.")
+            return [types.TextContent(type="text", text=output)]
+        else:
+            return [types.TextContent(type="text", text=f"Error: {result.get('error', 'Unknown error')}")]
+
+    elif name == "probe_scripts":
+        script_paths = arguments.get("script_paths", [])
+        if not script_paths:
+            return [types.TextContent(type="text", text="Error: 'script_paths' parameter is required")]
+        timeout = int(arguments.get("timeout", 60))
+        import json
+        paths_json = json.dumps(script_paths)
+        escaped_json = escape_r_string(paths_json)
+        code = f'ClaudeR:::probe_scripts_impl(jsonlite::fromJSON(\'{escaped_json}\'), timeout = {timeout})'
+        result = await execute_r_code_via_addin(code)
+        if result.get("success", False):
+            output = result.get("output", "No results.")
+            return [types.TextContent(type="text", text=output)]
+        else:
+            return [types.TextContent(type="text", text=f"Error: {result.get('error', 'Unknown error')}")]
+
     elif name == "execute_r_async":
         if "code" not in arguments:
             return [types.TextContent(
@@ -1034,6 +1137,10 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             return [types.TextContent(type="text", text="Error: 'file_path' parameter is required")]
 
         file_path = escape_r_string(arguments["file_path"])
+        start_line = arguments.get("start_line")
+        end_line = arguments.get("end_line")
+        start_r = str(int(start_line)) if start_line else "NULL"
+        end_r = str(int(end_line)) if end_line else "NULL"
         read_code = f'''
         tryCatch({{
             fpath <- path.expand("{file_path}")
@@ -1041,8 +1148,17 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                 list(success = FALSE, error = paste0("File not found: ", fpath))
             }} else {{
                 lines <- readLines(fpath, warn = FALSE)
-                numbered <- paste0(seq_along(lines), ": ", lines)
-                list(success = TRUE, output = paste(numbered, collapse = "\\n"))
+                total <- length(lines)
+                sl <- {start_r}
+                el <- {end_r}
+                if (is.null(sl)) sl <- 1L
+                if (is.null(el)) el <- total
+                sl <- max(1L, min(sl, total))
+                el <- max(sl, min(el, total))
+                subset_lines <- lines[sl:el]
+                numbered <- paste0("[L", sprintf("%04d", sl:el), "] ", subset_lines)
+                hint <- sprintf("\\n[Lines %d-%d of %d total]", sl, el, total)
+                list(success = TRUE, output = paste0(paste(numbered, collapse = "\\n"), hint))
             }}
         }}, error = function(e) {{
             list(success = FALSE, error = e$message)
