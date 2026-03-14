@@ -160,20 +160,23 @@ This architecture ensures that the AI can only perform approved operations throu
 
 ClaudeR now supports command-line interface (CLI) tools like the **Claude Code CLI**, the **OpenAI Codex CLI**, and the **Google Gemini CLI**. This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
 
-## Security Restrictions
+## Security Model
 
-For your safety, ClaudeR implements strict restrictions on code execution:
+ClaudeR is a **supervised power tool**, not a sandbox. The agent executes R code in your live RStudio session — the same session where your data and variables live. You should review what it does, just as you would review a colleague's code before running it.
 
-- **System Commands**: All `system()`, `system2()`, `shell()`, and other methods of executing system commands are **blocked**.
-- **File Deletion**: Operations that could delete files (like `unlink()`, `file.remove()`, or system commands containing `rm`) are **prohibited**.
-- **Error Messages**: When the AI attempts to run restricted code, the operation is blocked, and a specific error message is returned explaining why.
+### What ClaudeR blocks
 
-### Why These Restrictions Matter
+- **System commands**: `system()`, `system2()`, `shell()`, and related calls are blocked to prevent the agent from reaching outside R.
+- **File deletion**: `unlink()`, `file.remove()`, and shell commands containing `rm` are prohibited.
+- **Error feedback**: Blocked operations return a clear error message explaining why.
 
-1.  **Data Protection**: Prevents accidental deletion or modification of important files.
-2.  **Controlled Environment**: Ensures the AI remains a safe tool for collaboration.
-3.  **Principle of Least Privilege**: Grants only the necessary permissions for data analysis tasks.
-4.  **Predictable Behavior**: Creates clear boundaries for automated actions.
+### What ClaudeR does NOT restrict
+
+The agent can still read files, install packages, create/overwrite objects in your environment, and consume compute resources. These are necessary for the agent to be useful, but they mean you should:
+
+- **Use logging** (enabled by default) so you have a full record of every line the agent executed and which agent ran it.
+- **Work in a project directory**, not your home folder, to limit what the agent can see.
+- **Review before trusting** — especially for Reviewer Zero audits, treat the output as a draft review, not a guarantee.
 
 > These restrictions only apply to code executed by the AI. Your manually executed R code is not affected.
 
