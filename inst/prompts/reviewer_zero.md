@@ -42,6 +42,8 @@ For EVERY block you read, you MUST either:
 This rule prevents silent omissions. Never skip a block without reporting.
 
 What counts as a claim:
+
+**Numeric claims** — values to recompute:
 - p-values, test statistics (t, F, chi-squared, z)
 - Effect sizes, coefficients, odds ratios
 - Confidence intervals
@@ -49,11 +51,24 @@ What counts as a claim:
 - Percentages, means, standard deviations
 - Any number tied to a statistical test or model
 
+**Methodological claims** — assertions to directly test:
+- "X was not testable / could not be computed"
+- "Zero variance prevented analysis"
+- "Only X met the assumption for ..."
+- "The test could not be run because ..."
+- Any statement that an analysis was impossible, inapplicable, or omitted
+  due to a data property (variance, sample size, distribution, etc.)
+
+These are NOT verified by checking whether the code agrees — the code may
+simply reflect the same assumption. They are verified by running the test
+yourself in Pass 3 to see if the claimed limitation actually holds.
+
 For each claim, store:
 - `verbatim`: exact quote from the manuscript (copy-paste, do not paraphrase)
 - `reported`: structured values, e.g. "p=0.041, t(38)=2.12, d=0.34"
+  (for methodological claims, state the assertion, e.g. "not testable due to zero variance")
 - `claim_type`: one of descriptive, t_test, anova, regression, correlation,
-  chi_square, nonparametric, mixed_model, other
+  chi_square, nonparametric, mixed_model, methodological, other
 - `variables`: comma-separated variable names involved
 - `status`: set to "extracted"
 
@@ -99,6 +114,22 @@ Now locate and re-execute the code that produced each claim.
   - `status = "error"` — code failed to execute
 - Store the recomputed value in the `recomputed` field.
 
+### Step 3c: Directly test methodological claims
+For every claim with `claim_type = "methodological"`, do NOT just check whether
+the code omitted the analysis. The code's omission is not evidence — the authors
+may have made the same incorrect assumption in both places.
+
+Instead:
+1. Examine the actual data (compute variance, check n, inspect distributions).
+2. Run the test that was claimed to be impossible/inapplicable.
+3. If the test runs and produces a valid result, mark `status = "discrepancy"`
+   and note that the claimed limitation does not hold.
+4. If the test genuinely cannot run (e.g., truly zero variance with no values
+   differing from the comparison point), mark `status = "match"`.
+
+This step exists because a common audit failure mode is trusting the manuscript's
+framing of what was testable rather than verifying it independently.
+
 ---
 
 ## Final Report
@@ -132,3 +163,6 @@ Then print the full registry and highlight every discrepancy with:
    user can watch it populate in the RStudio Environment pane.
 5. Use `search_project_code` to find code — do NOT guess file paths.
 6. Use `probe_scripts` before sourcing unfamiliar scripts to avoid side effects.
+7. Never trust the code's omission of an analysis as proof that the analysis was
+   impossible. For methodological claims, always test the assertion directly
+   against the data.
