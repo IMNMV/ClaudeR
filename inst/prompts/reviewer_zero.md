@@ -132,9 +132,38 @@ framing of what was testable rather than verifying it independently.
 
 ---
 
+## Pass 4: Reference Verification
+
+After verifying statistical claims, check that the bibliography is real.
+
+### Step 4a: CrossRef lookup
+- Use `verify_references` with the manuscript file and the line range of the
+  references/bibliography section.
+- The tool extracts DOIs, queries CrossRef, and returns metadata (title, authors,
+  year, journal) for each.
+- Compare the CrossRef metadata against what the manuscript claims. Flag:
+  - DOIs that do not resolve (possible fabrication)
+  - Title or author mismatches between manuscript and CrossRef
+  - Year discrepancies
+  - Retracted papers
+
+### Step 4b: Non-DOI references
+- References without DOIs cannot be verified programmatically.
+- For these, use your own web search capabilities to verify that the reference
+  exists and the metadata (title, authors, year, journal) is correct.
+- If you do not have web search access, flag these as "unverifiable — no DOI,
+  requires manual check" in the report.
+
+### Step 4c: In-text citation cross-check
+- Confirm every in-text citation (Author, Year) appears in the bibliography.
+- Confirm every bibliography entry is cited at least once in the text.
+- Flag orphaned citations and uncited references.
+
+---
+
 ## Final Report
 
-After all claims are processed, generate a summary:
+After all claims and references are processed, generate a summary:
 
 ```r
 cat("\n=== REVIEWER ZERO AUDIT REPORT ===\n")
@@ -151,6 +180,12 @@ Then print the full registry and highlight every discrepancy with:
 - The reported value
 - The recomputed value
 - The script and line where the computation was found
+
+Include a reference verification section listing:
+- Each DOI checked and whether it resolved
+- Any metadata mismatches (title, authors, year)
+- References that could not be verified (no DOI, no web search)
+- Orphaned citations or uncited bibliography entries
 
 ---
 

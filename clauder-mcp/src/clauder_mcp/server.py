@@ -607,6 +607,37 @@ async def list_tools() -> List[types.Tool]:
             }
         ),
         types.Tool(
+            name="verify_references",
+            description="Verify academic references by looking up DOIs in the CrossRef API. Extracts DOIs from a manuscript or references file, queries CrossRef for each, and returns metadata (title, authors, year, journal) for comparison against manuscript claims. References without DOIs are flagged for manual web search verification. Can be used standalone or as part of a Reviewer Zero audit.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file": {
+                        "type": "string",
+                        "description": "Path to the manuscript or references file"
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Raw text containing references (alternative to file)"
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "Start reading from this line (optional, for targeting the references section)"
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Stop reading at this line (optional)"
+                    }
+                }
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            }
+        ),
+        types.Tool(
             name="get_viewer_content",
             description="Get HTML content from the RStudio Viewer pane (HTML widgets like plotly, DT, leaflet). Returns paginated chunks. Call with offset to get more.",
             inputSchema={
@@ -976,6 +1007,36 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         paths_json = json.dumps(script_paths)
         escaped_json = escape_r_string(paths_json)
         code = f'ClaudeR:::probe_scripts_impl(jsonlite::fromJSON(\'{escaped_json}\'), timeout = {timeout})'
+        result = await execute_r_code_via_addin(code)
+        if result.get("success", False):
+            output = result.get("output", "No results.")
+            return [types.TextContent(type="text", text=output)]
+        else:
+            return [types.TextContent(type="text", text=f"Error: {result.get('error', 'Unknown error')}")]
+
+    elif name == "verify_references":
+        file_path = arguments.get("file", "")
+        text_input = arguments.get("text", "")
+        start_line = arguments.get("start_line")
+        end_line = arguments.get("end_line")
+
+        if not file_path and not text_input:
+            return [types.TextContent(type="text", text="Error: Either 'file' or 'text' parameter is required")]
+
+        # Build the R call
+        parts = []
+        if file_path:
+            escaped_path = escape_r_string(file_path)
+            parts.append(f"file_path = '{escaped_path}'")
+        if text_input:
+            escaped_text = escape_r_string(text_input)
+            parts.append(f"text = '{escaped_text}'")
+        if start_line is not None:
+            parts.append(f"start_line = {int(start_line)}")
+        if end_line is not None:
+            parts.append(f"end_line = {int(end_line)}")
+
+        code = f"ClaudeR:::verify_references_impl({', '.join(parts)})"
         result = await execute_r_code_via_addin(code)
         if result.get("success", False):
             output = result.get("output", "No results.")

@@ -1,6 +1,6 @@
 [project]
 name = "clauder-mcp"
-version = "0.3.0"
+version = "0.3.1"
 description = "MCP server connecting AI assistants to RStudio for interactive R coding and data analysis"
 readme = "README.md"
 requires-python = ">=3.10"

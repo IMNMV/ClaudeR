@@ -1,6 +1,6 @@
 <div align="center">
   <img src="assets/ClaudeR_logo.png" alt="ClaudeR Logo" width="150"/>
-  <h1>ClaudeR - The Modern Researcher's Toolkit</h1>
+  <h1>ClaudeR</h1>
   <p>
     <b>Connect RStudio to Claude Code, Codex, Gemini CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, and automated manuscript auditing.</b>
   </p>
@@ -77,6 +77,7 @@ Check out this YouTube video for a quick demonstration of what to expect when yo
 - [Features](#features)
 - [How It Works](#how-it-works)
 - [Reviewer Zero](#reviewer-zero-automated-academic-audits)
+- [R Best Practices Protocol](#r-best-practices-protocol)
 - [CLI Integration](#cli-integration)
 - [Security Restrictions](#security-restrictions)
 - [Installation](#installation)
@@ -109,6 +110,7 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`clean_error_log`**: Clean a session log by removing error blocks and their duplicate predecessors, leaving only working code and the fixes that followed.
 - **`search_project_code`**: Search for a regex pattern across project source files (.R, .Rmd, .qmd). Returns file, line number, and snippet.
 - **`probe_scripts`**: Source R scripts in a clean background session and report what objects are created (names, classes, dimensions) without affecting your main session.
+- **`verify_references`**: Verify academic references by extracting DOIs and checking them against the CrossRef API. Returns metadata (title, authors, year, journal) for comparison. References without DOIs are flagged for manual web search.
 - **`create_task_list`**: Generate a task list based on your prompt to prevent omissions in long-context tasks.
 - **`update_task_status`**: Track progress for each task in the generated list.
 
@@ -131,10 +133,11 @@ With these tools, you can:
 
 ClaudeR includes a built-in protocol for AI-driven technical review of academic manuscripts. The AI acts as "Reviewer Zero" — systematically verifying that every p-value, coefficient, and confidence interval in your paper matches the code that produced it.
 
-**How it works (3-pass protocol):**
-1. **Extract** — The AI reads your manuscript block-by-block using paginated `read_file`, extracting every quantitative claim into a structured registry (a data.frame visible in your RStudio Environment pane).
+**How it works (4-pass protocol):**
+1. **Extract** — The AI reads your manuscript block-by-block using paginated `read_file`, extracting every quantitative and methodological claim into a structured registry (a data.frame visible in your RStudio Environment pane).
 2. **Verify** — The AI re-reads the source lines for each claim to confirm it didn't misread values. No code runs until every claim is verified.
-3. **Recompute** — The AI uses `search_project_code` and `probe_scripts` to locate the relevant R scripts, then `execute_r` to rerun the analyses and compare recomputed values against the manuscript.
+3. **Recompute** — The AI uses `search_project_code` and `probe_scripts` to locate the relevant R scripts, then `execute_r` to rerun the analyses and compare recomputed values against the manuscript. Methodological claims (e.g., "zero variance made testing impossible") are tested directly rather than accepted at face value.
+4. **References** — The AI uses `verify_references` to extract DOIs from the bibliography and check each against the CrossRef API. Metadata mismatches, non-resolving DOIs, and references without DOIs are flagged. In-text citations are cross-checked against the bibliography.
 
 **To get started:**
 ```r
@@ -143,6 +146,17 @@ reviewer_zero_prompt()
 ```
 
 The protocol works with `.qmd`, `.Rmd`, `.tex`, or plain text manuscripts and supports multi-script R projects.
+
+## R Best Practices Protocol
+
+ClaudeR ships with a built-in statistical analysis protocol inspired by the modeling workflows of Harvard statistician Patrick Mair and refined through hard-won lessons from using AI agents for real statistical work. It enforces transparent, reproducible, theory-driven analysis — covering EDA, assumption checking, model building, diagnostics, and reporting.
+
+Key rules include: never hard-code values (pull dynamically from objects), never assume data properties without checking, always check assumptions before looking at `summary()`, and always report effect sizes with uncertainty rather than just p-values.
+
+```r
+# Print the full protocol to give to your AI agent
+r_best_practices_prompt()
+```
 
 ## How It Works
 

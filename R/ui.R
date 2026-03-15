@@ -1545,6 +1545,118 @@ probe_scripts_impl <- function(script_paths, timeout = 60) {
   paste(results, collapse = "\n")
 }
 
+#' Verify references by looking up DOIs in the CrossRef API
+#'
+#' @param file_path Path to manuscript or references file
+#' @param text Raw text containing references (alternative to file_path)
+#' @param start_line Optional start line for reading file
+#' @param end_line Optional end line for reading file
+#' @return Character string with verification report
+verify_references_impl <- function(file_path = NULL, text = NULL,
+                                    start_line = NULL, end_line = NULL) {
+  if (!requireNamespace("jsonlite", quietly = TRUE)) {
+    return("Error: jsonlite package is required. Install with install.packages('jsonlite')")
+  }
+
+  # Get text from file or direct input
+  if (!is.null(file_path)) {
+    file_path <- path.expand(file_path)
+    if (!file.exists(file_path)) {
+      return(paste0("Error: File not found: ", file_path))
+    }
+    lines <- readLines(file_path, warn = FALSE)
+    if (!is.null(start_line)) {
+      end_l <- if (!is.null(end_line)) min(end_line, length(lines)) else length(lines)
+      lines <- lines[max(1, start_line):end_l]
+    }
+    text <- paste(lines, collapse = "\n")
+  } else if (is.null(text)) {
+    return("Error: Either file_path or text must be provided")
+  }
+
+  # Extract DOIs using regex
+  doi_pattern <- "10\\.\\d{4,9}/[^\\s,;\\]\\)>\"']+"
+  dois <- regmatches(text, gregexpr(doi_pattern, text, perl = TRUE))[[1]]
+  dois <- unique(trimws(dois))
+  dois <- sub("[\\.,;]+$", "", dois)
+
+  if (length(dois) == 0) {
+    return(paste0(
+      "No DOIs found in the specified text.\n",
+      "The references in this section do not contain DOIs, or DOIs are not ",
+      "in standard format (10.XXXX/...).\n",
+      "To verify these references, use web search to check each one manually."
+    ))
+  }
+
+  # Query CrossRef for each DOI
+  results <- vector("list", length(dois))
+  for (i in seq_along(dois)) {
+    doi <- dois[i]
+    results[[i]] <- tryCatch({
+      api_url <- paste0("https://api.crossref.org/works/", URLencode(doi, reserved = TRUE))
+      raw <- jsonlite::fromJSON(api_url)
+      msg <- raw$message
+
+      title <- if (!is.null(msg$title)) paste(msg$title, collapse = " ") else "N/A"
+
+      authors_df <- msg$author
+      authors <- if (!is.null(authors_df) && is.data.frame(authors_df) && nrow(authors_df) > 0) {
+        paste(apply(authors_df, 1, function(a) {
+          fam <- if (!is.na(a["family"])) a["family"] else ""
+          giv <- if (!is.na(a["given"])) substr(a["given"], 1, 1) else ""
+          if (nchar(giv) > 0) paste0(fam, ", ", giv, ".") else fam
+        }), collapse = "; ")
+      } else "N/A"
+
+      year <- "N/A"
+      if (!is.null(msg$published) && !is.null(msg$published$`date-parts`)) {
+        year <- as.character(msg$published$`date-parts`[[1]][1])
+      } else if (!is.null(msg$`published-print`) && !is.null(msg$`published-print`$`date-parts`)) {
+        year <- as.character(msg$`published-print`$`date-parts`[[1]][1])
+      } else if (!is.null(msg$`published-online`) && !is.null(msg$`published-online`$`date-parts`)) {
+        year <- as.character(msg$`published-online`$`date-parts`[[1]][1])
+      }
+
+      journal <- if (!is.null(msg$`container-title`) && length(msg$`container-title`) > 0) {
+        msg$`container-title`[1]
+      } else "N/A"
+
+      doi_url <- if (!is.null(msg$URL)) msg$URL else paste0("https://doi.org/", doi)
+
+      paste0(
+        "DOI: ", doi, "\n",
+        "Status: FOUND\n",
+        "CrossRef Title: ", title, "\n",
+        "CrossRef Authors: ", authors, "\n",
+        "CrossRef Year: ", year, "\n",
+        "CrossRef Journal: ", journal, "\n",
+        "CrossRef URL: ", doi_url
+      )
+    }, error = function(e) {
+      if (grepl("404", e$message)) {
+        paste0("DOI: ", doi, "\nStatus: NOT FOUND IN CROSSREF\n",
+               "This DOI does not resolve. It may be fabricated, malformed, or not yet registered.")
+      } else {
+        paste0("DOI: ", doi, "\nStatus: ERROR\n", "Error: ", e$message)
+      }
+    })
+
+    # Polite rate limiting
+    if (i < length(dois)) Sys.sleep(0.1)
+  }
+
+  paste0(
+    "=== REFERENCE VERIFICATION REPORT ===\n",
+    "DOIs found: ", length(dois), "\n",
+    "---\n\n",
+    paste(results, collapse = "\n\n---\n\n"),
+    "\n\n---\n",
+    "Compare CrossRef metadata against manuscript claims.\n",
+    "References without DOIs require verification via web search."
+  )
+}
+
 #' Print the Reviewer Zero prompt template
 #'
 #' Displays the built-in Reviewer Zero academic auditing protocol.
@@ -1557,6 +1669,23 @@ reviewer_zero_prompt <- function() {
   prompt_path <- system.file("prompts", "reviewer_zero.md", package = "ClaudeR")
   if (!nzchar(prompt_path) || !file.exists(prompt_path)) {
     stop("Reviewer Zero prompt template not found. Is ClaudeR installed correctly?")
+  }
+  txt <- paste(readLines(prompt_path, warn = FALSE), collapse = "\n")
+  cat(txt, "\n")
+  invisible(txt)
+}
+
+#' Print the R Best Practices prompt template
+#'
+#' Displays the built-in R statistical analysis protocol based on
+#' best practices for transparent, reproducible, theory-driven analysis.
+#'
+#' @return The prompt text (invisibly), printed to the console.
+#' @export
+r_best_practices_prompt <- function() {
+  prompt_path <- system.file("prompts", "r_best_practices.md", package = "ClaudeR")
+  if (!nzchar(prompt_path) || !file.exists(prompt_path)) {
+    stop("R Best Practices prompt template not found. Is ClaudeR installed correctly?")
   }
   txt <- paste(readLines(prompt_path, warn = FALSE), collapse = "\n")
   cat(txt, "\n")
