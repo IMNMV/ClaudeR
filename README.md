@@ -1,6 +1,6 @@
 <div align="center">
   <img src="assets/ClaudeR_logo.png" alt="ClaudeR Logo" width="150"/>
-  <h1>ClaudeR - The Modern Researcher's Toolkit</h1>
+  <h1>ClaudeR /\/ The Modern Researcher's Toolkit</h1>
   <p>
     <b>Connect RStudio to Claude Code, Codex, Gemini CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, and automated manuscript auditing.</b>
   </p>
@@ -42,7 +42,9 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
-- **Reviewer Zero: Automated Academic Audits.** New 3-pass protocol for AI-driven manuscript verification. The agent extracts every statistical claim, verifies its extraction, then recomputes values against the author's R code. Powered by three new/upgraded tools: `read_file` now supports `start_line`/`end_line` pagination, `search_project_code` searches across project files via base R grep, and `probe_scripts` sources scripts in a clean background session to discover what objects they create. Run `reviewer_zero_prompt()` to get the full protocol.
+- **`verify_references` tool.** Extracts DOIs from a manuscript's bibliography, queries the CrossRef API for each, and returns metadata (title, authors, year, journal) for comparison against manuscript claims. Non-resolving DOIs, metadata mismatches, and references without DOIs are flagged. Works standalone ("check my references") or as Pass 4 of Reviewer Zero.
+- **R Best Practices Protocol.** Built-in statistical analysis protocol covering EDA, assumption checking, model building, diagnostics, multiple-corrections, and reporting. Load it with `r_best_practices_prompt()` or tell the agent to read it.
+- **Reviewer Zero: Automated Academic Audits.** Now a 4-pass protocol for AI-driven manuscript verification. The agent extracts every statistical and methodological claim, verifies its extraction, recomputes values against the author's R code, and checks references via CrossRef. Methodological claims (e.g., "zero variance made testing impossible") are tested directly rather than accepted at face value. Run `reviewer_zero_prompt()` to get the full protocol.
 - **`clean_error_log` tool.** Point the agent at a session log and it will parse every code block, find errors, check whether a fix follows each one, then strip the error blocks and any duplicate code that preceded them. The result is a clean log with only the working code. Accepts an optional `output_path` to write to a separate file instead of overwriting the original.
 - **Persistent server across UI restarts.** Closing the Shiny addin (console stop or Done button) no longer kills the MCP server. Re-running `claudeAddin()` reconnects to the still-running server with the correct port, session name, and execution count. Only clicking "Stop Server" in the UI actually stops the server.
 - **Descriptive log filenames.** Log files now include the session name, port, and timestamp: `clauder_default_8787_20260301_143022.R`. A new log file is created each time you click Start Server. All subsequent code execution appends to that file.
