@@ -69,9 +69,9 @@ claudeAddin()
 
 ## Demo
 
-Check out this YouTube video for a quick demonstration of what to expect when you use ClaudeR:
-
-[![ClaudeR Demo Video](https://img.youtube.com/vi/KSKcuxRSZDY/0.jpg)](https://youtu.be/KSKcuxRSZDY)
+| Single agent via Claude Desktop App | Multi-agent: Codex + Claude Code via CLI |
+|:---:|:---:|
+| [![Single Agent Demo](https://img.youtube.com/vi/KSKcuxRSZDY/0.jpg)](https://youtu.be/KSKcuxRSZDY) | [![Multi-Agent Demo](https://img.youtube.com/vi/5ZMyfR6ZvYU/0.jpg)](https://youtu.be/5ZMyfR6ZvYU) |
 
 ## Table of Contents
 
