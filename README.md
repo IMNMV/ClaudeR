@@ -1,6 +1,6 @@
 <div align="center">
   <img src="assets/ClaudeR_logo.png" alt="ClaudeR Logo" width="150"/>
-  <h1>ClaudeR</h1>
+  <h1>ClaudeR /\/ The Modern Researcher's Toolkit</h1>
   <p>
     <b>Connect RStudio to Claude Code, Codex, Gemini CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, and automated manuscript auditing.</b>
   </p>
@@ -17,7 +17,7 @@
 
 ---
 
-**ClaudeR** is an R package that forges a direct link between RStudio and MCP configured LLM agents like Claude Code or Codex. This allows interactive coding sessions where the agent can execute code in your active RStudio environment so it can see the executed code and any generated plots in real-time. If you need help editing a script, a quick analysis done, or an LLM to audit your statistical claims against any manuscript before submission — ClaudeR has got your back.
+**ClaudeR** is an R package that forges a direct link between RStudio and MCP configured LLM agents like Claude Code or Codex. This allows interactive coding sessions where the agent can execute code in your active RStudio environment so it can see the executed code and any generated plots in real-time. If you need help editing a script, a quick analysis done, or an LLM to audit your statistical claims against any manuscript before submission: ClaudeR has got your back.
 
 This package, additionally, allows multiple agents to work on one script, or it can make multiple RStudio windows siloed so multiple agents can operate independently on different datasets. It's also compatible with Cursor and any service that support MCP servers.
 
@@ -45,7 +45,7 @@ claudeAddin()
 - **Reviewer Zero: Automated Academic Audits.** New 3-pass protocol for AI-driven manuscript verification. The agent extracts every statistical claim, verifies its extraction, then recomputes values against the author's R code. Powered by three new/upgraded tools: `read_file` now supports `start_line`/`end_line` pagination, `search_project_code` searches across project files via base R grep, and `probe_scripts` sources scripts in a clean background session to discover what objects they create. Run `reviewer_zero_prompt()` to get the full protocol.
 - **`clean_error_log` tool.** Point the agent at a session log and it will parse every code block, find errors, check whether a fix follows each one, then strip the error blocks and any duplicate code that preceded them. The result is a clean log with only the working code. Accepts an optional `output_path` to write to a separate file instead of overwriting the original.
 - **Persistent server across UI restarts.** Closing the Shiny addin (console stop or Done button) no longer kills the MCP server. Re-running `claudeAddin()` reconnects to the still-running server with the correct port, session name, and execution count. Only clicking "Stop Server" in the UI actually stops the server.
-- **Descriptive log filenames.** Log files now include the session name, port, and timestamp: `clauder_default_8787_20260301_143022.R`. A new log file is created each time you click Start Server — all subsequent code execution appends to that file.
+- **Descriptive log filenames.** Log files now include the session name, port, and timestamp: `clauder_default_8787_20260301_143022.R`. A new log file is created each time you click Start Server. All subsequent code execution appends to that file.
 - **Viewer content capture & `insert_text` tool.** Two new tools: `get_viewer_content` reads HTML from interactive widgets (plotly, DT, leaflet) with pagination so agents can inspect htmlwidget output without blowing up context. `insert_text` inserts text at the cursor position or a specific line/column in the active document. During agent execution, htmlwidgets open in the browser instead of stealing the Shiny addin's viewer pane.
 - **Multi-session routing fix.** Agents now prefer the session named "default" when multiple sessions are active, preventing misrouting caused by non-deterministic discovery order. Once bound, agents stay sticky to their session. Non-default agents should call `connect_session` to target a specific session.
 - **Reproducibility metadata in logs.** When logging is enabled, each new session log starts with a header containing the date, working directory, and full `sessionInfo()` output (R version, platform, attached packages). Anyone who receives the log can see exactly what environment the code ran in.
@@ -131,13 +131,13 @@ With these tools, you can:
 
 ## Reviewer Zero: Automated Academic Audits
 
-ClaudeR includes a built-in protocol for AI-driven technical review of academic manuscripts. The AI acts as "Reviewer Zero" — systematically verifying that every p-value, coefficient, and confidence interval in your paper matches the code that produced it.
+ClaudeR includes a built-in protocol for AI-driven technical review of academic manuscripts. The AI acts as "Reviewer Zero": systematically verifying that every p-value, coefficient, and confidence interval in your paper matches the code that produced it.
 
 **How it works (4-pass protocol):**
-1. **Extract** — The AI reads your manuscript block-by-block using paginated `read_file`, extracting every quantitative and methodological claim into a structured registry (a data.frame visible in your RStudio Environment pane).
-2. **Verify** — The AI re-reads the source lines for each claim to confirm it didn't misread values. No code runs until every claim is verified.
-3. **Recompute** — The AI uses `search_project_code` and `probe_scripts` to locate the relevant R scripts, then `execute_r` to rerun the analyses and compare recomputed values against the manuscript. Methodological claims (e.g., "zero variance made testing impossible") are tested directly rather than accepted at face value.
-4. **References** — The AI uses `verify_references` to extract DOIs from the bibliography and check each against the CrossRef API. Metadata mismatches, non-resolving DOIs, and references without DOIs are flagged. In-text citations are cross-checked against the bibliography.
+1. **Extract**: The AI reads your manuscript block-by-block using paginated `read_file`, extracting every quantitative and methodological claim into a structured registry (a data.frame visible in your RStudio Environment pane).
+2. **Verify**: The AI re-reads the source lines for each claim to confirm it didn't misread values. No code runs until every claim is verified.
+3. **Recompute**: The AI uses `search_project_code` and `probe_scripts` to locate the relevant R scripts, then `execute_r` to rerun the analyses and compare recomputed values against the manuscript. Methodological claims (e.g., "zero variance made testing impossible") are tested directly rather than accepted at face value.
+4. **References**: The AI uses `verify_references` to extract DOIs from the bibliography and check each against the CrossRef API. Metadata mismatches, non-resolving DOIs, and references without DOIs are flagged. In-text citations are cross-checked against the bibliography.
 
 **To get started:**
 ```r
@@ -149,14 +149,14 @@ The protocol works with `.qmd`, `.Rmd`, `.tex`, or plain text manuscripts and su
 
 ## R Best Practices Protocol
 
-ClaudeR ships with a built-in statistical analysis protocol inspired by the modeling workflows of Harvard statistician Patrick Mair and refined through hard-won lessons from using AI agents for real statistical work. It enforces transparent, reproducible, theory-driven analysis — covering EDA, assumption checking, model building, diagnostics, and reporting.
-
-Key rules include: never hard-code values (pull dynamically from objects), never assume data properties without checking, always check assumptions before looking at `summary()`, and always report effect sizes with uncertainty rather than just p-values.
+ClaudeR comes with a built-in statistical analysis protocol inspired by the modeling workflows I learned from my statistics courses and refined through oof moments from using AI agents in real statistical work. The goal is to steer models with natural language to reproducible, theory-driven analysis which covers EDA, assumption checking, model building, diagnostics, multiple-corrections, and reporting.
 
 ```r
 # Print the full protocol to give to your AI agent
 r_best_practices_prompt()
 ```
+
+You can also just tell the agent to run `ClaudeR::r_best_practices_prompt()` and it will read the protocol itself.
 
 ## How It Works
 
@@ -176,7 +176,7 @@ ClaudeR now supports command-line interface (CLI) tools like the **Claude Code C
 
 ## Security Model
 
-ClaudeR is a **supervised power tool**, not a sandbox. The agent executes R code in your live RStudio session — the same session where your data and variables live. You should review what it does, just as you would review a colleague's code before running it.
+ClaudeR is a **supervised power tool**. The agent executes R code in your live RStudio session, the same session where your data and variables live. You should review what it does, just as you would review a colleague's code before running it.
 
 ### What ClaudeR blocks
 
@@ -189,8 +189,8 @@ ClaudeR is a **supervised power tool**, not a sandbox. The agent executes R code
 The agent can still read files, install packages, create/overwrite objects in your environment, and consume compute resources. These are necessary for the agent to be useful, but they mean you should:
 
 - **Use logging** (enabled by default) so you have a full record of every line the agent executed and which agent ran it.
-- **Work in a project directory**, not your home folder, to limit what the agent can see.
-- **Review before trusting** — especially for Reviewer Zero audits, treat the output as a draft review, not a guarantee.
+- **Work in a project directory** to limit what the agent can see.
+- **Review before trusting**: especially for Reviewer Zero audits, treat the output as a draft review that should be verified.
 
 > These restrictions only apply to code executed by the AI. Your manually executed R code is not affected.
 
@@ -282,7 +282,7 @@ The ClaudeR add-in will appear in your RStudio Viewer pane. Click **"Start Serve
 - **For Desktop Apps**: Open the Claude Desktop App or Cursor and begin your session.
 - **For CLI Tools**: Open your terminal and use the `claude` or `gemini` commands to start interacting with your AI assistant.
 
-> Note: You can regain console/active document control by clicking the stop button in the RStudio console. This closes the Shiny UI but the MCP server keeps running in the background — your AI agents stay connected. Re-run `claudeAddin()` to bring the viewer pane back with the same server state (port, session name, execution count). To fully stop the server, click **"Stop Server"** in the UI before closing.
+> Note: You can regain console/active document control by clicking the stop button in the RStudio console. This closes the Shiny UI but the MCP server keeps running in the background and your AI agents stay connected. Re-run `claudeAddin()` to bring the viewer pane back with the same server state (port, session name, execution count). To fully stop the server, click **"Stop Server"** in the UI before closing.
 
 ## Logging Options
 
