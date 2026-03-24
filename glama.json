@@ -1,0 +1,16 @@
+{
+  "name": "ClaudeR",
+  "description": "MCP server connecting AI assistants to RStudio for interactive R coding, multi-agent orchestration, and automated manuscript auditing.",
+  "repository": "https://github.com/IMNMV/ClaudeR",
+  "license": "MIT",
+  "authors": ["Nykko Vitali"],
+  "tags": ["r", "rstudio", "mcp", "data-science", "statistics", "multi-agent", "manuscript-auditing"],
+  "runtime": "python",
+  "install": "uvx clauder-mcp",
+  "mcpServers": {
+    "clauder-mcp": {
+      "command": "uvx",
+      "args": ["clauder-mcp"]
+    }
+  }
+}
