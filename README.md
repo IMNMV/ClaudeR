@@ -70,9 +70,9 @@ claudeAddin()
 
 ## Demo
 
-| Single agent via Claude Desktop App | Multi-agent: Codex + Claude Code via CLI |
-|:---:|:---:|
-| [![Single Agent Demo](https://img.youtube.com/vi/KSKcuxRSZDY/0.jpg)](https://youtu.be/KSKcuxRSZDY) | [![Multi-Agent Demo](https://img.youtube.com/vi/5ZMyfR6ZvYU/0.jpg)](https://youtu.be/5ZMyfR6ZvYU) |
+| Single agent via Claude Desktop App | Multi-agent: Codex + Claude Code via CLI | GPT 5.4 Codex: Data analysis + Quarto report |
+|:---:|:---:|:---:|
+| [![Single Agent Demo](https://img.youtube.com/vi/KSKcuxRSZDY/0.jpg)](https://youtu.be/KSKcuxRSZDY) | [![Multi-Agent Demo](https://img.youtube.com/vi/5ZMyfR6ZvYU/0.jpg)](https://youtu.be/5ZMyfR6ZvYU) | [![Codex Quarto Demo](https://img.youtube.com/vi/TE-U8DPlShY/0.jpg)](https://youtu.be/TE-U8DPlShY) |
 
 ## Table of Contents
 
