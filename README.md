@@ -100,7 +100,7 @@ claudeAddin()
 ClaudeR empowers your AI assistant with a suite of tools to interact with your R environment:
 
 - **`execute_r`**: Execute R code and return the output.
-- **`execute_r_with_plot`**: Execute R code that generates a plot.
+- **`execute_r_with_plot`**: Execute R code that generates a plot that the model can see.
 - **`execute_r_async`**: Execute long-running R code asynchronously (>25 seconds). Returns a job ID for polling.
 - **`get_async_result`**: Poll for the result of an async job. Includes a built-in delay to throttle polling.
 - **`list_sessions`**: List all active RStudio sessions the agent can connect to.

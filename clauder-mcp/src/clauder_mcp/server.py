@@ -220,6 +220,18 @@ async def get_agent_introduction() -> str:
         session_name = info.get("session_name", "unknown")
         lines.append(f"Session: {session_name}")
 
+    lines.append("")
+    lines.append("[Quick Reference]")
+    lines.append("Available protocol prompts (run in R to read):")
+    lines.append("  ClaudeR::reviewer_zero_prompt()     - Manuscript auditing protocol")
+    lines.append("  ClaudeR::r_best_practices_prompt()   - Statistical analysis protocol")
+    lines.append("  ClaudeR::multi_agent_prompt()        - Multi-agent coordination protocol")
+    lines.append("")
+    lines.append("Context-saving rules:")
+    lines.append("  - Do NOT use installed.packages(). Use requireNamespace('pkg') to check for a specific package.")
+    lines.append("  - Do NOT use bare ls(). Use head(ls(), 20) or search for specific objects with exists('name').")
+    lines.append("  - Do NOT use bare list.files(). Use head(list.files(), 20) or list.files(pattern = 'specific').")
+    lines.append("  - These commands can return hundreds of items and fill up your context window.")
     lines.append("[End ClaudeR Agent Context]")
     return "\n".join(lines)
 
