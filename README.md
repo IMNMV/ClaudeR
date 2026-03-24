@@ -12,6 +12,7 @@
     <a href="https://github.com/IMNMV/ClaudeR/commits/main"><img src="https://img.shields.io/github/last-commit/IMNMV/ClaudeR/main" alt="GitHub last commit"></a>
     <a href="https://pypi.org/project/clauder-mcp/"><img src="https://img.shields.io/pypi/v/clauder-mcp" alt="PyPI version"></a>
     <img src="https://img.shields.io/badge/R-%3E%3D4.0-blue?logo=r" alt="R version">
+    <a href="https://glama.ai/mcp/servers/IMNMV/ClaudeR"><img src="https://glama.ai/mcp/servers/IMNMV/ClaudeR/badges/score.svg" alt="ClaudeR MCP server"></a>
   </p>
 </div>
 
@@ -70,9 +71,9 @@ claudeAddin()
 
 ## Demo
 
-| Single agent via Claude Desktop App | Multi-agent: Codex + Claude Code via CLI |
-|:---:|:---:|
-| [![Single Agent Demo](https://img.youtube.com/vi/KSKcuxRSZDY/0.jpg)](https://youtu.be/KSKcuxRSZDY) | [![Multi-Agent Demo](https://img.youtube.com/vi/5ZMyfR6ZvYU/0.jpg)](https://youtu.be/5ZMyfR6ZvYU) |
+| Single agent via Claude Desktop App | Multi-agent: Codex + Claude Code via CLI | GPT 5.4 Codex: Data analysis + Quarto report |
+|:---:|:---:|:---:|
+| [![Single Agent Demo](https://img.youtube.com/vi/KSKcuxRSZDY/0.jpg)](https://youtu.be/KSKcuxRSZDY) | [![Multi-Agent Demo](https://img.youtube.com/vi/5ZMyfR6ZvYU/0.jpg)](https://youtu.be/5ZMyfR6ZvYU) | [![Codex Quarto Demo](https://img.youtube.com/vi/TE-U8DPlShY/0.jpg)](https://youtu.be/TE-U8DPlShY) |
 
 ## Table of Contents
 
