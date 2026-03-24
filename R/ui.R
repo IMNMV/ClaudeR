@@ -1692,6 +1692,24 @@ r_best_practices_prompt <- function() {
   invisible(txt)
 }
 
+#' Print the Multi-Agent Coordination prompt template
+#'
+#' Displays the built-in protocol for coordinating multiple AI agents
+#' in a shared RStudio session. Covers planning, task claiming, handoffs,
+#' and cross-checking.
+#'
+#' @return The prompt text (invisibly), printed to the console.
+#' @export
+multi_agent_prompt <- function() {
+  prompt_path <- system.file("prompts", "multi_agent.md", package = "ClaudeR")
+  if (!nzchar(prompt_path) || !file.exists(prompt_path)) {
+    stop("Multi-Agent prompt template not found. Is ClaudeR installed correctly?")
+  }
+  txt <- paste(readLines(prompt_path, warn = FALSE), collapse = "\n")
+  cat(txt, "\n")
+  invisible(txt)
+}
+
 #' Load Claude settings
 #'
 #' @return A list containing Claude settings

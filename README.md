@@ -12,7 +12,6 @@
     <a href="https://github.com/IMNMV/ClaudeR/commits/main"><img src="https://img.shields.io/github/last-commit/IMNMV/ClaudeR/main" alt="GitHub last commit"></a>
     <a href="https://pypi.org/project/clauder-mcp/"><img src="https://img.shields.io/pypi/v/clauder-mcp" alt="PyPI version"></a>
     <img src="https://img.shields.io/badge/R-%3E%3D4.0-blue?logo=r" alt="R version">
-    <a href="https://glama.ai/mcp/servers/IMNMV/ClaudeR"><img src="https://glama.ai/mcp/servers/IMNMV/ClaudeR/badges/score.svg" alt="ClaudeR MCP server"></a>
   </p>
 </div>
 
@@ -20,7 +19,7 @@
 
 **ClaudeR** is an R package that forges a direct link between RStudio and MCP configured LLM agents like Claude Code or Codex. This allows interactive coding sessions where the agent can execute code in your active RStudio environment so it can see the executed code and any generated plots in real-time. If you need help editing a script, a quick analysis done, or an LLM to audit your statistical claims against any manuscript before submission: ClaudeR has got your back.
 
-This package, additionally, allows multiple agents to work on one script, or it can make multiple RStudio windows siloed so multiple agents can operate independently on different datasets. It's also compatible with Cursor and any service that supports MCP servers.
+This package, additionally, allows multiple agents to work on one script, or it can make multiple RStudio windows siloed so multiple agents can operate independently on different datasets. It's also compatible with Cursor and any service that support MCP servers.
 
 ## Quick Start
 
@@ -43,6 +42,7 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
+- **Multi-Agent Coordination Protocol.** Built-in protocol for multiple agents sharing one RStudio session. Agents negotiate through a shared message board in the R environment, agree on a task plan, claim tasks before working, and cross-check each other's output. Load it with `multi_agent_prompt()`.
 - **`verify_references` tool.** Extracts DOIs from a manuscript's bibliography, queries the CrossRef API for each, and returns metadata (title, authors, year, journal) for comparison against manuscript claims. Non-resolving DOIs, metadata mismatches, and references without DOIs are flagged. Works standalone ("check my references") or as Pass 4 of Reviewer Zero.
 - **R Best Practices Protocol.** Built-in statistical analysis protocol covering EDA, assumption checking, model building, diagnostics, multiple-corrections, and reporting. Load it with `r_best_practices_prompt()` or tell the agent to read it.
 - **Reviewer Zero: Automated Academic Audits.** Now a 4-pass protocol for AI-driven manuscript verification. The agent extracts every statistical and methodological claim, verifies its extraction, recomputes values against the author's R code, and checks references via CrossRef. Methodological claims (e.g., "zero variance made testing impossible") are tested directly rather than accepted at face value. Run `reviewer_zero_prompt()` to get the full protocol.
@@ -70,9 +70,9 @@ claudeAddin()
 
 ## Demo
 
-| Single agent via Claude Desktop App | Multi-agent: Codex + Claude Code via CLI | GPT 5.4 Codex: Data analysis + Quarto report |
-|:---:|:---:|:---:|
-| [![Single Agent Demo](https://img.youtube.com/vi/KSKcuxRSZDY/0.jpg)](https://youtu.be/KSKcuxRSZDY) | [![Multi-Agent Demo](https://img.youtube.com/vi/5ZMyfR6ZvYU/0.jpg)](https://youtu.be/5ZMyfR6ZvYU) | [![Codex Quarto Demo](https://img.youtube.com/vi/TE-U8DPlShY/0.jpg)](https://youtu.be/TE-U8DPlShY) |
+| Single agent via Claude Desktop App | Multi-agent: Codex + Claude Code via CLI |
+|:---:|:---:|
+| [![Single Agent Demo](https://img.youtube.com/vi/KSKcuxRSZDY/0.jpg)](https://youtu.be/KSKcuxRSZDY) | [![Multi-Agent Demo](https://img.youtube.com/vi/5ZMyfR6ZvYU/0.jpg)](https://youtu.be/5ZMyfR6ZvYU) |
 
 ## Table of Contents
 
@@ -81,6 +81,7 @@ claudeAddin()
 - [How It Works](#how-it-works)
 - [Reviewer Zero](#reviewer-zero-automated-academic-audits)
 - [R Best Practices Protocol](#r-best-practices-protocol)
+- [Multi-Agent Coordination Protocol](#multi-agent-coordination-protocol)
 - [CLI Integration](#cli-integration)
 - [Security Restrictions](#security-restrictions)
 - [Installation](#installation)
@@ -160,6 +161,17 @@ r_best_practices_prompt()
 ```
 
 You can also just tell the agent to run `ClaudeR::r_best_practices_prompt()` and it will read the protocol itself.
+
+## Multi-Agent Coordination Protocol
+
+When two or more agents share the same RStudio session, they need a way to divide work without stepping on each other. The multi-agent protocol handles this with a structured workflow: agents check in by reading the session log, the first agent creates a task plan, agents claim tasks before starting them, and they cross-check each other's work when done.
+
+```r
+# Print the full protocol to give to your AI agents
+multi_agent_prompt()
+```
+
+You can also just tell the agents to run `ClaudeR::multi_agent_prompt()` and they will read the protocol themselves.
 
 ## How It Works
 
