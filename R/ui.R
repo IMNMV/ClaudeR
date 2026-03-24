@@ -1657,10 +1657,45 @@ verify_references_impl <- function(file_path = NULL, text = NULL,
   )
 }
 
+#' Extract text lines from a manuscript file
+#'
+#' Reads a manuscript file and returns its text as a character vector of lines.
+#' Supports .docx (via the officer package), .qmd, .Rmd, .tex, .txt, and other
+#' plain text formats.
+#'
+#' @param file_path Path to the manuscript file
+#' @return Character vector with one element per line of text
+#' @export
+extract_manuscript_text <- function(file_path) {
+  file_path <- path.expand(file_path)
+  if (!file.exists(file_path)) {
+    stop(paste0("File not found: ", file_path))
+  }
+  ext <- tolower(tools::file_ext(file_path))
+  if (ext == "docx") {
+    if (!requireNamespace("officer", quietly = TRUE)) {
+      stop("The 'officer' package is required to read .docx files. Install with: install.packages('officer')")
+    }
+    doc <- officer::read_docx(file_path)
+    content <- officer::docx_summary(doc)
+    paragraphs <- content[content$content_type == "paragraph", "text"]
+    return(paragraphs)
+  } else if (ext == "pdf") {
+    if (!requireNamespace("pdftools", quietly = TRUE)) {
+      stop("The 'pdftools' package is required to read .pdf files. Install with: install.packages('pdftools')")
+    }
+    pages <- pdftools::pdf_text(file_path)
+    lines <- unlist(strsplit(pages, "\n"))
+    return(lines)
+  } else {
+    return(readLines(file_path, warn = FALSE))
+  }
+}
+
 #' Print the Reviewer Zero prompt template
 #'
 #' Displays the built-in Reviewer Zero academic auditing protocol.
-#' This prompt guides an AI assistant through a 3-pass verification of
+#' This prompt guides an AI assistant through a 4-pass verification of
 #' quantitative claims in a manuscript against source code.
 #'
 #' @return The prompt text (invisibly), printed to the console.
