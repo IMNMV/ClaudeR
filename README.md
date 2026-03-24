@@ -150,7 +150,7 @@ ClaudeR includes a built-in protocol for AI-driven technical review of academic 
 reviewer_zero_prompt()
 ```
 
-The protocol works with `.qmd`, `.Rmd`, `.tex`, or plain text manuscripts and supports multi-script R projects.
+The protocol works with `.docx`, `.pdf`, `.qmd`, `.Rmd`, `.tex`, or plain text manuscripts and supports multi-script R projects.
 
 ## R Best Practices Protocol
 

@@ -15,7 +15,8 @@ evaluated. The claim registry stores extracted claims for verification.
 
 ```r
 # 1. Coverage tracker: proves every line was evaluated
-doc_lines <- readLines("path_to_manuscript")  # Replace with actual file path
+# extract_manuscript_text() handles .docx, .pdf, .qmd, .Rmd, .tex, and plain text
+doc_lines <- ClaudeR::extract_manuscript_text("path_to_manuscript")  # Replace with actual file path
 total_lines <- length(doc_lines)
 coverage <- data.frame(
   line = 1:total_lines,
