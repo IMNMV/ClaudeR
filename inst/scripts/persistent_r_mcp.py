@@ -282,13 +282,13 @@ async def list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="get_r_info",
-            description="Get information about the R environment",
+            description="Get a summary of the R environment. Returns package count (not full list), first 20 variables, and R version. Use requireNamespace('pkg') to check for specific packages.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "what": {
                         "type": "string",
-                        "description": "What information to get: 'packages', 'variables', 'version', or 'all'"
+                        "description": "What information to get: 'packages' (count only), 'variables' (first 20), 'version', or 'all'"
                     }
                 },
                 "required": ["what"]
@@ -818,25 +818,25 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
 
     elif name == "get_r_info":
         what = arguments.get("what", "all")
-        
+
         if what == "packages" or what == "all":
-            pkg_code = "installed.packages()[,1]"
+            pkg_code = "cat(sprintf('Installed packages: %d\\nUse requireNamespace(\"pkg\") to check for a specific package.', nrow(installed.packages())))"
             pkg_result = await execute_r_code_via_addin(pkg_code)
             if pkg_result.get("success", False):
                 result_contents.append(types.TextContent(
                     type="text",
-                    text=f"Installed R packages:\n{pkg_result.get('output', '')}"
+                    text=f"{pkg_result.get('output', '')}"
                 ))
-        
+
         if what == "variables" or what == "all":
-            var_code = "ls()"
+            var_code = "obj <- ls(); cat(sprintf('Global environment: %d objects\\n', length(obj))); if (length(obj) > 0) cat('First 20:', paste(head(obj, 20), collapse=', ')); if (length(obj) > 20) cat(sprintf('\\n... and %d more. Use exists(\"name\") to check for specific objects.', length(obj) - 20))"
             var_result = await execute_r_code_via_addin(var_code)
             if var_result.get("success", False):
                 result_contents.append(types.TextContent(
                     type="text",
-                    text=f"R variables in global environment:\n{var_result.get('output', '')}"
+                    text=f"{var_result.get('output', '')}"
                 ))
-        
+
         if what == "version" or what == "all":
             ver_code = "R.version.string"
             ver_result = await execute_r_code_via_addin(ver_code)
