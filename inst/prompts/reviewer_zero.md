@@ -99,7 +99,24 @@ What counts as a claim:
 - Confidence intervals
 - Sample sizes, group counts
 - Percentages, means, standard deviations
-- Any number tied to a statistical test or model
+- Frequency counts, word counts, occurrence tallies
+- Any specific number in the manuscript, whether from a statistical test,
+  a descriptive summary, or a data pipeline
+
+**Empirical assertions** — verifiable factual statements about data:
+- "X appeared N times" / "X was the most frequent"
+- "X was absent from Y" / "X did not appear in Y"
+- "X was higher/lower/more/less than Y"
+- Rankings, orderings, or membership claims ("top five," "most common")
+- Comparisons stated in prose without a formal test ("Claude used gender
+  805 times vs. 449 for GPT-4o")
+- Any statement that can be checked by running the analysis and inspecting
+  the output, even if no formal statistical test is involved
+
+These are easy to miss because they often appear in narrative prose rather
+than results paragraphs. If a sentence contains a specific number, a ranking,
+or a presence/absence claim about data, it is a claim -- regardless of whether
+it involves a formal test.
 
 **Methodological claims** — assertions to directly test:
 - "X was not testable / could not be computed"
@@ -116,9 +133,10 @@ yourself in Pass 3 to see if the claimed limitation actually holds.
 For each claim, store:
 - `verbatim`: exact quote from the manuscript (copy-paste, do not paraphrase)
 - `reported`: structured values, e.g. "p=0.041, t(38)=2.12, d=0.34"
+  (for empirical assertions, state what is claimed, e.g. "gender absent from humans' top five")
   (for methodological claims, state the assertion, e.g. "not testable due to zero variance")
 - `claim_type`: one of descriptive, t_test, anova, regression, correlation,
-  chi_square, nonparametric, mixed_model, methodological, other
+  chi_square, nonparametric, mixed_model, empirical, methodological, other
 - `variables`: comma-separated variable names involved
 - `status`: set to "extracted"
 
@@ -216,6 +234,67 @@ Instead:
 This step exists because a common audit failure mode is trusting the manuscript's
 framing of what was testable rather than verifying it independently.
 
+### Step 3d: Full script review for internal consistency
+After completing Steps 3a-3c, check how much of the analysis code you actually
+read. If you have not reviewed the entire analysis script(s), you MUST now read
+through them from start to finish using `read_file` with pagination.
+
+You are NOT looking for unreported analyses. Researchers routinely explore more
+than they report, and that is normal. Do not flag or penalize code that analyzes
+variables or outcomes not mentioned in the manuscript.
+
+You ARE looking for: code that operates on the **same reported outcomes or
+variables** using a different model specification, data subset, or computation
+method and produces a **different result**. This matters because it may indicate:
+- The author tried multiple specifications and reported the most favorable one
+- A coding error where an earlier or later version of the analysis disagrees
+- Inconsistent data processing (e.g., different exclusion criteria applied to
+  the same outcome in different places)
+
+For each such case found:
+1. Identify the manuscript claim it relates to (by `claim_id`).
+2. Run the alternative computation yourself via `execute_r`.
+3. Compare the alternative result to both the manuscript's reported value and
+   your Pass 3 recomputed value.
+4. Add a note to the claim's `notes` field describing the alternative code path
+   and its result. Do NOT change the claim's `status` -- this is informational,
+   not a discrepancy in the manuscript's reported numbers.
+5. Include these findings in the Final Report under a separate
+   "Internal Consistency" section.
+
+#### Script coverage tracker
+Before starting, build a tracker for all analysis scripts. Use `search_project_code`
+to find the relevant R files, then initialize:
+
+```r
+script_files <- list.files("path/to/scripts", pattern = "\\.R$", full.names = TRUE)
+script_coverage <- do.call(rbind, lapply(script_files, function(f) {
+  n <- length(readLines(f, warn = FALSE))
+  data.frame(file = basename(f), line_start = seq(1, n, by = 50),
+             line_end = pmin(seq(50, n + 49, by = 50), n),
+             status = "unread", stringsAsFactors = FALSE)
+}))
+```
+
+As you page through each script with `read_file`, mark each block:
+
+```r
+script_coverage$status[script_coverage$file == "analysis.R" &
+  script_coverage$line_start == 1] <- "reviewed"
+```
+
+#### Script coverage gate
+You CANNOT proceed to Pass 4 until every block of every script has been reviewed:
+
+```r
+unread_scripts <- sum(script_coverage$status == "unread")
+cat(sprintf("Script coverage: %d / %d blocks reviewed (%d unread)\n",
+    sum(script_coverage$status != "unread"), nrow(script_coverage), unread_scripts))
+stopifnot(unread_scripts == 0)
+```
+
+If any blocks are unread, go back and read them before continuing.
+
 ---
 
 ## Pass 4: Reference Verification
@@ -275,6 +354,12 @@ Include a reference verification section listing:
 - References that could not be verified (no DOI, no web search)
 - Orphaned citations or uncited bibliography entries
 
+Include an internal consistency section listing:
+- How many total lines of analysis code were reviewed
+- Any cases where the same reported outcome was computed differently
+  elsewhere in the code, with both results shown
+- If no inconsistencies were found, state that explicitly
+
 ---
 
 ## Rules
@@ -296,3 +381,6 @@ Include a reference verification section listing:
 10. Never trust the code's omission of an analysis as proof that the analysis was
     impossible. For methodological claims, always test the assertion directly
     against the data.
+11. You must read every line of every analysis script by the end of Pass 3.
+    Do not flag unreported analyses on different variables -- only flag code
+    that produces different results for the same reported outcomes.

@@ -1174,10 +1174,20 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             )]
 
         _target_session = session_name
-        return [types.TextContent(
-            type="text",
-            text=f"Connected to session '{session_name}'. All subsequent tool calls will be routed there."
-        )]
+
+        connect_msg = f"Connected to session '{session_name}'. All subsequent tool calls will be routed there."
+        contents = [types.TextContent(type="text", text=connect_msg)]
+
+        # Deliver agent introduction right after connecting
+        if not _agent_introduced:
+            _agent_introduced = True
+            try:
+                intro = await get_agent_introduction()
+                contents.append(types.TextContent(type="text", text=intro))
+            except Exception:
+                pass
+
+        return contents
 
     elif name == "get_session_history":
         agent_filter = arguments.get("agent_filter", "all")

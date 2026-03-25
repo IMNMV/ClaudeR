@@ -15,6 +15,18 @@ configure <- function(for_cursor = FALSE, use_uvx = TRUE, python_path = NULL) {
   message("Starting ClaudeR configuration...")
 
   if (use_uvx) {
+    uvx_path <- Sys.which("uvx")
+    if (uvx_path == "" || !nzchar(uvx_path)) {
+      stop(paste0(
+        "uvx was not found on your system. ClaudeR requires uvx to run.\n\n",
+        "Install it by running one of the following in your terminal:\n",
+        "  macOS/Linux:  curl -LsSf https://astral.sh/uv/install.sh | sh\n",
+        "  Windows:      powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"\n",
+        "  Homebrew:     brew install uv\n\n",
+        "After installing, restart R and run install_clauder() again.\n",
+        "For more info: https://docs.astral.sh/uv/getting-started/installation/"
+      ))
+    }
     message("Using uvx (recommended). Python dependencies are handled automatically.")
     mcp_command <- "uvx"
     mcp_args <- list("clauder-mcp")
@@ -165,6 +177,19 @@ install_clauder <- function(for_cursor = FALSE, use_uvx = TRUE, python_path = NU
     }
   } else {
     message("\n--- Step 2: Using uvx (recommended) ---")
+    uvx_path <- Sys.which("uvx")
+    if (uvx_path == "" || !nzchar(uvx_path)) {
+      stop(paste0(
+        "uvx was not found on your system. ClaudeR requires uvx to run.\n\n",
+        "Install it by running one of the following in your terminal:\n",
+        "  macOS/Linux:  curl -LsSf https://astral.sh/uv/install.sh | sh\n",
+        "  Windows:      powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"\n",
+        "  Homebrew:     brew install uv\n\n",
+        "After installing, restart R and run install_clauder() again.\n",
+        "For more info: https://docs.astral.sh/uv/getting-started/installation/"
+      ))
+    }
+    message(paste("Found uvx at:", uvx_path))
     message("Python dependencies are handled automatically by uvx. No pip install needed.")
   }
 
