@@ -1700,6 +1700,23 @@ extract_manuscript_text <- function(file_path) {
 #'
 #' @return The prompt text (invisibly), printed to the console.
 #' @export
+#' Print the Data Annotation prompt template
+#'
+#' Displays the built-in protocol for AI-driven CSV data annotation using
+#' the load_annotation_data and annotate MCP tools.
+#'
+#' @return The prompt text (invisibly), printed to the console.
+#' @export
+data_annotation_prompt <- function() {
+  prompt_path <- system.file("prompts", "data_annotation.md", package = "ClaudeR")
+  if (!nzchar(prompt_path) || !file.exists(prompt_path)) {
+    stop("Data annotation prompt template not found. Is ClaudeR installed correctly?")
+  }
+  txt <- paste(readLines(prompt_path, warn = FALSE), collapse = "\n")
+  cat(txt, "\n")
+  invisible(txt)
+}
+
 reviewer_zero_prompt <- function() {
   prompt_path <- system.file("prompts", "reviewer_zero.md", package = "ClaudeR")
   if (!nzchar(prompt_path) || !file.exists(prompt_path)) {

@@ -31,6 +31,16 @@ _agent_introduced: bool = False        # First-call introduction flag
 # Cache variable to store the result of the ggplot2 check
 _is_ggplot_installed = None
 
+# Annotation state — persists across load_annotation_data / annotate calls
+_annot_state: Dict[str, Any] = {
+    "rows": None,        # list of dicts (full CSV rows)
+    "fieldnames": None,  # original column order
+    "path": None,        # path to working copy
+    "index": 0,          # current row index
+    "schema": None,      # parsed schema dict
+    "total": 0,          # total row count
+}
+
 
 def _pid_alive(pid: int) -> bool:
     """Check if a process is running (signal 0 doesn't kill, just checks)."""
@@ -234,6 +244,90 @@ async def get_agent_introduction() -> str:
     lines.append("  - These commands can return hundreds of items and fill up your context window.")
     lines.append("[End ClaudeR Agent Context]")
     return "\n".join(lines)
+
+# --- Annotation helpers ---
+
+def _parse_annotation_schema(schema_str: str) -> Dict[str, Any]:
+    """Parse 'field:type[constraint];...' into {field: {type, constraint}}."""
+    fields: Dict[str, Any] = {}
+    for part in schema_str.strip().split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" not in part:
+            raise ValueError(f"Invalid schema entry '{part}'. Expected 'field:type' or 'field:type[constraint]'.")
+        name, rest = part.split(":", 1)
+        name, rest = name.strip(), rest.strip()
+        if "[" in rest:
+            type_name, constraint_str = rest.split("[", 1)
+            constraint_str = constraint_str.rstrip("]").strip()
+        else:
+            type_name, constraint_str = rest, None
+        fields[name] = {"type": type_name.strip(), "constraint": constraint_str}
+    return fields
+
+
+def _validate_annotation(fields: Dict[str, str], schema: Dict[str, Any]) -> tuple:
+    """Returns (True, '') or (False, error_message)."""
+    missing = [f for f in schema if f not in fields]
+    if missing:
+        return False, f"Missing fields: {missing}. Required: {list(schema.keys())}"
+    extra = [f for f in fields if f not in schema]
+    if extra:
+        return False, f"Unexpected fields: {extra}. Only allowed: {list(schema.keys())}"
+    for field, spec in schema.items():
+        value = str(fields[field]).strip()
+        t, constraint = spec["type"], spec["constraint"]
+        if t == "choice":
+            choices = [c.strip() for c in constraint.split(",")]
+            if value not in choices:
+                return False, f"Field '{field}': '{value}' must be one of {choices}."
+        elif t == "float":
+            try:
+                v = float(value)
+                if constraint:
+                    lo, hi = constraint.split(",")
+                    if not (float(lo) <= v <= float(hi)):
+                        return False, f"Field '{field}': {v} out of range [{lo}, {hi}]."
+            except ValueError:
+                return False, f"Field '{field}': '{value}' is not a valid float."
+        elif t == "int":
+            try:
+                v = int(value)
+                if constraint:
+                    lo, hi = constraint.split(",")
+                    if not (int(lo) <= v <= int(hi)):
+                        return False, f"Field '{field}': {v} out of range [{lo}, {hi}]."
+            except ValueError:
+                return False, f"Field '{field}': '{value}' is not a valid integer."
+        elif t == "bool":
+            if value.lower() not in ("true", "false", "1", "0", "yes", "no"):
+                return False, f"Field '{field}': '{value}' is not a valid boolean (true/false)."
+        elif t == "text":
+            pass
+        else:
+            return False, f"Unknown type '{t}' for field '{field}'."
+    return True, ""
+
+
+def _row_display(row: Dict, schema_fields: List[str]) -> str:
+    """Return a readable string of non-annotation, non-schema columns."""
+    lines = []
+    for k, v in row.items():
+        if k == "_schema" or k in schema_fields:
+            continue
+        lines.append(f"  {k}: {v}")
+    return "\n".join(lines)
+
+
+def _save_annotation_csv() -> None:
+    """Write current annotation state back to the working CSV."""
+    import csv as csv_module
+    with open(_annot_state["path"], "w", newline="", encoding="utf-8") as f:
+        writer = csv_module.DictWriter(f, fieldnames=_annot_state["fieldnames"])
+        writer.writeheader()
+        writer.writerows(_annot_state["rows"])
+
 
 # Define available tools
 @server.list_tools()
@@ -695,6 +789,57 @@ async def list_tools() -> List[types.Tool]:
                 "openWorldHint": False,
             }
         ),
+        types.Tool(
+            name="load_annotation_data",
+            description=(
+                "Load a CSV file for annotation. Creates a working copy (original is never modified), "
+                "reads the '_schema' column to determine annotation fields, and displays the first "
+                "unannotated row. Resumes from where it left off if the working copy already exists. "
+                "After calling this, use the `annotate` tool to annotate each row."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "csv_path": {
+                        "type": "string",
+                        "description": "Path to the CSV file to annotate. Must contain a '_schema' column in the first row."
+                    }
+                },
+                "required": ["csv_path"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="annotate",
+            description=(
+                "Annotate the current row. Pass each schema field as a key inside the 'annotations' object. "
+                "Validates values against the schema, saves to the working CSV, then automatically loads "
+                "the next row. When all rows are done, returns 'Annotation complete'. "
+                "If validation fails, returns an error describing the expected format — read it and retry."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "annotations": {
+                        "type": "object",
+                        "description": "Key-value pairs matching the schema fields (e.g. {\"sentiment\": \"positive\", \"confidence\": \"0.9\"})",
+                        "additionalProperties": {"type": "string"}
+                    }
+                },
+                "required": ["annotations"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        ),
     ]
 
 @server.call_tool()
@@ -703,7 +848,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
     global _target_session, _agent_introduced
 
     # These tools check Python-side state only — skip addin check
-    _skip_addin_check = {"list_sessions", "connect_session"}
+    _skip_addin_check = {"list_sessions", "connect_session", "load_annotation_data", "annotate"}
     if name not in _skip_addin_check:
         # Check if the R addin is running
         if not await check_addin_status():
@@ -1427,6 +1572,150 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             text=result.get("output", "Text inserted successfully")
         ))
         return result_contents
+
+    elif name == "load_annotation_data":
+        import csv as csv_module
+        import shutil
+
+        csv_path = arguments.get("csv_path", "").strip()
+        if not csv_path:
+            return [types.TextContent(type="text", text="Error: 'csv_path' is required.")]
+        if not os.path.exists(csv_path):
+            return [types.TextContent(type="text", text=f"Error: File not found: {csv_path}")]
+
+        # Working copy — original is never touched
+        base, ext = os.path.splitext(csv_path)
+        work_path = f"{base}_annotating{ext}"
+        if not os.path.exists(work_path):
+            shutil.copy2(csv_path, work_path)
+
+        try:
+            with open(work_path, newline="", encoding="utf-8") as f:
+                reader = csv_module.DictReader(f)
+                rows = list(reader)
+                fieldnames = list(reader.fieldnames or [])
+        except Exception as e:
+            return [types.TextContent(type="text", text=f"Error reading CSV: {e}")]
+
+        if not rows:
+            return [types.TextContent(type="text", text="Error: CSV has no data rows.")]
+        if "_schema" not in rows[0]:
+            return [types.TextContent(type="text", text=(
+                "Error: CSV must have a '_schema' column. "
+                "Put the schema string in that column's first row, e.g. "
+                "'sentiment:choice[positive,negative,neutral];confidence:float[0,1]'"
+            ))]
+
+        schema_str = rows[0].get("_schema", "").strip()
+        if not schema_str:
+            return [types.TextContent(type="text", text="Error: '_schema' column is empty in the first row.")]
+
+        try:
+            schema = _parse_annotation_schema(schema_str)
+        except ValueError as e:
+            return [types.TextContent(type="text", text=f"Error parsing schema: {e}")]
+
+        annot_fields = list(schema.keys())
+
+        # Find first unannotated row
+        start_index = None
+        for i, row in enumerate(rows):
+            if all(str(row.get(f, "")).strip() == "" for f in annot_fields):
+                start_index = i
+                break
+
+        if start_index is None:
+            return [types.TextContent(type="text", text=f"All {len(rows)} rows are already annotated. Nothing to do.")]
+
+        _annot_state["rows"] = rows
+        _annot_state["fieldnames"] = fieldnames
+        _annot_state["path"] = work_path
+        _annot_state["index"] = start_index
+        _annot_state["schema"] = schema
+        _annot_state["total"] = len(rows)
+
+        schema_display = "; ".join(
+            f"{f}: {s['type']}[{s['constraint']}]" if s["constraint"] else f"{f}: {s['type']}"
+            for f, s in schema.items()
+        )
+        row_display = _row_display(rows[start_index], annot_fields)
+        already_done = start_index
+
+        msg = (
+            f"Annotation session loaded.\n"
+            f"Working file: {work_path}\n"
+            f"Total rows: {len(rows)} | Already annotated: {already_done} | Remaining: {len(rows) - already_done}\n"
+            f"Schema: {schema_display}\n\n"
+            f"--- Row {start_index + 1}/{len(rows)} ---\n"
+            f"{row_display}\n\n"
+            f"Call `annotate` with: {annot_fields}"
+        )
+        return [types.TextContent(type="text", text=msg)]
+
+    elif name == "annotate":
+        if _annot_state["rows"] is None:
+            return [types.TextContent(type="text", text=(
+                "No annotation session active. Call `load_annotation_data` first."
+            ))]
+
+        # Accept both nested {"annotations": {...}} and flat {"field": "value", ...}
+        schema_keys = set(_annot_state["schema"].keys())
+        if "annotations" in arguments and isinstance(arguments["annotations"], dict):
+            annotations = arguments["annotations"]
+        elif schema_keys.intersection(arguments.keys()):
+            annotations = {k: v for k, v in arguments.items() if k in schema_keys}
+        else:
+            annotations = arguments.get("annotations")
+        if not isinstance(annotations, dict):
+            return [types.TextContent(type="text", text=(
+                "Error: pass annotation fields directly or nested under 'annotations'. "
+                f"Expected fields: {list(_annot_state['schema'].keys())}"
+            ))]
+
+        valid, err = _validate_annotation(annotations, _annot_state["schema"])
+        if not valid:
+            schema_display = "; ".join(
+                f"{f}: {s['type']}[{s['constraint']}]" if s["constraint"] else f"{f}: {s['type']}"
+                for f, s in _annot_state["schema"].items()
+            )
+            return [types.TextContent(type="text", text=(
+                f"Validation error: {err}\n"
+                f"Schema: {schema_display}\n"
+                "Please call `annotate` again with the correct values."
+            ))]
+
+        # Write annotation into current row
+        idx = _annot_state["index"]
+        for field, value in annotations.items():
+            _annot_state["rows"][idx][field] = value
+
+        _save_annotation_csv()
+
+        # Advance to next unannotated row
+        annot_fields = list(_annot_state["schema"].keys())
+        next_index = None
+        for i in range(idx + 1, _annot_state["total"]):
+            if all(str(_annot_state["rows"][i].get(f, "")).strip() == "" for f in annot_fields):
+                next_index = i
+                break
+
+        if next_index is None:
+            _annot_state["rows"] = None  # reset state
+            return [types.TextContent(type="text", text=(
+                f"Annotation complete. All {_annot_state['total']} rows annotated.\n"
+                f"Results saved to: {_annot_state['path']}"
+            ))]
+
+        _annot_state["index"] = next_index
+        row_display = _row_display(_annot_state["rows"][next_index], annot_fields)
+
+        msg = (
+            f"Saved row {idx + 1}. "
+            f"--- Row {next_index + 1}/{_annot_state['total']} ---\n"
+            f"{row_display}\n\n"
+            f"Call `annotate` with: {annot_fields}"
+        )
+        return [types.TextContent(type="text", text=msg)]
 
     return [types.TextContent(
         type="text",

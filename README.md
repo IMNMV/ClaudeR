@@ -43,6 +43,7 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
+- **AI-Driven Data Annotation.** Two new MCP tools (`load_annotation_data`, `annotate`) let an agent label a CSV dataset row by row without writing any code. Define annotation fields in a `_schema` column, call `data_annotation_prompt()` to get the protocol, and the agent handles the rest. The original file is never modified and sessions resume automatically if interrupted.
 - **Multi-Agent Coordination Protocol.** Built-in protocol for multiple agents sharing one RStudio session. Agents negotiate through a shared message board in the R environment, agree on a task plan, claim tasks before working, and cross-check each other's output. Load it with `multi_agent_prompt()`.
 - **`verify_references` tool.** Extracts DOIs from a manuscript's bibliography, queries the CrossRef API for each, and returns metadata (title, authors, year, journal) for comparison against manuscript claims. Non-resolving DOIs, metadata mismatches, and references without DOIs are flagged. Works standalone ("check my references") or as Pass 4 of Reviewer Zero.
 - **R Best Practices Protocol.** Built-in statistical analysis protocol covering EDA, assumption checking, model building, diagnostics, multiple-corrections, and reporting. Load it with `r_best_practices_prompt()` or tell the agent to read it.
@@ -173,6 +174,29 @@ multi_agent_prompt()
 ```
 
 You can also just tell the agents to run `ClaudeR::multi_agent_prompt()` and they will read the protocol themselves.
+
+## AI-Driven Data Annotation
+
+ClaudeR includes a purpose-built annotation workflow for labelling CSV datasets with an AI agent. The agent works through the dataset row by row using two dedicated MCP tools — no code required on the agent's end.
+
+**CSV format:** add a `_schema` column to your file and define the annotation fields in the first row using a simple type syntax:
+
+```
+text,label,confidence,_schema
+"Some text","","","label:choice[positive,negative,neutral];confidence:float[0,1]"
+"More text","","",""
+```
+
+Supported types: `choice[a,b,c]`, `float[min,max]`, `int[min,max]`, `bool`, `text`
+
+**Running an annotation session:**
+
+```r
+# Print the full protocol to give to your agent
+data_annotation_prompt()
+```
+
+Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row — the original file is never modified and sessions are automatically resumable if interrupted.
 
 ## How It Works
 
