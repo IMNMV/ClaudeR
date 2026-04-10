@@ -198,7 +198,7 @@ data_annotation_prompt()
 
 Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row — the original file is never modified and sessions are automatically resumable if interrupted.
 
-IMPORTANT: It does not clear session context per row and instead takes the full context with each annotation. This may be acceptable for your use case, but if context is NOT something you want within the annotations, then do not use this method. Session clearing will be a part of a future update.
+**Two annotation modes are available:** The default `load_annotation_data` + `annotate` flow runs inside the agent's existing conversation — context accumulates across rows, which can be useful for consistency but may introduce anchoring on long datasets. For full row isolation, use `run_annotation_job` instead — it spawns a fresh `claude` or `codex` subprocess per row so each annotation is made with zero memory of prior rows.
 
 ## How It Works
 

@@ -8,6 +8,10 @@ import tempfile
 import os
 import base64
 import uuid
+import re
+import shutil
+import subprocess
+import threading
 from typing import Any, Dict, List, Optional
 import httpx
 import sys
@@ -30,6 +34,9 @@ _agent_introduced: bool = False        # First-call introduction flag
 
 # Cache variable to store the result of the ggplot2 check
 _is_ggplot_installed = None
+
+# Annotation job state — keyed by job_id, for subprocess-per-row batch mode
+_annot_jobs: Dict[str, Any] = {}
 
 # Annotation state — persists across load_annotation_data / annotate calls
 _annot_state: Dict[str, Any] = {
@@ -244,6 +251,171 @@ async def get_agent_introduction() -> str:
     lines.append("  - These commands can return hundreds of items and fill up your context window.")
     lines.append("[End ClaudeR Agent Context]")
     return "\n".join(lines)
+
+# --- Annotation job helpers (subprocess-per-row batch mode) ---
+
+def _find_cli_path(tool: str) -> Optional[str]:
+    """Auto-detect the path for claude or codex CLI."""
+    return shutil.which(tool)
+
+
+def _build_subprocess_prompt(row: Dict, schema: Dict[str, Any], annot_fields: List[str]) -> str:
+    """Build a lean one-shot prompt for a single row annotation subprocess."""
+    field_lines = []
+    for field, spec in schema.items():
+        t, constraint = spec["type"], spec["constraint"]
+        if t == "choice":
+            field_lines.append(f"- {field}: one of [{constraint}]")
+        elif t in ("float", "int"):
+            lo, hi = constraint.split(",")
+            field_lines.append(f"- {field}: {t} between {lo} and {hi}")
+        elif t == "bool":
+            field_lines.append(f"- {field}: true or false")
+        else:
+            field_lines.append(f"- {field}: text (can be empty string \"\")")
+
+    row_data = {k: v for k, v in row.items() if k not in annot_fields and k != "_schema"}
+    row_json = json.dumps(row_data, ensure_ascii=False, indent=2)
+    field_names = list(schema.keys())
+
+    return (
+        "Annotate the following data row.\n"
+        "Return ONLY a valid JSON object — no explanation, no markdown, no code blocks.\n\n"
+        "Fields to annotate:\n"
+        + "\n".join(field_lines)
+        + f"\n\nRow:\n{row_json}\n\n"
+        f"Return a JSON object with exactly these keys: {field_names}"
+    )
+
+
+def _extract_json(text: str) -> Optional[Dict]:
+    """Extract a JSON object from model output, handling markdown code blocks."""
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    # Strip markdown fences
+    cleaned = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
+    cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE).strip()
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+    # Find first {...} block
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except Exception:
+            pass
+    return None
+
+
+def _run_subprocess_row(
+    prompt: str, tool: str, tool_path: str,
+    model: Optional[str], timeout: int
+) -> tuple:
+    """Run a single annotation subprocess. Returns (result_dict or None, raw_output, error_msg)."""
+    try:
+        if tool == "claude":
+            command = [tool_path, "-p", "--no-session-persistence"]
+            if model:
+                command.extend(["--model", model])
+            completed = subprocess.run(
+                command, input=prompt, text=True,
+                capture_output=True, timeout=timeout
+            )
+            output = completed.stdout
+
+        else:  # codex
+            last_msg_path = tempfile.mktemp(suffix=".txt")
+            command = [
+                tool_path, "exec",
+                "-c", "mcp_servers={}",
+                "--skip-git-repo-check",
+                "--output-last-message", last_msg_path,
+                "-",
+            ]
+            if model:
+                command.extend(["--model", model])
+            completed = subprocess.run(
+                command, input=prompt, text=True,
+                capture_output=True, timeout=timeout
+            )
+            if os.path.exists(last_msg_path):
+                with open(last_msg_path) as f:
+                    output = f.read()
+                os.remove(last_msg_path)
+            else:
+                output = completed.stdout
+
+        parsed = _extract_json(output)
+        if parsed is None:
+            return None, output, f"Could not parse JSON from output: {output[:300]}"
+        return parsed, output, None
+
+    except subprocess.TimeoutExpired:
+        return None, "", f"Subprocess timed out after {timeout}s"
+    except Exception as e:
+        return None, "", str(e)
+
+
+def _annotation_job_worker(
+    job_id: str, rows: List[Dict], fieldnames: List[str],
+    unannotated_indices: List[int], schema: Dict[str, Any],
+    work_path: str, tool: str, tool_path: str,
+    model: Optional[str], timeout: int
+) -> None:
+    """Background thread: annotate each row with a fresh subprocess."""
+    import csv as csv_module
+
+    annot_fields = list(schema.keys())
+    job = _annot_jobs[job_id]
+    job["status"] = "running"
+
+    for row_idx in unannotated_indices:
+        if job.get("cancelled"):
+            job["status"] = "cancelled"
+            return
+
+        row = rows[row_idx]
+        prompt = _build_subprocess_prompt(row, schema, annot_fields)
+        result, raw, err = _run_subprocess_row(prompt, tool, tool_path, model, timeout)
+
+        if err or result is None:
+            job["errors"].append({
+                "row_id": row.get("row_id", row_idx),
+                "error": err or "No result"
+            })
+            job["done"] += 1
+            continue
+
+        valid, validation_err = _validate_annotation(
+            {k: str(v) for k, v in result.items()}, schema
+        )
+        if not valid:
+            job["errors"].append({
+                "row_id": row.get("row_id", row_idx),
+                "error": f"Validation failed: {validation_err}"
+            })
+            job["done"] += 1
+            continue
+
+        for field in annot_fields:
+            if field in result:
+                rows[row_idx][field] = result[field]
+
+        # Save immediately after each row
+        with open(work_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv_module.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        job["done"] += 1
+
+    job["status"] = "complete"
+
 
 # --- Annotation helpers ---
 
@@ -790,6 +962,65 @@ async def list_tools() -> List[types.Tool]:
             }
         ),
         types.Tool(
+            name="run_annotation_job",
+            description=(
+                "Annotate a CSV dataset using a fresh subprocess per row — no context bleed between rows. "
+                "Each row is scored by a brand-new claude or codex process that sees only that row. "
+                "Runs in the background; returns a job ID immediately. "
+                "Use get_annotation_job_status to check progress. "
+                "The original CSV is never modified; results go to {name}_annotating.csv. "
+                "Resumable: rows already annotated are skipped automatically."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "csv_path": {
+                        "type": "string",
+                        "description": "Path to the CSV file. Must have a '_schema' column in the first row."
+                    },
+                    "tool": {
+                        "type": "string",
+                        "description": "CLI tool to use: 'claude' (default) or 'codex'."
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Model name to pass to the CLI (optional, uses CLI default if omitted)."
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "description": "Seconds to wait per row before giving up (default: 60)."
+                    }
+                },
+                "required": ["csv_path"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="get_annotation_job_status",
+            description="Check the status of a running or completed annotation job started with run_annotation_job.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "Job ID returned by run_annotation_job."
+                    }
+                },
+                "required": ["job_id"]
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
             name="load_annotation_data",
             description=(
                 "Load a CSV file for annotation. Creates a working copy (original is never modified), "
@@ -848,7 +1079,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
     global _target_session, _agent_introduced
 
     # These tools check Python-side state only — skip addin check
-    _skip_addin_check = {"list_sessions", "connect_session", "load_annotation_data", "annotate"}
+    _skip_addin_check = {"list_sessions", "connect_session", "load_annotation_data", "annotate", "run_annotation_job", "get_annotation_job_status"}
     if name not in _skip_addin_check:
         # Check if the R addin is running
         if not await check_addin_status():
@@ -1572,6 +1803,121 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             text=result.get("output", "Text inserted successfully")
         ))
         return result_contents
+
+    elif name == "run_annotation_job":
+        import csv as csv_module
+
+        csv_path = arguments.get("csv_path", "").strip()
+        tool = arguments.get("tool", "claude").strip().lower()
+        model = arguments.get("model") or None
+        timeout = int(arguments.get("timeout", 60))
+
+        if not csv_path:
+            return [types.TextContent(type="text", text="Error: 'csv_path' is required.")]
+        if not os.path.exists(csv_path):
+            return [types.TextContent(type="text", text=f"Error: File not found: {csv_path}")]
+        if tool not in ("claude", "codex"):
+            return [types.TextContent(type="text", text="Error: 'tool' must be 'claude' or 'codex'.")]
+
+        tool_path = _find_cli_path(tool)
+        if not tool_path:
+            return [types.TextContent(type="text", text=(
+                f"Error: '{tool}' CLI not found on PATH. "
+                f"Install it or make sure it's accessible from this environment."
+            ))]
+
+        # Working copy
+        base, ext = os.path.splitext(csv_path)
+        work_path = f"{base}_annotating{ext}"
+        if not os.path.exists(work_path):
+            shutil.copy2(csv_path, work_path)
+
+        try:
+            with open(work_path, newline="", encoding="utf-8") as f:
+                reader = csv_module.DictReader(f)
+                rows = list(reader)
+                fieldnames = list(reader.fieldnames or [])
+        except Exception as e:
+            return [types.TextContent(type="text", text=f"Error reading CSV: {e}")]
+
+        if not rows:
+            return [types.TextContent(type="text", text="Error: CSV has no data rows.")]
+        if "_schema" not in rows[0]:
+            return [types.TextContent(type="text", text="Error: CSV must have a '_schema' column.")]
+
+        schema_str = rows[0].get("_schema", "").strip()
+        if not schema_str:
+            return [types.TextContent(type="text", text="Error: '_schema' column is empty.")]
+
+        try:
+            schema = _parse_annotation_schema(schema_str)
+        except ValueError as e:
+            return [types.TextContent(type="text", text=f"Error parsing schema: {e}")]
+
+        annot_fields = list(schema.keys())
+        unannotated = [
+            i for i, r in enumerate(rows)
+            if all(str(r.get(f, "")).strip() == "" for f in annot_fields)
+        ]
+
+        if not unannotated:
+            return [types.TextContent(type="text", text=f"All {len(rows)} rows already annotated.")]
+
+        job_id = f"annot-{uuid.uuid4().hex[:8]}"
+        _annot_jobs[job_id] = {
+            "status": "starting",
+            "total": len(unannotated),
+            "done": 0,
+            "errors": [],
+            "work_path": work_path,
+            "tool": tool,
+            "cancelled": False,
+        }
+
+        t = threading.Thread(
+            target=_annotation_job_worker,
+            args=(job_id, rows, fieldnames, unannotated, schema, work_path, tool, tool_path, model, timeout),
+            daemon=True
+        )
+        t.start()
+
+        return [types.TextContent(type="text", text=(
+            f"Annotation job started.\n"
+            f"Job ID: {job_id}\n"
+            f"Tool: {tool} ({tool_path})\n"
+            f"Rows to annotate: {len(unannotated)} of {len(rows)}\n"
+            f"Working file: {work_path}\n\n"
+            f"Use get_annotation_job_status(job_id='{job_id}') to check progress."
+        ))]
+
+    elif name == "get_annotation_job_status":
+        job_id = arguments.get("job_id", "").strip()
+        if not job_id:
+            return [types.TextContent(type="text", text="Error: 'job_id' is required.")]
+        if job_id not in _annot_jobs:
+            return [types.TextContent(type="text", text=f"No job found with ID: {job_id}")]
+
+        job = _annot_jobs[job_id]
+        done = job["done"]
+        total = job["total"]
+        pct = round(100 * done / total) if total else 0
+        errors = job["errors"]
+
+        lines = [
+            f"Job: {job_id}",
+            f"Status: {job['status']}",
+            f"Progress: {done}/{total} rows ({pct}%)",
+            f"Tool: {job['tool']}",
+            f"Output: {job['work_path']}",
+        ]
+        if errors:
+            lines.append(f"Errors ({len(errors)}):")
+            for e in errors[-5:]:  # show last 5
+                lines.append(f"  row {e['row_id']}: {e['error']}")
+            if len(errors) > 5:
+                lines.append(f"  ... and {len(errors) - 5} more")
+
+        return [types.TextContent(type="text", text="\n".join(lines))]
 
     elif name == "load_annotation_data":
         import csv as csv_module
