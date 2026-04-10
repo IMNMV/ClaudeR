@@ -119,6 +119,10 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`verify_references`**: Verify academic references by extracting DOIs and checking them against the CrossRef API. Returns metadata (title, authors, year, journal) for comparison. References without DOIs are flagged for manual web search.
 - **`create_task_list`**: Generate a task list based on your prompt to prevent omissions in long-context tasks.
 - **`update_task_status`**: Track progress for each task in the generated list.
+- **`load_annotation_data`**: Load a CSV for annotation. Creates a working copy, parses the `_schema` column, and displays the first unannotated row. Resumable if interrupted.
+- **`annotate`**: Annotate the current row, validate against the schema, save immediately, and auto-load the next row.
+- **`run_annotation_job`**: Annotate a full CSV in the background using a fresh subprocess per row — no context bleed between rows. Supports `claude` and `codex`.
+- **`get_annotation_job_status`**: Check progress of a running or completed annotation job.
 
 With these tools, you can:
 
@@ -134,6 +138,7 @@ With these tools, you can:
 - **Dynamic Summaries**: Summaries can dynamically pull results from objects and data frames to safeguard against hallucinations.
 - **Quarto Renders**: The AI can create and render Quarto presentations. For best results, ask for a .qmd file and for it to be rendered in HTML when it's finished.
 - **Reviewer Zero**: A built-in protocol for automated academic auditing. The AI reads a manuscript block-by-block, extracts every statistical claim into a registry, verifies its extraction, then recomputes each claim against the author's R code. Run `reviewer_zero_prompt()` for the full protocol. See the [Reviewer Zero](#reviewer-zero-automated-academic-audits) section below.
+- **Data Annotation**: Label CSV datasets row by row using the built-in annotation tools. Define the annotation schema in a `_schema` column, run `data_annotation_prompt()` to get the protocol, and annotate interactively or in fully isolated subprocess-per-row mode with `run_annotation_job`.
 
 ## Reviewer Zero: Automated Academic Audits
 
