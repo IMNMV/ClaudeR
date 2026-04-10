@@ -198,6 +198,8 @@ data_annotation_prompt()
 
 Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row — the original file is never modified and sessions are automatically resumable if interrupted.
 
+IMPORTANT: It does not clear session context per row and instead takes the full context with each annotation. This may be acceptable for your use case, but if context is NOT something you want within the annotations, then do not use this method. Session clearing will be a part of a future update.
+
 ## How It Works
 
 ClaudeR uses the **Model Context Protocol (MCP)** to create a bidirectional connection between an AI assistant and your RStudio environment. MCP is an open protocol from Anthropic that allows the AI to safely interact with local tools and data.
