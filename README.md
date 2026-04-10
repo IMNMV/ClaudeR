@@ -2,7 +2,7 @@
   <img src="assets/ClaudeR_logo.png" alt="ClaudeR Logo" width="150"/>
   <h1>ClaudeR - The Modern Researcher's Toolkit</h1>
   <p>
-    <b>Connect RStudio to Claude Code, Codex, Gemini CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, and automated manuscript auditing.</b>
+    <b>Connect RStudio to Claude Code, Codex, Gemini CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, automated manuscript auditing, and data annotation.</b>
   </p>
   <p>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
