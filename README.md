@@ -205,6 +205,33 @@ Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read th
 
 **Two annotation modes are available:** The default `load_annotation_data` + `annotate` flow runs inside the agent's existing conversation — context accumulates across rows, which can be useful for consistency but may introduce anchoring on long datasets. For full row isolation, use `run_annotation_job` instead — it spawns a fresh `claude` or `codex` subprocess per row so each annotation is made with zero memory of prior rows.
 
+**Mode 1 — Full context (interactive):**
+```
+You are annotating a dataset. Your only job is to call annotation tools — do not write code or use any other tools.
+
+Step 1: Call load_annotation_data with:
+- csv_path: /path/to/your/file.csv
+
+Step 2: For each row displayed, call annotate with the fields defined in the schema.
+
+Step 3: After each annotate call, the next row loads automatically. Keep annotating until you see "Annotation complete."
+
+If you get a validation error, read it carefully and call annotate again with corrected values.
+```
+
+**Mode 2 — Isolated context (subprocess per row):**
+```
+You are annotating a dataset.
+
+Step 1: Call run_annotation_job with:
+- csv_path: /path/to/your/file.csv
+- tool: claude
+
+Step 2: Once you have the job ID, periodically call get_annotation_job_status with that ID to check progress.
+
+That's it. The annotation runs automatically in the background — do not call any other tools unless checking status.
+```
+
 ## How It Works
 
 ClaudeR uses the **Model Context Protocol (MCP)** to create a bidirectional connection between an AI assistant and your RStudio environment. MCP is an open protocol from Anthropic that allows the AI to safely interact with local tools and data.
