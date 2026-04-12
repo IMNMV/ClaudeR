@@ -1921,7 +1921,6 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
 
     elif name == "load_annotation_data":
         import csv as csv_module
-        import shutil
 
         csv_path = arguments.get("csv_path", "").strip()
         if not csv_path:
