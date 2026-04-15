@@ -182,7 +182,7 @@ You can also just tell the agents to run `ClaudeR::multi_agent_prompt()` and the
 
 ## AI-Driven Data Annotation
 
-ClaudeR includes a purpose-built annotation workflow for labelling CSV datasets with an AI agent. The agent works through the dataset row by row using two dedicated MCP tools — no code required on the agent's end.
+ClaudeR includes a purpose-built annotation workflow for labelling CSV datasets with an AI agent. The agent works through the dataset row by row using two dedicated MCP tools with no code required on the agent's end.
 
 **CSV format:** add a `_schema` column to your file and define the annotation fields in the first row using a simple type syntax:
 
@@ -201,9 +201,9 @@ Supported types: `choice[a,b,c]`, `float[min,max]`, `int[min,max]`, `bool`, `tex
 data_annotation_prompt()
 ```
 
-Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row — the original file is never modified and sessions are automatically resumable if interrupted.
+Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row. The original file is never modified and sessions are automatically resumable if interrupted.
 
-**Two annotation modes are available:** The default `load_annotation_data` + `annotate` flow runs inside the agent's existing conversation — context accumulates across rows, which can be useful for consistency but may introduce anchoring on long datasets. For full row isolation, use `run_annotation_job` instead — it spawns a fresh `claude` or `codex` subprocess per row so each annotation is made with zero memory of prior rows.
+**Two annotation modes are available:** The default `load_annotation_data` + `annotate` flow runs inside the agent's existing conversation where context accumulates across rows, which can be useful for consistency but may introduce anchoring on long datasets. For full row isolation, use `run_annotation_job` instead — it spawns a fresh `claude` or `codex` subprocess per row so each annotation is made with zero memory of prior rows.
 
 **Mode 1 — Full context (interactive):**
 ```
