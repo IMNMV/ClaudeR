@@ -1021,6 +1021,26 @@ async def list_tools() -> List[types.Tool]:
             }
         ),
         types.Tool(
+            name="cancel_annotation_job",
+            description="Cancel a running annotation job. The current row finishes before stopping. Already-saved rows are kept and the job is resumable.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "Job ID returned by run_annotation_job."
+                    }
+                },
+                "required": ["job_id"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
             name="load_annotation_data",
             description=(
                 "Load a CSV file for annotation. Creates a working copy (original is never modified), "
@@ -1079,7 +1099,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
     global _target_session, _agent_introduced
 
     # These tools check Python-side state only — skip addin check
-    _skip_addin_check = {"list_sessions", "connect_session", "load_annotation_data", "annotate", "run_annotation_job", "get_annotation_job_status"}
+    _skip_addin_check = {"list_sessions", "connect_session", "load_annotation_data", "annotate", "run_annotation_job", "get_annotation_job_status", "cancel_annotation_job"}
     if name not in _skip_addin_check:
         # Check if the R addin is running
         if not await check_addin_status():
@@ -1803,6 +1823,23 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             text=result.get("output", "Text inserted successfully")
         ))
         return result_contents
+
+    elif name == "cancel_annotation_job":
+        job_id = arguments.get("job_id", "").strip()
+        if not job_id:
+            return [types.TextContent(type="text", text="Error: 'job_id' is required.")]
+        if job_id not in _annot_jobs:
+            return [types.TextContent(type="text", text=f"No job found with ID: {job_id}")]
+        job = _annot_jobs[job_id]
+        if job["status"] == "complete":
+            return [types.TextContent(type="text", text=f"Job {job_id} already completed ({job['done']}/{job['total']} rows).")]
+        job["cancelled"] = True
+        return [types.TextContent(type="text", text=(
+            f"Cancellation requested for job {job_id}. "
+            f"Will stop after the current row finishes. "
+            f"{job['done']}/{job['total']} rows saved so far. "
+            f"Resume anytime with run_annotation_job using the same csv_path."
+        ))]
 
     elif name == "run_annotation_job":
         import csv as csv_module
