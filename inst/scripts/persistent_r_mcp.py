@@ -319,7 +319,7 @@ def _run_subprocess_row(
     """Run a single annotation subprocess. Returns (result_dict or None, raw_output, error_msg)."""
     try:
         if tool == "claude":
-            command = [tool_path, "-p", "--no-session-persistence"]
+            command = [tool_path, "-p", "--bare", "--no-session-persistence"]
             if model:
                 command.extend(["--model", model])
             completed = subprocess.run(
