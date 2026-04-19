@@ -43,7 +43,7 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
-- **AI-Driven Data Annotation.** Two new MCP tools (`load_annotation_data`, `annotate`) let an agent label a CSV dataset row by row without writing any code. Define annotation fields in a `_schema` column, call `data_annotation_prompt()` to get the protocol, and the agent handles the rest. The original file is never modified and sessions resume automatically if interrupted.
+- **AI-Driven Data Annotation.** Five MCP tools (`load_annotation_data`, `annotate`, `run_annotation_job`, `get_annotation_job_status`, `cancel_annotation_job`) let an agent label a CSV dataset row by row without writing any code. Two modes: interactive (context accumulates across rows) or subprocess-per-row via `run_annotation_job` for full row isolation using `claude` or `codex`. Codex jobs accept a `reasoning_effort` parameter. The original file is never modified and sessions resume automatically if interrupted.
 - **Multi-Agent Coordination Protocol.** Built-in protocol for multiple agents sharing one RStudio session. Agents negotiate through a shared message board in the R environment, agree on a task plan, claim tasks before working, and cross-check each other's output. Load it with `multi_agent_prompt()`.
 - **`verify_references` tool.** Extracts DOIs from a manuscript's bibliography, queries the CrossRef API for each, and returns metadata (title, authors, year, journal) for comparison against manuscript claims. Non-resolving DOIs, metadata mismatches, and references without DOIs are flagged. Works standalone ("check my references") or as Pass 4 of Reviewer Zero.
 - **R Best Practices Protocol.** Built-in statistical analysis protocol covering EDA, assumption checking, model building, diagnostics, multiple-corrections, and reporting. Load it with `r_best_practices_prompt()` or tell the agent to read it.
@@ -121,8 +121,9 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`update_task_status`**: Track progress for each task in the generated list.
 - **`load_annotation_data`**: Load a CSV for annotation. Creates a working copy, parses the `_schema` column, and displays the first unannotated row. Resumable if interrupted.
 - **`annotate`**: Annotate the current row, validate against the schema, save immediately, and auto-load the next row.
-- **`run_annotation_job`**: Annotate a full CSV in the background using a fresh subprocess per row — no context bleed between rows. Supports `claude` and `codex`.
+- **`run_annotation_job`**: Annotate a full CSV in the background using a fresh subprocess per row with no context bleed between rows. Supports `claude` and `codex`. Accepts a `reasoning_effort` parameter (`low`, `medium`, `high`) when using Codex.
 - **`get_annotation_job_status`**: Check progress of a running or completed annotation job.
+- **`cancel_annotation_job`**: Cancel a running background annotation job. Rows completed before cancellation are preserved in the output file.
 
 With these tools, you can:
 
@@ -203,11 +204,11 @@ data_annotation_prompt()
 
 Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row. The original file is never modified and sessions are automatically resumable if interrupted.
 
-**Two annotation modes are available:** The default `load_annotation_data` + `annotate` flow runs inside the agent's existing conversation where context accumulates across rows, which can be useful for consistency but may introduce anchoring on long datasets. For full row isolation, use `run_annotation_job` instead — it spawns a fresh `claude` or `codex` subprocess per row so each annotation is made with zero memory of prior rows.
+**Two annotation modes are available:** The default `load_annotation_data` + `annotate` flow runs inside the agent's existing conversation where context accumulates across rows, which can be useful for consistency but may introduce anchoring on long datasets. For full row isolation, use `run_annotation_job` instead: it spawns a fresh `claude` or `codex` subprocess per row so each annotation is made with zero memory of prior rows.
 
-**Mode 1 — Full context (interactive):**
+**Mode 1: Full context (interactive):**
 ```
-You are annotating a dataset. Your only job is to call annotation tools — do not write code or use any other tools.
+You are annotating a dataset. Your only job is to call annotation tools. Do not write code or use any other tools.
 
 Step 1: Call load_annotation_data with:
 - csv_path: /path/to/your/file.csv
@@ -219,17 +220,20 @@ Step 3: After each annotate call, the next row loads automatically. Keep annotat
 If you get a validation error, read it carefully and call annotate again with corrected values.
 ```
 
-**Mode 2 — Isolated context (subprocess per row):**
+**Mode 2: Isolated context (subprocess per row):**
 ```
 You are annotating a dataset.
 
 Step 1: Call run_annotation_job with:
 - csv_path: /path/to/your/file.csv
-- tool: claude
+- tool: claude          # or "codex"
+- reasoning_effort: high  # codex only: low | medium | high
 
 Step 2: Once you have the job ID, periodically call get_annotation_job_status with that ID to check progress.
 
-That's it. The annotation runs automatically in the background — do not call any other tools unless checking status.
+To stop early, call cancel_annotation_job with the job ID. Rows already annotated are preserved.
+
+That's it. The annotation runs automatically in the background. Do not call any other tools unless checking status.
 ```
 
 ## How It Works

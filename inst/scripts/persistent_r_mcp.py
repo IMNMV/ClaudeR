@@ -314,7 +314,7 @@ def _extract_json(text: str) -> Optional[Dict]:
 
 def _run_subprocess_row(
     prompt: str, tool: str, tool_path: str,
-    model: Optional[str], timeout: int
+    model: Optional[str], timeout: int, reasoning_effort: str = "high"
 ) -> tuple:
     """Run a single annotation subprocess. Returns (result_dict or None, raw_output, error_msg)."""
     try:
@@ -333,6 +333,7 @@ def _run_subprocess_row(
             command = [
                 tool_path, "exec",
                 "-c", "mcp_servers={}",
+                "-c", f"model_reasoning_effort={reasoning_effort}",
                 "--skip-git-repo-check",
                 "--output-last-message", last_msg_path,
                 "-",
@@ -365,7 +366,7 @@ def _annotation_job_worker(
     job_id: str, rows: List[Dict], fieldnames: List[str],
     unannotated_indices: List[int], schema: Dict[str, Any],
     work_path: str, tool: str, tool_path: str,
-    model: Optional[str], timeout: int
+    model: Optional[str], timeout: int, reasoning_effort: str = "high"
 ) -> None:
     """Background thread: annotate each row with a fresh subprocess."""
     import csv as csv_module
@@ -381,7 +382,7 @@ def _annotation_job_worker(
 
         row = rows[row_idx]
         prompt = _build_subprocess_prompt(row, schema, annot_fields)
-        result, raw, err = _run_subprocess_row(prompt, tool, tool_path, model, timeout)
+        result, raw, err = _run_subprocess_row(prompt, tool, tool_path, model, timeout, reasoning_effort)
 
         if err or result is None:
             job["errors"].append({
@@ -989,6 +990,10 @@ async def list_tools() -> List[types.Tool]:
                     "timeout": {
                         "type": "number",
                         "description": "Seconds to wait per row before giving up (default: 60)."
+                    },
+                    "reasoning_effort": {
+                        "type": "string",
+                        "description": "Codex only: reasoning effort level — 'low', 'medium', 'high' (default), or 'none'."
                     }
                 },
                 "required": ["csv_path"]
@@ -1848,6 +1853,7 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
         tool = arguments.get("tool", "claude").strip().lower()
         model = arguments.get("model") or None
         timeout = int(arguments.get("timeout", 60))
+        reasoning_effort = arguments.get("reasoning_effort", "high")
 
         if not csv_path:
             return [types.TextContent(type="text", text="Error: 'csv_path' is required.")]
@@ -1913,7 +1919,7 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
 
         t = threading.Thread(
             target=_annotation_job_worker,
-            args=(job_id, rows, fieldnames, unannotated, schema, work_path, tool, tool_path, model, timeout),
+            args=(job_id, rows, fieldnames, unannotated, schema, work_path, tool, tool_path, model, timeout, reasoning_effort),
             daemon=True
         )
         t.start()
