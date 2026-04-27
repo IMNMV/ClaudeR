@@ -2,7 +2,7 @@
   <img src="assets/ClaudeR_logo.png" alt="ClaudeR Logo" width="150"/>
   <h1>ClaudeR - The Modern Researcher's Toolkit</h1>
   <p>
-    <b>Connect RStudio to Claude Code, Codex, Gemini CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, automated manuscript auditing, and data annotation.</b>
+    <b>Connect RStudio to Claude Code, Codex, Qwen Code, Gemini CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, automated manuscript auditing, and data annotation.</b>
   </p>
   <p>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
@@ -18,7 +18,7 @@
 
 ---
 
-**ClaudeR** is an R package that forges a direct link between RStudio and MCP configured LLM agents like Claude Code or Codex. This allows interactive coding sessions where the agent can execute code in your active RStudio environment so it can see the executed code and any generated plots in real-time. If you need help editing a script, a quick analysis done, or an LLM to audit your statistical claims against any manuscript before submission: ClaudeR has got your back.
+**ClaudeR** is an R package that forges a direct link between RStudio and MCP configured LLM agents like Claude Code, Codex, or Qwen Code. This allows interactive coding sessions where the agent can execute code in your active RStudio environment so it can see the executed code and any generated plots in real-time. If you need help editing a script, a quick analysis done, or an LLM to audit your statistical claims against any manuscript before submission: ClaudeR has got your back.
 
 This package, additionally, allows multiple agents to work on one script, or it can make multiple RStudio windows siloed so multiple agents can operate independently on different datasets. It's also compatible with Cursor and any service that support MCP servers.
 
@@ -43,7 +43,7 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
-- **AI-Driven Data Annotation.** Five MCP tools (`load_annotation_data`, `annotate`, `run_annotation_job`, `get_annotation_job_status`, `cancel_annotation_job`) let an agent label a CSV dataset row by row without writing any code. Two modes: interactive (context accumulates across rows) or subprocess-per-row via `run_annotation_job` for full row isolation using `claude` or `codex`. Codex jobs accept a `reasoning_effort` parameter. The original file is never modified and sessions resume automatically if interrupted.
+- **AI-Driven Data Annotation.** Five MCP tools (`load_annotation_data`, `annotate`, `run_annotation_job`, `get_annotation_job_status`, `cancel_annotation_job`) let an agent label a CSV dataset row by row without writing any code. Two modes: interactive (context accumulates across rows) or subprocess-per-row via `run_annotation_job` for full row isolation using `claude`, `codex`, or `qwen`. Codex jobs accept a `reasoning_effort` parameter. The original file is never modified and sessions resume automatically if interrupted.
 - **Multi-Agent Coordination Protocol.** Built-in protocol for multiple agents sharing one RStudio session. Agents negotiate through a shared message board in the R environment, agree on a task plan, claim tasks before working, and cross-check each other's output. Load it with `multi_agent_prompt()`.
 - **`verify_references` tool.** Extracts DOIs from a manuscript's bibliography, queries the CrossRef API for each, and returns metadata (title, authors, year, journal) for comparison against manuscript claims. Non-resolving DOIs, metadata mismatches, and references without DOIs are flagged. Works standalone ("check my references") or as Pass 4 of Reviewer Zero.
 - **R Best Practices Protocol.** Built-in statistical analysis protocol covering EDA, assumption checking, model building, diagnostics, multiple-corrections, and reporting. Load it with `r_best_practices_prompt()` or tell the agent to read it.
@@ -57,7 +57,7 @@ claudeAddin()
 - **Export clean script.** Click "Export Clean Script" in the Shiny addin to strip all timestamps, agent labels, and log headers from a session log, producing a runnable `.R` file with just the code. Error blocks are preserved as comments. Also available programmatically via `export_log_as_script()`.
 - **PyPI package (`clauder-mcp`).** The Python MCP bridge is now available as a standalone package on PyPI. Run it with `uvx clauder-mcp` for zero-config setup with no Python path or pip install needed. The installers (`install_cli()` and `install_clauder()`) default to uvx, with a `use_uvx = FALSE` fallback for legacy setups.
 - **`read_file` tool.** Agents can now read any text file from disk (.R, .qmd, .csv, .log, etc.) without it being open in RStudio. Enables session continuity workflows: point an agent at a previous log file and tell it to pick up where the last session left off.
-- **Codex CLI support.** `install_cli(tools = "codex")` generates the setup command for OpenAI Codex. Codex joins Claude Code and Gemini as a supported CLI agent.
+- **Codex + Qwen CLI support.** `install_cli(tools = "codex")` and `install_cli(tools = "qwen")` generate setup commands for OpenAI Codex and Qwen Code. Both join Claude Code and Gemini as supported CLI agents.
 - **Multi-agent orchestration.** Run multiple AI agents on the same R session or spread them across separate RStudio windows. Each agent gets a unique ID on startup. Console output, log files, and execution history are all attributed per agent, so you always know who did what. On its very first tool call, each agent receives a context briefing with its own ID, any other agents active on the session, and the log file path, giving it full awareness of the shared environment without any manual setup. Agents can call `get_session_history` to review what other agents have done, or read the shared log file directly. The Shiny viewer tracks connected agents in real-time.
 - **Session discovery.** Each RStudio session writes a discovery file to `~/.claude_r_sessions/` on startup. AI agents find sessions automatically with no hardcoded ports. Name your sessions (e.g. "analysis", "modeling") and run them on different ports. When multiple sessions exist, agents automatically route to the session named "default". Non-default agents should call `connect_session` to bind to their target session. Single-session setups work with zero config.
 - **Redesigned Shiny viewer.** Cleaner UI with grouped panels for Session, Agents, Logging, and Advanced settings. Shows connected agents and execution count in real-time. Click the `?` button for a built-in guide on multi-session setup and agent identity.
@@ -121,7 +121,7 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`update_task_status`**: Track progress for each task in the generated list.
 - **`load_annotation_data`**: Load a CSV for annotation. Creates a working copy, parses the `_schema` column, and displays the first unannotated row. Resumable if interrupted.
 - **`annotate`**: Annotate the current row, validate against the schema, save immediately, and auto-load the next row.
-- **`run_annotation_job`**: Annotate a full CSV in the background using a fresh subprocess per row with no context bleed between rows. Supports `claude` and `codex`. Accepts a `reasoning_effort` parameter (`low`, `medium`, `high`) when using Codex.
+- **`run_annotation_job`**: Annotate a full CSV in the background using a fresh subprocess per row with no context bleed between rows. Supports `claude`, `codex`, and `qwen`. Accepts a `reasoning_effort` parameter (`low`, `medium`, `high`) when using Codex.
 - **`get_annotation_job_status`**: Check progress of a running or completed annotation job.
 - **`cancel_annotation_job`**: Cancel a running background annotation job. Rows completed before cancellation are preserved in the output file.
 
@@ -131,7 +131,7 @@ With these tools, you can:
 - **Feedback & Assistance**: Get explanations of your R scripts or request edits at specific lines.
 - **Visualization**: The AI can generate, view, and refine plots and visualizations.
 - **Data Analysis**: Let the AI analyze your datasets and iteratively provide insights.
-- **Multi-Agent Workflows**: Run Claude Desktop, Claude Code, and Gemini CLI on the same R session simultaneously. Each agent is uniquely identified, and they can see each other's work through shared history and log files.
+- **Multi-Agent Workflows**: Run Claude Desktop, Claude Code, Codex, Qwen Code, and Gemini CLI on the same R session simultaneously. Each agent is uniquely identified, and they can see each other's work through shared history and log files.
 - **Long-Running Analysis**: Async execution handles model fitting, simulations, and large data processing without timing out.
 - **Code Logging**: Save all code executed by the AI to log files for future reference. Every entry is tagged with the agent that ran it.
 - **Console Printing**: Print the AI's code to the console before execution.
@@ -204,7 +204,7 @@ data_annotation_prompt()
 
 Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row. The original file is never modified and sessions are automatically resumable if interrupted.
 
-**Two annotation modes are available:** The default `load_annotation_data` + `annotate` flow runs inside the agent's existing conversation where context accumulates across rows, which can be useful for consistency but may introduce anchoring on long datasets. For full row isolation, use `run_annotation_job` instead: it spawns a fresh `claude` or `codex` subprocess per row so each annotation is made with zero memory of prior rows.
+**Two annotation modes are available:** The default `load_annotation_data` + `annotate` flow runs inside the agent's existing conversation where context accumulates across rows, which can be useful for consistency but may introduce anchoring on long datasets. For full row isolation, use `run_annotation_job` instead: it spawns a fresh `claude`, `codex`, or `qwen` subprocess per row so each annotation is made with zero memory of prior rows.
 
 **Mode 1: Full context (interactive):**
 ```
@@ -226,7 +226,7 @@ You are annotating a dataset.
 
 Step 1: Call run_annotation_job with:
 - csv_path: /path/to/your/file.csv
-- tool: claude          # or "codex"
+- tool: claude          # or "codex" / "qwen"
 - reasoning_effort: high  # codex only: low | medium | high
 
 Step 2: Once you have the job ID, periodically call get_annotation_job_status with that ID to check progress.
@@ -309,7 +309,7 @@ library(ClaudeR)
 install_clauder(use_uvx = FALSE, python_path = "/path/to/your/python")
 ```
 
-#### Option B: For CLI Tools (Claude Code / Codex / Gemini)
+#### Option B: For CLI Tools (Claude Code / Codex / Qwen / Gemini)
 
 This non-interactive function generates the exact command or JSON configuration needed for your CLI tool.
 
@@ -322,6 +322,9 @@ install_cli(tools = "claude")
 # For OpenAI Codex CLI
 install_cli(tools = "codex")
 
+# For Qwen Code CLI
+install_cli(tools = "qwen")
+
 # For Google Gemini CLI
 install_cli(tools = "gemini")
 ```
@@ -333,7 +336,7 @@ install_cli(tools = "claude", use_uvx = FALSE, python_path = "/path/to/my/python
 ```
 
 After running the function, you must **manually apply the configuration**:
-- **For Claude / Codex**: Copy the command printed in the R console and run it in your terminal.
+- **For Claude / Codex / Qwen**: Copy the command printed in the R console and run it in your terminal.
 - **For Gemini**: Copy the generated JSON and manually add it to your `gemini.json` settings file.
 
 After setup, **quit and restart** any active Desktop Apps or terminal sessions for the new settings to load.
@@ -358,7 +361,7 @@ The ClaudeR add-in will appear in your RStudio Viewer pane. Click **"Start Serve
 ### Part 2: In Your AI Tool
 
 - **For Desktop Apps**: Open the Claude Desktop App or Cursor and begin your session.
-- **For CLI Tools**: Open your terminal and use the `claude` or `gemini` commands to start interacting with your AI assistant.
+- **For CLI Tools**: Open your terminal and use the `claude`, `codex`, `qwen`, or `gemini` commands to start interacting with your AI assistant.
 
 > Note: You can regain console/active document control by clicking the stop button in the RStudio console. This closes the Shiny UI but the MCP server keeps running in the background and your AI agents stay connected. Re-run `claudeAddin()` to bring the viewer pane back with the same server state (port, session name, execution count). To fully stop the server, click **"Stop Server"** in the UI before closing.
 

@@ -4,33 +4,36 @@
 \alias{install_cli}
 \title{Install and Set Up ClaudeR for CLI Tools}
 \usage{
-install_cli(tools = "claude", python_path = NULL, ...)
+install_cli(tools = "claude", use_uvx = TRUE, python_path = NULL, ...)
 }
 \arguments{
 \item{tools}{A character vector specifying which CLI tools to configure.
-Can be `"claude"`, `"gemini"`, or `c("claude", "gemini")`.}
+Can be `"claude"`, `"codex"`, `"qwen"`, `"gemini"`, or a combination like
+`c("claude", "codex", "qwen")`.}
+
+\item{use_uvx}{Logical. If `TRUE` (the default), generates commands using
+`uvx clauder-mcp` which handles Python dependencies automatically. If
+`FALSE`, falls back to the legacy method of finding a Python executable
+and pointing to the bundled script.}
 
 \item{python_path}{Optional. A character string specifying the absolute path
-to the Python executable to use. If `NULL` (the default), the script will
-attempt to find a system Python on the PATH. **This is the recommended
-argument for users with specific Conda or virtual environments.**}
+to the Python executable to use. Only used when `use_uvx = FALSE`.}
 
 \item{...}{Additional arguments passed to `install.packages` for any
 missing R dependencies.}
 }
 \description{
 An installer that configures ClaudeR to be used with command-line
-  AI tools like the Claude Code CLI and Google Gemini CLI.
+  AI tools like the Claude Code CLI, OpenAI Codex CLI, Qwen Code CLI,
+  and Google Gemini CLI.
 
-  It follows a simple, non-interactive setup process. It will attempt to
-  find a system Python automatically, or you can provide a specific path for
-  custom environments (like Conda).
+  By default, it uses `uvx` to run the `clauder-mcp` PyPI package, which
+  handles all Python dependencies automatically. No Python path or pip
+  install needed.
 }
 \details{
 This function will:
   1. Check for and install required R packages.
-  2. Attempt to install required Python packages (`mcp`, `httpx`) using the
-     specified or found Python executable.
-  3. Provide you with the exact command to run (for Claude) or the exact
+  2. Provide you with the exact command to run (for Claude/Codex/Qwen) or the exact
      JSON to copy (for Gemini) to complete the setup.
 }

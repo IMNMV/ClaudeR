@@ -22,7 +22,7 @@ devtools::install_github("IMNMV/ClaudeR")
 
 ### Step 2: Run the Setup Function for Your AI Tool
 
-Ask the user which CLI agent they want to install for (Claude Code, Codex, or Gemini), then run the matching command:
+Ask the user which CLI agent they want to install for (Claude Code, Codex, Qwen Code, or Gemini), then run the matching command:
 
 **For Claude Code CLI:**
 ```R
@@ -34,6 +34,12 @@ install_cli(tools = "claude")
 ```R
 library(ClaudeR)
 install_cli(tools = "codex")
+```
+
+**For Qwen Code CLI:**
+```R
+library(ClaudeR)
+install_cli(tools = "qwen")
 ```
 
 **For Google Gemini CLI:**
