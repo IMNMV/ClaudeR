@@ -391,7 +391,8 @@ If you can do it with R, your AI assistant can too.
 - **Session Persistence**: Variables, data, and functions created by the AI remain in your R session.
 - **Code Visibility**: By default, the AI's code is printed to your console.
 - **Port Configuration**: The default port is `8787`, but you can change it if needed.
-- **Package Installation**: The AI can install packages. Use clear prompts to guide its behavior.
+- **Package Installation**: The AI can install packages. Use clear prompts to guide its behavior. If you care about reproducibility, work inside an [`renv`](https://rstudio.github.io/renv/) project: `renv` hijacks `install.packages()` for the active session, so the agent's installs go into your project library instead of your global one.
+- **Stopping the Connection**: Closing the Shiny addin (console Stop button or Done) does **not** kill the MCP server. Re-run `claudeAddin()` to bring the Viewer back with the same server state. To fully stop the bridge, click **"Stop Server"** in the addin UI before closing.
 
 ## Troubleshooting
 
@@ -420,9 +421,8 @@ If you can do it with R, your AI assistant can too.
 
 ## Limitations
 
-- Each R session can connect to one Claude Desktop/Cursor app at a time. However, multiple CLI agents (Claude Code, Gemini CLI) can share the same session alongside a Desktop app. To isolate agents, run separate RStudio windows with different session names and ports.
-- You can stop the connection to the Shiny UI by clicking the Stop button in the console to make changes alongside the AI, but to stop the connection you will need to restart the RSession.
-- R is single-threaded, but async jobs run in a separate process via `callr` so the main session stays responsive. The background process does not share the main session's environment, so async code must be self-contained.
+- Each R session can connect to one Claude Desktop/Cursor app at a time. However, multiple CLI agents (Claude Code, Codex, Qwen, Gemini) can share the same session alongside a Desktop app. To isolate agents, run separate RStudio windows with different session names and ports.
+- R is single-threaded, but async jobs run in a separate process via `callr` so the main session stays responsive. The background process does not share the main session's environment by default. Use the `inputs`/`outputs` parameters on `execute_r_async` to auto-marshal data in and out, or write self-contained code that uses `saveRDS()`/`readRDS()` manually.
 
 ## License
 
