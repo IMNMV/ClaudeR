@@ -121,7 +121,7 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`update_task_status`**: Track progress for each task in the generated list.
 - **`load_annotation_data`**: Load a CSV for annotation. Creates a working copy, parses the `_schema` column, and displays the first unannotated row. Resumable if interrupted.
 - **`annotate`**: Annotate the current row, validate against the schema, save immediately, and auto-load the next row.
-- **`run_annotation_job`**: Annotate a full CSV in the background using a fresh subprocess per row with no context bleed between rows. Supports `claude`, `codex`, and `qwen`. Accepts a `reasoning_effort` parameter (`low`, `medium`, `high`) when using Codex.
+- **`run_annotation_job`**: Annotate a full CSV in the background, with no context bleed between rows. Each row is scored by a fresh `claude`, `codex`, `gemini`, or `qwen` subprocess, or by a local `ollama` HTTP call (for free, private, offline annotation). Accepts a `reasoning_effort` parameter (`low`, `medium`, `high`) for Codex and an `ollama_base_url` parameter to point at a remote Ollama server.
 - **`get_annotation_job_status`**: Check progress of a running or completed annotation job.
 - **`cancel_annotation_job`**: Cancel a running background annotation job. Rows completed before cancellation are preserved in the output file.
 

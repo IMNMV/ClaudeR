@@ -314,9 +314,10 @@ def _extract_json(text: str) -> Optional[Dict]:
 
 def _run_subprocess_row(
     prompt: str, tool: str, tool_path: str,
-    model: Optional[str], timeout: int, reasoning_effort: str = "high"
+    model: Optional[str], timeout: int, reasoning_effort: str = "high",
+    ollama_base_url: str = "http://localhost:11434"
 ) -> tuple:
-    """Run a single annotation subprocess. Returns (result_dict or None, raw_output, error_msg)."""
+    """Run a single annotation subprocess (or HTTP call for ollama). Returns (result_dict or None, raw_output, error_msg)."""
     try:
         if tool == "claude":
             command = [tool_path, "-p", "--no-session-persistence"]
@@ -337,6 +338,42 @@ def _run_subprocess_row(
                 capture_output=True, timeout=timeout
             )
             output = completed.stdout
+
+        elif tool == "qwen":
+            command = [tool_path, "--prompt", prompt]
+            if model:
+                command.extend(["--model", model])
+            completed = subprocess.run(
+                command, text=True,
+                capture_output=True, timeout=timeout
+            )
+            output = completed.stdout
+
+        elif tool == "ollama":
+            # No subprocess; POST to Ollama's HTTP API. format=json puts the model in
+            # JSON mode (still requires the prompt to instruct JSON output, which it does).
+            payload = {
+                "model": model or "qwen2.5",
+                "prompt": prompt,
+                "stream": False,
+                "format": "json",
+                "options": {"temperature": 0},
+                "think": False,           # thinking models would otherwise hide the answer in the `thinking` field
+                "keep_alive": "5m",
+            }
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    resp = client.post(f"{ollama_base_url.rstrip('/')}/api/generate", json=payload)
+                    resp.raise_for_status()
+                    output = resp.json().get("response", "")
+            except httpx.ConnectError:
+                return None, "", (
+                    f"Could not reach Ollama at {ollama_base_url}. "
+                    f"Is `ollama serve` running? Or set ollama_base_url to a different host."
+                )
+            except httpx.HTTPStatusError as e:
+                body = (e.response.text or "")[:300]
+                return None, "", f"Ollama returned HTTP {e.response.status_code}: {body}"
 
         else:  # codex
             last_msg_path = tempfile.mktemp(suffix=".txt")
@@ -376,7 +413,8 @@ def _annotation_job_worker(
     job_id: str, rows: List[Dict], fieldnames: List[str],
     unannotated_indices: List[int], schema: Dict[str, Any],
     work_path: str, tool: str, tool_path: str,
-    model: Optional[str], timeout: int, reasoning_effort: str = "high"
+    model: Optional[str], timeout: int, reasoning_effort: str = "high",
+    ollama_base_url: str = "http://localhost:11434"
 ) -> None:
     """Background thread: annotate each row with a fresh subprocess."""
     import csv as csv_module
@@ -392,7 +430,7 @@ def _annotation_job_worker(
 
         row = rows[row_idx]
         prompt = _build_subprocess_prompt(row, schema, annot_fields)
-        result, raw, err = _run_subprocess_row(prompt, tool, tool_path, model, timeout, reasoning_effort)
+        result, raw, err = _run_subprocess_row(prompt, tool, tool_path, model, timeout, reasoning_effort, ollama_base_url)
 
         if err or result is None:
             job["errors"].append({
@@ -993,10 +1031,10 @@ async def list_tools() -> List[types.Tool]:
         types.Tool(
             name="run_annotation_job",
             description=(
-                "Annotate a CSV dataset using a fresh subprocess per row — no context bleed between rows. "
-                "Each row is scored by a brand-new claude, codex, or gemini process that sees only that row. "
+                "Annotate a CSV dataset using a fresh subprocess (or Ollama HTTP call) per row, with no context bleed between rows. "
+                "Each row is scored by a brand-new claude, codex, gemini, qwen, or ollama process that sees only that row. "
                 "Runs in the background; returns a job ID immediately. "
-                "Use get_annotation_job_status to check progress. "
+                "Use get_annotation_job_status to check progress and cancel_annotation_job to stop. "
                 "The original CSV is never modified; results go to {name}_annotating.csv. "
                 "Resumable: rows already annotated are skipped automatically."
             ),
@@ -1009,11 +1047,11 @@ async def list_tools() -> List[types.Tool]:
                     },
                     "tool": {
                         "type": "string",
-                        "description": "CLI tool to use: 'claude' (default), 'codex', or 'gemini'."
+                        "description": "Backend to use: 'claude' (default), 'codex', 'gemini', 'qwen' (Qwen Code CLI), or 'ollama' (local Ollama HTTP server). The first four require their respective CLI on PATH; ollama requires `ollama serve` running locally."
                     },
                     "model": {
                         "type": "string",
-                        "description": "Model name to pass to the CLI (optional, uses CLI default if omitted)."
+                        "description": "Model name to pass to the backend (optional). For ollama, this is the model tag (e.g. 'qwen2.5', 'llama3.2'). Defaults to 'qwen2.5' for ollama; uses each CLI's own default for the others."
                     },
                     "timeout": {
                         "type": "number",
@@ -1022,6 +1060,10 @@ async def list_tools() -> List[types.Tool]:
                     "reasoning_effort": {
                         "type": "string",
                         "description": "Codex only: reasoning effort level: 'low', 'medium', 'high' (default), or 'none'."
+                    },
+                    "ollama_base_url": {
+                        "type": "string",
+                        "description": "Ollama only: base URL of the Ollama server. Defaults to 'http://localhost:11434'. Set this to point at a remote Ollama instance (e.g. a LAN GPU box)."
                     }
                 },
                 "required": ["csv_path"]
@@ -1910,20 +1952,33 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
         model = arguments.get("model") or None
         timeout = int(arguments.get("timeout", 60))
         reasoning_effort = arguments.get("reasoning_effort", "high")
+        ollama_base_url = (arguments.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
 
         if not csv_path:
             return [types.TextContent(type="text", text="Error: 'csv_path' is required.")]
         if not os.path.exists(csv_path):
             return [types.TextContent(type="text", text=f"Error: File not found: {csv_path}")]
-        if tool not in ("claude", "codex", "gemini"):
-            return [types.TextContent(type="text", text="Error: 'tool' must be 'claude', 'codex', or 'gemini'.")]
+        if tool not in ("claude", "codex", "gemini", "qwen", "ollama"):
+            return [types.TextContent(type="text", text="Error: 'tool' must be 'claude', 'codex', 'gemini', 'qwen', or 'ollama'.")]
 
-        tool_path = _find_cli_path(tool)
-        if not tool_path:
-            return [types.TextContent(type="text", text=(
-                f"Error: '{tool}' CLI not found on PATH. "
-                f"Install it or make sure it's accessible from this environment."
-            ))]
+        if tool == "ollama":
+            # No CLI binary; verify the Ollama server is reachable instead.
+            try:
+                with httpx.Client(timeout=5) as _hc:
+                    _hc.get(f"{ollama_base_url}/api/version").raise_for_status()
+            except Exception as _e:
+                return [types.TextContent(type="text", text=(
+                    f"Error: Ollama not reachable at {ollama_base_url} ({_e}). "
+                    f"Start it with `ollama serve`, or pass a different `ollama_base_url`."
+                ))]
+            tool_path = ollama_base_url  # placeholder; ollama branch ignores it
+        else:
+            tool_path = _find_cli_path(tool)
+            if not tool_path:
+                return [types.TextContent(type="text", text=(
+                    f"Error: '{tool}' CLI not found on PATH. "
+                    f"Install it or make sure it's accessible from this environment."
+                ))]
 
         # Working copy
         base, ext = os.path.splitext(csv_path)
@@ -1975,7 +2030,7 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
 
         t = threading.Thread(
             target=_annotation_job_worker,
-            args=(job_id, rows, fieldnames, unannotated, schema, work_path, tool, tool_path, model, timeout, reasoning_effort),
+            args=(job_id, rows, fieldnames, unannotated, schema, work_path, tool, tool_path, model, timeout, reasoning_effort, ollama_base_url),
             daemon=True
         )
         t.start()
