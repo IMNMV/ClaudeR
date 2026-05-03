@@ -255,7 +255,7 @@ async def get_agent_introduction() -> str:
 # --- Annotation job helpers (subprocess-per-row batch mode) ---
 
 def _find_cli_path(tool: str) -> Optional[str]:
-    """Auto-detect the path for a supported annotation CLI."""
+    """Auto-detect the path for claude or codex CLI."""
     return shutil.which(tool)
 
 
@@ -338,7 +338,7 @@ def _run_subprocess_row(
             )
             output = completed.stdout
 
-        elif tool == "codex":
+        else:  # codex
             last_msg_path = tempfile.mktemp(suffix=".txt")
             command = [
                 tool_path, "exec",
@@ -360,15 +360,6 @@ def _run_subprocess_row(
                 os.remove(last_msg_path)
             else:
                 output = completed.stdout
-        else:  # qwen
-            command = [tool_path, "--prompt", prompt]
-            if model:
-                command.extend(["--model", model])
-            completed = subprocess.run(
-                command, text=True,
-                capture_output=True, timeout=timeout
-            )
-            output = completed.stdout
 
         parsed = _extract_json(output)
         if parsed is None:
@@ -743,13 +734,31 @@ async def list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="execute_r_async",
-            description="Execute long-running R code in a separate background R process. Returns a job ID immediately and the main session stays fully responsive. Use this for code that may take longer than 25 seconds (e.g., model fitting, simulations, large data processing). IMPORTANT: The background process does NOT have access to the main session's environment. Write self-contained code: use saveRDS() to pass data in and write results out, then load them back in the main session after the job completes. You can continue executing other code with execute_r while the job runs. Use get_async_result to check status when ready.",
+            description=(
+                "Execute long-running R code in a separate background R process. Returns a job ID immediately and the main session stays fully responsive. "
+                "Use this for code that may take longer than 25 seconds (e.g., model fitting, simulations, large data processing).\n\n"
+                "TWO MODES:\n"
+                "1. Auto-marshaled (recommended). Pass `inputs` (object names from the main session to copy into the background) and `outputs` (object names the background code creates that should be loaded back into the main session). The tool handles all saveRDS/readRDS plumbing. Inputs are snapshotted at submit time, so changes in the main session after submit do not affect the running job. Outputs are auto-loaded into the main session when get_async_result returns complete.\n"
+                "2. Manual. Omit `inputs` and `outputs` and write self-contained code that uses saveRDS()/readRDS() to pass data in and out yourself. Backwards-compatible with existing patterns.\n\n"
+                "The background process never has access to the main session's environment except via the marshaled `inputs`. Connection objects (DB connections, open file handles) cannot be marshaled. The background process must `library()` any packages it needs.\n\n"
+                "You can continue executing other code with execute_r while the job runs. Use get_async_result to check status when ready."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "R code to execute asynchronously"
+                        "description": "R code to execute asynchronously."
+                    },
+                    "inputs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional. Names of objects in the main R session to copy into the background process before running `code`. Connection objects cannot be marshaled."
+                    },
+                    "outputs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional. Names of objects the background code will create that should be loaded back into the main R session when get_async_result reports complete."
                     }
                 },
                 "required": ["code"]
@@ -985,7 +994,7 @@ async def list_tools() -> List[types.Tool]:
             name="run_annotation_job",
             description=(
                 "Annotate a CSV dataset using a fresh subprocess per row — no context bleed between rows. "
-                "Each row is scored by a brand-new claude, codex, gemini, or qwen process that sees only that row. "
+                "Each row is scored by a brand-new claude, codex, or gemini process that sees only that row. "
                 "Runs in the background; returns a job ID immediately. "
                 "Use get_annotation_job_status to check progress. "
                 "The original CSV is never modified; results go to {name}_annotating.csv. "
@@ -1000,7 +1009,7 @@ async def list_tools() -> List[types.Tool]:
                     },
                     "tool": {
                         "type": "string",
-                        "description": "CLI tool to use: 'claude' (default), 'codex', 'gemini', or 'qwen'."
+                        "description": "CLI tool to use: 'claude' (default), 'codex', or 'gemini'."
                     },
                     "model": {
                         "type": "string",
@@ -1012,7 +1021,7 @@ async def list_tools() -> List[types.Tool]:
                     },
                     "reasoning_effort": {
                         "type": "string",
-                        "description": "Codex only: reasoning effort level: 'low', 'medium', 'high' (default), or 'none'. Ignored for claude, gemini, and qwen."
+                        "description": "Codex only: reasoning effort level: 'low', 'medium', 'high' (default), or 'none'."
                     }
                 },
                 "required": ["csv_path"]
@@ -1484,6 +1493,13 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             )]
 
         code = arguments["code"]
+        inputs = arguments.get("inputs") or []
+        outputs = arguments.get("outputs") or []
+        if not isinstance(inputs, list) or not isinstance(outputs, list):
+            return [types.TextContent(
+                type="text",
+                text="Error: 'inputs' and 'outputs' must be arrays of object names if provided."
+            )]
         job_id = uuid.uuid4().hex[:8]
 
         # Send to R — R launches callr::r_bg() and returns immediately
@@ -1491,6 +1507,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             "code": code,
             "async": True,
             "job_id": job_id,
+            "input_names": inputs,
+            "output_names": outputs,
         }
         if _agent_id:
             payload["agent_id"] = _agent_id
@@ -1503,9 +1521,19 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                 text=f"Error starting async job: {result.get('error', 'Unknown error')}"
             )]
 
+        marshaling_note = ""
+        if inputs:
+            marshaling_note += f" Inputs marshaled from main session: {', '.join(inputs)}."
+        if outputs:
+            marshaling_note += f" Outputs ({', '.join(outputs)}) will auto-load into the main session when the job completes."
+
         return [types.TextContent(
             type="text",
-            text=f"Job {job_id} started in a background R process. The main R session remains available — you can continue running other code with execute_r while this job runs. Use get_async_result(\"{job_id}\") to check status when ready."
+            text=(
+                f"Job {job_id} started in a background R process.{marshaling_note} "
+                f"The main R session remains available — you can continue running other code with execute_r while this job runs. "
+                f"Use get_async_result(\"{job_id}\") to check status when ready."
+            )
         )]
 
     elif name == "get_async_result":
@@ -1544,6 +1572,15 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             result_contents.append(types.TextContent(
                 type="text",
                 text=result["output"]
+            ))
+
+        marshaled = result.get("marshaled_outputs")
+        if marshaled:
+            if isinstance(marshaled, str):
+                marshaled = [marshaled]
+            result_contents.append(types.TextContent(
+                type="text",
+                text="--- Outputs loaded into main session ---\n" + "\n".join(marshaled)
             ))
 
         return result_contents or [types.TextContent(
@@ -1878,8 +1915,8 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             return [types.TextContent(type="text", text="Error: 'csv_path' is required.")]
         if not os.path.exists(csv_path):
             return [types.TextContent(type="text", text=f"Error: File not found: {csv_path}")]
-        if tool not in ("claude", "codex", "gemini", "qwen"):
-            return [types.TextContent(type="text", text="Error: 'tool' must be 'claude', 'codex', 'gemini', or 'qwen'.")]
+        if tool not in ("claude", "codex", "gemini"):
+            return [types.TextContent(type="text", text="Error: 'tool' must be 'claude', 'codex', or 'gemini'.")]
 
         tool_path = _find_cli_path(tool)
         if not tool_path:

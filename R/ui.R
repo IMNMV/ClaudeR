@@ -103,7 +103,13 @@ unwrap_viewer <- function() {
 #' @param job_id Unique identifier for the job
 #' @param settings ClaudeR settings list
 #' @param agent_id Optional agent identifier
-start_background_job <- function(code, job_id, settings = NULL, agent_id = NULL) {
+#' @param input_names Optional character vector of object names to copy from the
+#'   main session into the background process before running `code`.
+#' @param output_names Optional character vector of object names the background
+#'   process will create that should be loaded back into the main session when
+#'   the job completes.
+start_background_job <- function(code, job_id, settings = NULL, agent_id = NULL,
+                                  input_names = character(0), output_names = character(0)) {
   if (is.null(settings)) settings <- load_claude_settings()
 
   # Security check
@@ -111,6 +117,25 @@ start_background_job <- function(code, job_id, settings = NULL, agent_id = NULL)
   if (validation$blocked) {
     return(list(success = FALSE, error = validation$reason))
   }
+
+  # Marshal inputs from the main session to a tempfile (snapshot at submit time).
+  inputs_path <- NULL
+  if (length(input_names) > 0) {
+    missing_inputs <- input_names[!vapply(input_names, exists, logical(1), envir = .GlobalEnv, inherits = FALSE)]
+    if (length(missing_inputs) > 0) {
+      return(list(success = FALSE, error = sprintf(
+        "Input objects not found in main session: %s",
+        paste(missing_inputs, collapse = ", ")
+      )))
+    }
+    inputs_list <- mget(input_names, envir = .GlobalEnv)
+    inputs_path <- tempfile(pattern = paste0("clauder_async_in_", job_id, "_"), fileext = ".rds")
+    saveRDS(inputs_list, inputs_path)
+  }
+
+  outputs_path <- if (length(output_names) > 0) {
+    tempfile(pattern = paste0("clauder_async_out_", job_id, "_"), fileext = ".rds")
+  } else NULL
 
   # Log / print
   if (settings$print_to_console) {
@@ -124,19 +149,37 @@ start_background_job <- function(code, job_id, settings = NULL, agent_id = NULL)
   }
 
   # Launch in a separate R process (skip .Rprofile to avoid startup noise in stderr)
-  job <- callr::r_bg(function(code) {
+  job <- callr::r_bg(function(code, inputs_path, outputs_path, output_names) {
+    work_env <- new.env(parent = globalenv())
+
+    if (!is.null(inputs_path) && file.exists(inputs_path)) {
+      .clauder_inputs <- readRDS(inputs_path)
+      list2env(.clauder_inputs, envir = work_env)
+    }
+
     output_lines <- utils::capture.output({
-      result <- withVisible(eval(parse(text = code)))
-      if (result$visible) print(result$value)
+      .clauder_result <- withVisible(eval(parse(text = code), envir = work_env))
+      if (.clauder_result$visible) print(.clauder_result$value)
     })
+
+    if (length(output_names) > 0 && !is.null(outputs_path)) {
+      collected <- mget(output_names, envir = work_env, ifnotfound = list(NULL))
+      saveRDS(collected, outputs_path)
+    }
+
     list(success = TRUE, output = paste(output_lines, collapse = "\n"))
-  }, args = list(code = code), supervise = TRUE, user_profile = FALSE)
+  }, args = list(code = code, inputs_path = inputs_path, outputs_path = outputs_path,
+                 output_names = output_names),
+     supervise = TRUE, user_profile = FALSE)
 
   .claude_bg_jobs[[job_id]] <- list(
     process = job,
     started = Sys.time(),
     code = code,
-    agent_id = agent_id
+    agent_id = agent_id,
+    inputs_path = inputs_path,
+    outputs_path = outputs_path,
+    output_names = output_names
   )
 
   # Record in history
@@ -167,14 +210,50 @@ check_background_job <- function(job_id) {
     return(list(status = "running", elapsed_seconds = round(elapsed)))
   }
 
+  # Best-effort cleanup of marshaling tempfiles regardless of outcome.
+  cleanup_files <- function() {
+    for (p in c(job_info$inputs_path, job_info$outputs_path)) {
+      if (!is.null(p) && file.exists(p)) try(file.remove(p), silent = TRUE)
+    }
+  }
+
+  # Summarize a marshaled-back object for the agent (class + shape).
+  summarize_obj <- function(name, obj) {
+    cls <- paste(class(obj), collapse = "/")
+    shape <- if (is.data.frame(obj)) sprintf("%d rows x %d cols", nrow(obj), ncol(obj))
+             else if (is.matrix(obj)) sprintf("%d x %d", nrow(obj), ncol(obj))
+             else if (is.atomic(obj) && !is.null(obj)) sprintf("length %d", length(obj))
+             else if (is.list(obj)) sprintf("list with %d elements", length(obj))
+             else "object"
+    sprintf("  %s: %s [%s]", name, cls, shape)
+  }
+
   # Job finished — get result
   tryCatch({
     result <- job$get_result()
+
+    # Marshal outputs back into the main session.
+    marshaled_summary <- character(0)
+    if (!is.null(job_info$outputs_path) && file.exists(job_info$outputs_path)) {
+      outputs <- readRDS(job_info$outputs_path)
+      for (nm in names(outputs)) {
+        assign(nm, outputs[[nm]], envir = .GlobalEnv)
+        marshaled_summary <- c(marshaled_summary, summarize_obj(nm, outputs[[nm]]))
+      }
+    }
+
+    cleanup_files()
     rm(list = job_id, envir = .claude_bg_jobs)
-    return(c(list(status = "complete"), result))
+
+    out <- c(list(status = "complete"), result)
+    if (length(marshaled_summary) > 0) {
+      out$marshaled_outputs <- marshaled_summary
+    }
+    return(out)
   }, error = function(e) {
     # callr wraps errors — dig out the original message
     err_msg <- if (!is.null(e$parent)) e$parent$message else e$message
+    cleanup_files()
     rm(list = job_id, envir = .claude_bg_jobs)
     return(list(status = "complete", success = FALSE, error = err_msg))
   })
@@ -264,7 +343,14 @@ claudeAddin <- function() {
 
               # --- Async: launch in background via callr ---
               if (isTRUE(body$async) && !is.null(body$job_id)) {
-                result <- start_background_job(body$code, body$job_id, settings, agent_id = agent_id)
+                input_names  <- if (!is.null(body$input_names))  as.character(body$input_names)  else character(0)
+                output_names <- if (!is.null(body$output_names)) as.character(body$output_names) else character(0)
+                result <- start_background_job(
+                  body$code, body$job_id, settings,
+                  agent_id = agent_id,
+                  input_names = input_names,
+                  output_names = output_names
+                )
                 execution_count <<- execution_count + 1
                 response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
                 return(list(
