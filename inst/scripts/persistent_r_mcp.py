@@ -328,6 +328,16 @@ def _run_subprocess_row(
             )
             output = completed.stdout
 
+        elif tool == "gemini":
+            command = [tool_path, "-p", prompt]
+            if model:
+                command.extend(["-m", model])
+            completed = subprocess.run(
+                command, text=True,
+                capture_output=True, timeout=timeout
+            )
+            output = completed.stdout
+
         else:  # codex
             last_msg_path = tempfile.mktemp(suffix=".txt")
             command = [
@@ -966,7 +976,7 @@ async def list_tools() -> List[types.Tool]:
             name="run_annotation_job",
             description=(
                 "Annotate a CSV dataset using a fresh subprocess per row — no context bleed between rows. "
-                "Each row is scored by a brand-new claude or codex process that sees only that row. "
+                "Each row is scored by a brand-new claude, codex, or gemini process that sees only that row. "
                 "Runs in the background; returns a job ID immediately. "
                 "Use get_annotation_job_status to check progress. "
                 "The original CSV is never modified; results go to {name}_annotating.csv. "
@@ -981,7 +991,7 @@ async def list_tools() -> List[types.Tool]:
                     },
                     "tool": {
                         "type": "string",
-                        "description": "CLI tool to use: 'claude' (default) or 'codex'."
+                        "description": "CLI tool to use: 'claude' (default), 'codex', or 'gemini'."
                     },
                     "model": {
                         "type": "string",
@@ -993,7 +1003,7 @@ async def list_tools() -> List[types.Tool]:
                     },
                     "reasoning_effort": {
                         "type": "string",
-                        "description": "Codex only: reasoning effort level — 'low', 'medium', 'high' (default), or 'none'."
+                        "description": "Codex only: reasoning effort level: 'low', 'medium', 'high' (default), or 'none'."
                     }
                 },
                 "required": ["csv_path"]
@@ -1859,8 +1869,8 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             return [types.TextContent(type="text", text="Error: 'csv_path' is required.")]
         if not os.path.exists(csv_path):
             return [types.TextContent(type="text", text=f"Error: File not found: {csv_path}")]
-        if tool not in ("claude", "codex"):
-            return [types.TextContent(type="text", text="Error: 'tool' must be 'claude' or 'codex'.")]
+        if tool not in ("claude", "codex", "gemini"):
+            return [types.TextContent(type="text", text="Error: 'tool' must be 'claude', 'codex', or 'gemini'.")]
 
         tool_path = _find_cli_path(tool)
         if not tool_path:
