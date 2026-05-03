@@ -57,7 +57,7 @@ claudeAddin()
 - **Export clean script.** Click "Export Clean Script" in the Shiny addin to strip all timestamps, agent labels, and log headers from a session log, producing a runnable `.R` file with just the code. Error blocks are preserved as comments. Also available programmatically via `export_log_as_script()`.
 - **PyPI package (`clauder-mcp`).** The Python MCP bridge is now available as a standalone package on PyPI. Run it with `uvx clauder-mcp` for zero-config setup with no Python path or pip install needed. The installers (`install_cli()` and `install_clauder()`) default to uvx, with a `use_uvx = FALSE` fallback for legacy setups.
 - **`read_file` tool.** Agents can now read any text file from disk (.R, .qmd, .csv, .log, etc.) without it being open in RStudio. Enables session continuity workflows: point an agent at a previous log file and tell it to pick up where the last session left off.
-- **Codex + Qwen CLI support.** `install_cli(tools = "codex")` and `install_cli(tools = "qwen")` generate setup commands for OpenAI Codex and Qwen Code. Both join Claude Code and Gemini as supported CLI agents.
+- **Codex + Qwen Code CLI support.** `install_cli(tools = "codex")` and `install_cli(tools = "qwen")` generate setup commands for OpenAI Codex and the [Qwen Code CLI](https://github.com/QwenLM/qwen-code) (Alibaba's gemini-cli fork). Both join Claude Code and Gemini as supported CLI agents.
 - **Multi-agent orchestration.** Run multiple AI agents on the same R session or spread them across separate RStudio windows. Each agent gets a unique ID on startup. Console output, log files, and execution history are all attributed per agent, so you always know who did what. On its very first tool call, each agent receives a context briefing with its own ID, any other agents active on the session, and the log file path, giving it full awareness of the shared environment without any manual setup. Agents can call `get_session_history` to review what other agents have done, or read the shared log file directly. The Shiny viewer tracks connected agents in real-time.
 - **Session discovery.** Each RStudio session writes a discovery file to `~/.claude_r_sessions/` on startup. AI agents find sessions automatically with no hardcoded ports. Name your sessions (e.g. "analysis", "modeling") and run them on different ports. When multiple sessions exist, agents automatically route to the session named "default". Non-default agents should call `connect_session` to bind to their target session. Single-session setups work with zero config.
 - **Redesigned Shiny viewer.** Cleaner UI with grouped panels for Session, Agents, Logging, and Advanced settings. Shows connected agents and execution count in real-time. Click the `?` button for a built-in guide on multi-session setup and agent identity.
@@ -322,7 +322,7 @@ install_cli(tools = "claude")
 # For OpenAI Codex CLI
 install_cli(tools = "codex")
 
-# For Qwen Code CLI
+# For Qwen Code CLI (requires `npm install -g @qwen-code/qwen-code`)
 install_cli(tools = "qwen")
 
 # For Google Gemini CLI
@@ -421,7 +421,7 @@ If you can do it with R, your AI assistant can too.
 
 ## Limitations
 
-- Each R session can connect to one Claude Desktop/Cursor app at a time. However, multiple CLI agents (Claude Code, Codex, Qwen, Gemini) can share the same session alongside a Desktop app. To isolate agents, run separate RStudio windows with different session names and ports.
+- Each R session can connect to one Claude Desktop/Cursor app at a time. However, multiple CLI agents (Claude Code, Codex, Qwen Code, Gemini) can share the same session alongside a Desktop app. To isolate agents, run separate RStudio windows with different session names and ports.
 - R is single-threaded, but async jobs run in a separate process via `callr` so the main session stays responsive. The background process does not share the main session's environment by default. Use the `inputs`/`outputs` parameters on `execute_r_async` to auto-marshal data in and out, or write self-contained code that uses `saveRDS()`/`readRDS()` manually.
 
 ## License
