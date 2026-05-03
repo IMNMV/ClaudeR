@@ -1,10 +1,10 @@
-from .server import serve
+from .server import main as _server_main
 import asyncio
 
 
 def main():
     """ClaudeR MCP Server - RStudio integration for AI assistants."""
-    asyncio.run(serve())
+    asyncio.run(_server_main())
 
 
 if __name__ == "__main__":

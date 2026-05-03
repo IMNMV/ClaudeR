@@ -3,8 +3,21 @@
 # Resolved at call time so each user gets their own home directory, even when
 # the package was installed system-wide by a different account (e.g. root on
 # RStudio Server).
+#
+# On Windows, R's path.expand("~") defaults to the Documents folder while
+# Python's os.path.expanduser("~") uses USERPROFILE. They write/read different
+# locations, so the Python MCP never finds the discovery file. Force the
+# Windows path to match Python's: prefer HOME if set, else USERPROFILE.
 
-discovery_dir <- function() file.path(path.expand("~"), ".claude_r_sessions")
+discovery_dir <- function() {
+  base <- if (.Platform$OS.type == "windows") {
+    home_env <- Sys.getenv("HOME")
+    if (nzchar(home_env)) home_env else Sys.getenv("USERPROFILE", unset = path.expand("~"))
+  } else {
+    path.expand("~")
+  }
+  file.path(base, ".claude_r_sessions")
+}
 
 write_discovery_file <- function(session_name, port) {
   d <- discovery_dir()
