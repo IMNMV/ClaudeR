@@ -43,7 +43,7 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
-- **AI-Driven Data Annotation.** Five MCP tools (`load_annotation_data`, `annotate`, `run_annotation_job`, `get_annotation_job_status`, `cancel_annotation_job`) let an agent label a CSV dataset row by row without writing any code. Two modes: interactive (context accumulates across rows) or subprocess-per-row via `run_annotation_job` for full row isolation using `claude`, `codex`, or `qwen`. Codex jobs accept a `reasoning_effort` parameter. The original file is never modified and sessions resume automatically if interrupted.
+- **AI-Driven Data Annotation.** Five MCP tools (`load_annotation_data`, `annotate`, `run_annotation_job`, `get_annotation_job_status`, `cancel_annotation_job`) let an agent label a CSV dataset row by row without writing any code. Two modes: interactive (context accumulates across rows) or fully-isolated via `run_annotation_job` (one fresh `claude`, `codex`, `gemini`, or `qwen` subprocess per row, or a local `ollama` HTTP call for free, private, offline labeling). Codex jobs accept a `reasoning_effort` parameter; Ollama jobs accept an `ollama_base_url` parameter. The original file is never modified and sessions resume automatically if interrupted.
 - **Multi-Agent Coordination Protocol.** Built-in protocol for multiple agents sharing one RStudio session. Agents negotiate through a shared message board in the R environment, agree on a task plan, claim tasks before working, and cross-check each other's output. Load it with `multi_agent_prompt()`.
 - **`verify_references` tool.** Extracts DOIs from a manuscript's bibliography, queries the CrossRef API for each, and returns metadata (title, authors, year, journal) for comparison against manuscript claims. Non-resolving DOIs, metadata mismatches, and references without DOIs are flagged. Works standalone ("check my references") or as Pass 4 of Reviewer Zero.
 - **R Best Practices Protocol.** Built-in statistical analysis protocol covering EDA, assumption checking, model building, diagnostics, multiple-corrections, and reporting. Load it with `r_best_practices_prompt()` or tell the agent to read it.
@@ -204,7 +204,7 @@ data_annotation_prompt()
 
 Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row. The original file is never modified and sessions are automatically resumable if interrupted.
 
-**Two annotation modes are available:** The default `load_annotation_data` + `annotate` flow runs inside the agent's existing conversation where context accumulates across rows, which can be useful for consistency but may introduce anchoring on long datasets. For full row isolation, use `run_annotation_job` instead: it spawns a fresh `claude`, `codex`, or `qwen` subprocess per row so each annotation is made with zero memory of prior rows.
+**Two annotation modes are available:** The default `load_annotation_data` + `annotate` flow runs inside the agent's existing conversation where context accumulates across rows, which can be useful for consistency but may introduce anchoring on long datasets. For full row isolation, use `run_annotation_job` instead: it spawns a fresh `claude`, `codex`, `gemini`, or `qwen` subprocess per row, or sends each row to a local `ollama` server, so every annotation is made with zero memory of prior rows.
 
 **Mode 1: Full context (interactive):**
 ```
@@ -226,8 +226,10 @@ You are annotating a dataset.
 
 Step 1: Call run_annotation_job with:
 - csv_path: /path/to/your/file.csv
-- tool: claude          # or "codex" / "qwen"
+- tool: claude            # or "codex" / "gemini" / "qwen" / "ollama"
+- model: qwen2.5          # ollama only: any model tag you have pulled
 - reasoning_effort: high  # codex only: low | medium | high
+- ollama_base_url: http://localhost:11434  # ollama only, defaults shown
 
 Step 2: Once you have the job ID, periodically call get_annotation_job_status with that ID to check progress.
 
@@ -250,7 +252,7 @@ This architecture ensures that the AI can only perform approved operations throu
 
 ## CLI Integration
 
-ClaudeR now supports command-line interface (CLI) tools like the **Claude Code CLI**, the **OpenAI Codex CLI**, and the **Google Gemini CLI**. This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
+ClaudeR supports command-line interface (CLI) tools: the **Claude Code CLI**, the **OpenAI Codex CLI**, the **Qwen Code CLI**, and the **Google Gemini CLI**. This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
 
 ## Security Model
 
