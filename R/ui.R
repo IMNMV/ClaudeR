@@ -4,15 +4,16 @@
 # the package was installed system-wide by a different account (e.g. root on
 # RStudio Server).
 #
-# On Windows, R's path.expand("~") defaults to the Documents folder while
-# Python's os.path.expanduser("~") uses USERPROFILE. They write/read different
-# locations, so the Python MCP never finds the discovery file. Force the
-# Windows path to match Python's: prefer HOME if set, else USERPROFILE.
+# On Windows, R's path.expand("~") can resolve to Documents (via R_USER) or to
+# a OneDrive-synced folder (when HOME is set, which is increasingly common in
+# Microsoft 365 setups). Python's os.path.expanduser("~") on Windows ignores
+# HOME entirely and uses USERPROFILE, so R and Python disagree on where the
+# discovery file lives. Match Python by always using USERPROFILE on Windows,
+# regardless of what HOME or R_USER point at.
 
 discovery_dir <- function() {
   base <- if (.Platform$OS.type == "windows") {
-    home_env <- Sys.getenv("HOME")
-    if (nzchar(home_env)) home_env else Sys.getenv("USERPROFILE", unset = path.expand("~"))
+    Sys.getenv("USERPROFILE", unset = path.expand("~"))
   } else {
     path.expand("~")
   }

@@ -27,7 +27,16 @@ server = Server("r-studio")
 R_ADDIN_URL = "http://127.0.0.1:8787"  # Fallback if no discovery files found
 
 # Session discovery
-SESSIONS_DIR = os.path.expanduser("~/.claude_r_sessions")
+# On Windows, prefer USERPROFILE explicitly. Python's expanduser already does
+# this internally, but being explicit guards against odd HOME settings (e.g.
+# OneDrive-redirected Documents) and matches the R-side discovery_dir().
+if sys.platform == "win32":
+    SESSIONS_DIR = os.path.join(
+        os.environ.get("USERPROFILE") or os.path.expanduser("~"),
+        ".claude_r_sessions",
+    )
+else:
+    SESSIONS_DIR = os.path.expanduser("~/.claude_r_sessions")
 _agent_id: Optional[str] = None       # Set in main()
 _target_session: Optional[str] = None  # Set by connect_session tool
 _agent_introduced: bool = False        # First-call introduction flag
@@ -50,7 +59,22 @@ _annot_state: Dict[str, Any] = {
 
 
 def _pid_alive(pid: int) -> bool:
-    """Check if a process is running (signal 0 doesn't kill, just checks)."""
+    """Check if a process is running.
+
+    On POSIX, signal 0 is the canonical liveness probe. On Windows, os.kill(pid, 0)
+    raises even for live processes, so we use OpenProcess(SYNCHRONIZE, ...) which
+    is the minimum-privilege Windows equivalent and only succeeds for live PIDs.
+    """
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+        SYNCHRONIZE = 0x00100000
+        handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
     try:
         os.kill(pid, 0)
         return True
