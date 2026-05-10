@@ -853,6 +853,32 @@ async def list_tools() -> List[types.Tool]:
             }
         ),
         types.Tool(
+            name="cancel_async_job",
+            description=(
+                "Terminate a running execute_r_async job. Sends SIGTERM (then SIGKILL after a "
+                "brief grace period) to the background R process and cleans up any marshaled "
+                "input/output tempfiles. Use this when an async job is hung, taking far longer "
+                "than expected, or you realized the code has a bug. Safe to call on jobs that "
+                "have already finished — returns 'not_found' in that case."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "The job ID returned by execute_r_async"
+                    }
+                },
+                "required": ["job_id"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": True,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
             name="list_sessions",
             description="List available RStudio sessions that this agent can connect to. Shows session name, port, and PID for each active session.",
             inputSchema={
@@ -1652,6 +1678,34 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         return result_contents or [types.TextContent(
             type="text",
             text="Async job completed successfully but produced no output."
+        )]
+
+    elif name == "cancel_async_job":
+        job_id = arguments.get("job_id", "")
+        if not job_id:
+            return [types.TextContent(type="text", text="Error: 'job_id' parameter is required")]
+
+        result = await post_to_r_addin({"cancel_job": job_id})
+        status = result.get("status", "unknown")
+
+        if status == "not_found":
+            return [types.TextContent(
+                type="text",
+                text=f"No job found with ID '{job_id}'. It may have already completed, been cancelled, or the ID is wrong."
+            )]
+
+        if status == "cancelled":
+            elapsed = result.get("elapsed_seconds", "?")
+            was_alive = result.get("was_alive", False)
+            if was_alive:
+                msg = f"Cancelled job {job_id} after {elapsed}s. Background process killed and tempfiles cleaned up."
+            else:
+                msg = f"Job {job_id} had already finished but had not been collected (it ran for {elapsed}s). Cleaned up tempfiles and removed it."
+            return [types.TextContent(type="text", text=msg)]
+
+        return [types.TextContent(
+            type="text",
+            text=f"Cancel returned unexpected status '{status}': {result}"
         )]
 
     elif name == "list_sessions":

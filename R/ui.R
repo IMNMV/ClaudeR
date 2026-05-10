@@ -209,6 +209,42 @@ start_background_job <- function(code, job_id, settings = NULL, agent_id = NULL,
   list(success = TRUE, job_id = job_id)
 }
 
+#' Kill a running background job
+#' @param job_id The job identifier to terminate
+#' Sends SIGTERM (then SIGKILL after a brief grace period) via callr's kill().
+#' Cleans up any inputs/outputs tempfiles. Safe to call on already-finished jobs.
+kill_background_job <- function(job_id) {
+  if (!exists(job_id, envir = .claude_bg_jobs)) {
+    return(list(status = "not_found", success = FALSE,
+                error = sprintf("No background job with id '%s'.", job_id)))
+  }
+
+  job_info <- .claude_bg_jobs[[job_id]]
+  job <- job_info$process
+
+  was_alive <- tryCatch(job$is_alive(), error = function(e) FALSE)
+  elapsed <- as.numeric(difftime(Sys.time(), job_info$started, units = "secs"))
+
+  if (was_alive) {
+    tryCatch(job$kill(), error = function(e) NULL)
+    tryCatch(job$kill_tree(), error = function(e) NULL)
+  }
+
+  # Cleanup marshaling tempfiles regardless of state.
+  for (p in c(job_info$inputs_path, job_info$outputs_path)) {
+    if (!is.null(p) && file.exists(p)) try(file.remove(p), silent = TRUE)
+  }
+
+  rm(list = job_id, envir = .claude_bg_jobs)
+
+  list(
+    status = "cancelled",
+    success = TRUE,
+    was_alive = was_alive,
+    elapsed_seconds = round(elapsed)
+  )
+}
+
 #' Check the status of a background job
 #' @param job_id The job identifier to check
 check_background_job <- function(job_id) {
@@ -318,6 +354,17 @@ claudeAddin <- function() {
             # --- Check background job status ---
             if (!is.null(body$check_job)) {
               result <- check_background_job(body$check_job)
+              response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
+              return(list(
+                status = 200L,
+                headers = list('Content-Type' = 'application/json'),
+                body = response_body
+              ))
+            }
+
+            # --- Cancel a running background job ---
+            if (!is.null(body$cancel_job)) {
+              result <- kill_background_job(body$cancel_job)
               response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
               return(list(
                 status = 200L,
