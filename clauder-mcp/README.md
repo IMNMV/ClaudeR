@@ -2,7 +2,7 @@
 
 MCP server that connects AI assistants to RStudio for interactive R coding and data analysis.
 
-This is the Python MCP bridge component of [ClaudeR](https://github.com/IMNMV/ClaudeR). It works with Claude Desktop, Claude Code, Codex CLI, Qwen Code CLI, Gemini CLI, Cursor, and any other MCP-compatible client.
+This is the Python MCP bridge component of [ClaudeR](https://github.com/IMNMV/ClaudeR). It works with Claude Desktop, Claude Code, Codex CLI, GitHub Copilot CLI, Qwen Code CLI, Gemini CLI, Cursor, and any other MCP-compatible client.
 
 ## Prerequisites
 
@@ -29,6 +29,28 @@ claude mcp add --transport stdio --scope user r-studio -- uvx clauder-mcp
 
 ```bash
 codex mcp add r-studio -- uvx clauder-mcp
+```
+
+### GitHub Copilot CLI
+
+```bash
+copilot mcp add r-studio --transport stdio --tools "*" -- uvx clauder-mcp
+```
+
+You can also add the same server to `~/.copilot/mcp-config.json`:
+
+```json
+{
+  "mcpServers": {
+    "r-studio": {
+      "type": "local",
+      "command": "uvx",
+      "args": ["clauder-mcp"],
+      "env": {},
+      "tools": ["*"]
+    }
+  }
+}
 ```
 
 ### Qwen Code CLI

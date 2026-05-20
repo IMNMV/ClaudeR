@@ -22,7 +22,7 @@ devtools::install_github("IMNMV/ClaudeR")
 
 ### Step 2: Run the Setup Function for Your AI Tool
 
-Ask the user which CLI agent they want to install for (Claude Code, Codex, Qwen Code, or Gemini), then run the matching command:
+Ask the user which CLI agent they want to install for (Claude Code, Codex, GitHub Copilot CLI, Qwen Code, or Gemini), then run the matching command:
 
 **For Claude Code CLI:**
 ```R
@@ -34,6 +34,12 @@ install_cli(tools = "claude")
 ```R
 library(ClaudeR)
 install_cli(tools = "codex")
+```
+
+**For GitHub Copilot CLI:**
+```R
+library(ClaudeR)
+install_cli(tools = "copilot")
 ```
 
 **For Qwen Code CLI:**
@@ -55,7 +61,7 @@ install_clauder()
 # For Cursor: install_clauder(for_cursor = TRUE)
 ```
 
-Each function prints the exact command or config you need to apply. For CLI tools, copy and run the printed command in your terminal. For Gemini, copy the JSON into your `gemini.json` settings file.
+Each function prints the exact command or config you need to apply. For Claude Code, Codex, and Qwen, copy and run the printed command in your terminal. For Copilot, use the printed `copilot mcp add` command or merge the JSON block into `~/.copilot/mcp-config.json`. For Gemini, copy the JSON into your `gemini.json` settings file.
 
 ### Step 3: Start the Server in RStudio (Manual Step)
 

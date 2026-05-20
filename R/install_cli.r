@@ -1,14 +1,15 @@
 #' @title Install and Set Up ClaudeR for CLI Tools
 #' @description An installer that configures ClaudeR to be used with command-line
-#'   AI tools like the Claude Code CLI, OpenAI Codex CLI, and Google Gemini CLI.
+#'   AI tools like the Claude Code CLI, OpenAI Codex CLI, GitHub Copilot CLI,
+#'   Qwen Code CLI, and Google Gemini CLI.
 #'
 #'   By default, it uses `uvx` to run the `clauder-mcp` PyPI package, which
 #'   handles all Python dependencies automatically. No Python path or pip
 #'   install needed.
 #'
 #' @param tools A character vector specifying which CLI tools to configure.
-#'   Can be `"claude"`, `"codex"`, `"gemini"`, or a combination like
-#'   `c("claude", "codex")`.
+#'   Can be `"claude"`, `"codex"`, `"copilot"`, `"qwen"`, `"gemini"`,
+#'   or a combination like `c("claude", "codex", "copilot")`.
 #' @param use_uvx Logical. If `TRUE` (the default), generates commands using
 #'   `uvx clauder-mcp` which handles Python dependencies automatically. If
 #'   `FALSE`, falls back to the legacy method of finding a Python executable
@@ -19,14 +20,15 @@
 #'   missing R dependencies.
 #' @details This function will:
 #'   1. Check for and install required R packages.
-#'   2. Provide you with the exact command to run (for Claude/Codex) or the exact
-#'      JSON to copy (for Gemini) to complete the setup.
+#'   2. Provide you with the exact command to run (for Claude/Codex/Copilot/Qwen)
+#'      or the exact JSON to copy (for Gemini/Copilot) to complete the setup.
 #' @export
 install_cli <- function(tools = "claude", use_uvx = TRUE, python_path = NULL, ...) {
   # --- 1. Parameter Validation ---
-  tools <- try(match.arg(tools, choices = c("claude", "codex", "gemini"), several.ok = TRUE), silent = TRUE)
+  cli_choices <- c("claude", "codex", "copilot", "qwen", "gemini")
+  tools <- try(match.arg(tools, choices = cli_choices, several.ok = TRUE), silent = TRUE)
   if (inherits(tools, "try-error")) {
-    stop("Invalid 'tools' argument. Please choose 'claude', 'codex', 'gemini', or a combination.", call. = FALSE)
+    stop("Invalid 'tools' argument. Please choose 'claude', 'codex', 'copilot', 'qwen', 'gemini', or a combination.", call. = FALSE)
   }
 
   # --- 2. Check R Dependencies ---
@@ -142,6 +144,90 @@ install_cli <- function(tools = "claude", use_uvx = TRUE, python_path = NULL, ..
       cat("Option B. Older Codex (no `mcp add` subcommand). Open ~/.codex/config.toml\n")
       cat("and add the section below. If an r-studio section already exists, replace it.\n\n")
       cat(toml_block, "\n\n")
+    }
+
+    if (tool == "copilot") {
+      copilot_env <- list()
+      if (.Platform$OS.type == "windows") {
+        userprofile <- Sys.getenv("USERPROFILE", unset = "")
+        if (nzchar(userprofile)) {
+          copilot_env$USERPROFILE <- userprofile
+        }
+        copilot_env$NO_PROXY <- "127.0.0.1,localhost"
+        copilot_env$PYTHONIOENCODING <- "utf-8"
+      }
+
+      copilot_env_flags <- character()
+      if (length(copilot_env) > 0) {
+        copilot_env_flags <- paste(
+          "--env",
+          vapply(
+            names(copilot_env),
+            function(name) shQuote(paste0(name, "=", copilot_env[[name]]), type = "cmd"),
+            character(1)
+          )
+        )
+      }
+
+      if (use_uvx) {
+        add_string <- paste(c(
+          "copilot mcp add r-studio --transport stdio --tools \"*\"",
+          copilot_env_flags,
+          "-- uvx clauder-mcp"
+        ), collapse = " ")
+        copilot_server <- list(
+          type = "local",
+          command = "uvx",
+          args = list("clauder-mcp")
+        )
+      } else {
+        add_string <- paste(c(
+          "copilot mcp add r-studio --transport stdio --tools \"*\"",
+          copilot_env_flags,
+          "--",
+          shQuote(mcp_command, type = "cmd"),
+          shQuote(mcp_args, type = "cmd")
+        ), collapse = " ")
+        copilot_server <- list(
+          type = "local",
+          command = mcp_command,
+          args = list(mcp_args)
+        )
+      }
+      if (length(copilot_env) > 0) {
+        copilot_server$env <- copilot_env
+      }
+      copilot_server$tools <- list("*")
+
+      copilot_config <- list(
+        mcpServers = list(
+          `r-studio` = copilot_server
+        )
+      )
+      copilot_json_string <- jsonlite::toJSON(copilot_config, pretty = TRUE, auto_unbox = TRUE)
+
+      cat("\n--- For GitHub Copilot CLI ---\n")
+      cat("Pick whichever setup path you prefer:\n\n")
+      cat("Option A. Use the Copilot CLI command:\n\n")
+      cat("copilot mcp remove r-studio 2>/dev/null ;", add_string, "\n\n")
+      cat("Option B. Open ~/.copilot/mcp-config.json and add or merge this block:\n\n")
+      cat(copilot_json_string, "\n\n")
+    }
+
+    if (tool == "qwen") {
+      remove_string <- 'qwen mcp remove --scope user r-studio 2>/dev/null'
+      if (use_uvx) {
+        add_string <- 'qwen mcp add --scope user --transport stdio r-studio uvx clauder-mcp'
+      } else {
+        add_string <- sprintf(
+          'qwen mcp add --scope user --transport stdio r-studio %s %s',
+          shQuote(mcp_command, type = "cmd"),
+          shQuote(mcp_args, type = "cmd")
+        )
+      }
+      cat("\n--- For Qwen Code CLI ---\n")
+      cat("Copy and paste this complete command into your terminal:\n\n")
+      cat(remove_string, ";", add_string, "\n\n")
     }
 
     if (tool == "gemini") {

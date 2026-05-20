@@ -2,7 +2,7 @@
   <img src="assets/ClaudeR_logo.png" alt="ClaudeR Logo" width="150"/>
   <h1>ClaudeR - The Modern Researcher's Toolkit</h1>
   <p>
-    <b>Connect RStudio to Claude Code, Codex, Qwen Code, Gemini CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, automated manuscript auditing, and data annotation.</b>
+    <b>Connect RStudio to Claude Code, Codex, GitHub Copilot CLI, Qwen Code, Gemini CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, automated manuscript auditing, and data annotation.</b>
   </p>
   <p>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
@@ -18,7 +18,7 @@
 
 ---
 
-**ClaudeR** is an R package that forges a direct link between RStudio and MCP configured LLM agents like Claude Code, Codex, or Qwen Code. This allows interactive coding sessions where the agent can execute code in your active RStudio environment so it can see the executed code and any generated plots in real-time. If you need help editing a script, a quick analysis done, or an LLM to audit your statistical claims against any manuscript before submission: ClaudeR has got your back.
+**ClaudeR** is an R package that forges a direct link between RStudio and MCP configured LLM agents like Claude Code, Codex, GitHub Copilot CLI, or Qwen Code. This allows interactive coding sessions where the agent can execute code in your active RStudio environment so it can see the executed code and any generated plots in real-time. If you need help editing a script, a quick analysis done, or an LLM to audit your statistical claims against any manuscript before submission: ClaudeR has got your back.
 
 This package, additionally, allows multiple agents to work on one script, or it can make multiple RStudio windows siloed so multiple agents can operate independently on different datasets. It's also compatible with Cursor and any service that support MCP servers.
 
@@ -33,6 +33,7 @@ devtools::install_github("IMNMV/ClaudeR")
 library(ClaudeR)
 install_clauder()          # For Claude Desktop / Cursor
 install_cli(tools = "claude")  # For Claude Code CLI
+install_cli(tools = "copilot") # For GitHub Copilot CLI
 
 # Start the server in RStudio
 claudeAddin()
@@ -57,7 +58,8 @@ claudeAddin()
 - **Export clean script.** Click "Export Clean Script" in the Shiny addin to strip all timestamps, agent labels, and log headers from a session log, producing a runnable `.R` file with just the code. Error blocks are preserved as comments. Also available programmatically via `export_log_as_script()`.
 - **PyPI package (`clauder-mcp`).** The Python MCP bridge is now available as a standalone package on PyPI. Run it with `uvx clauder-mcp` for zero-config setup with no Python path or pip install needed. The installers (`install_cli()` and `install_clauder()`) default to uvx, with a `use_uvx = FALSE` fallback for legacy setups.
 - **`read_file` tool.** Agents can now read any text file from disk (.R, .qmd, .csv, .log, etc.) without it being open in RStudio. Enables session continuity workflows: point an agent at a previous log file and tell it to pick up where the last session left off.
-- **Codex + Qwen Code CLI support.** `install_cli(tools = "codex")` and `install_cli(tools = "qwen")` generate setup commands for OpenAI Codex and the [Qwen Code CLI](https://github.com/QwenLM/qwen-code) (Alibaba's gemini-cli fork). Both join Claude Code and Gemini as supported CLI agents.
+- **GitHub Copilot CLI support.** `install_cli(tools = "copilot")` generates the `copilot mcp add` command and the `~/.copilot/mcp-config.json` block needed to connect Copilot CLI to ClaudeR through `uvx clauder-mcp`.
+- **Codex + Qwen Code CLI support.** `install_cli(tools = "codex")` and `install_cli(tools = "qwen")` generate setup commands for OpenAI Codex and the [Qwen Code CLI](https://github.com/QwenLM/qwen-code) (Alibaba's gemini-cli fork). They join Claude Code, Copilot CLI, and Gemini as supported CLI agents.
 - **Multi-agent orchestration.** Run multiple AI agents on the same R session or spread them across separate RStudio windows. Each agent gets a unique ID on startup. Console output, log files, and execution history are all attributed per agent, so you always know who did what. On its very first tool call, each agent receives a context briefing with its own ID, any other agents active on the session, and the log file path, giving it full awareness of the shared environment without any manual setup. Agents can call `get_session_history` to review what other agents have done, or read the shared log file directly. The Shiny viewer tracks connected agents in real-time.
 - **Session discovery.** Each RStudio session writes a discovery file to `~/.claude_r_sessions/` on startup. AI agents find sessions automatically with no hardcoded ports. Name your sessions (e.g. "analysis", "modeling") and run them on different ports. When multiple sessions exist, agents automatically route to the session named "default". Non-default agents should call `connect_session` to bind to their target session. Single-session setups work with zero config.
 - **Redesigned Shiny viewer.** Cleaner UI with grouped panels for Session, Agents, Logging, and Advanced settings. Shows connected agents and execution count in real-time. Click the `?` button for a built-in guide on multi-session setup and agent identity.
@@ -132,7 +134,7 @@ With these tools, you can:
 - **Feedback & Assistance**: Get explanations of your R scripts or request edits at specific lines.
 - **Visualization**: The AI can generate, view, and refine plots and visualizations.
 - **Data Analysis**: Let the AI analyze your datasets and iteratively provide insights.
-- **Multi-Agent Workflows**: Run Claude Desktop, Claude Code, Codex, Qwen Code, and Gemini CLI on the same R session simultaneously. Each agent is uniquely identified, and they can see each other's work through shared history and log files.
+- **Multi-Agent Workflows**: Run Claude Desktop, Claude Code, Codex, GitHub Copilot CLI, Qwen Code, and Gemini CLI on the same R session simultaneously. Each agent is uniquely identified, and they can see each other's work through shared history and log files.
 - **Long-Running Analysis**: Async execution handles model fitting, simulations, and large data processing without timing out.
 - **Code Logging**: Save all code executed by the AI to log files for future reference. Every entry is tagged with the agent that ran it.
 - **Console Printing**: Print the AI's code to the console before execution.
@@ -253,7 +255,7 @@ This architecture ensures that the AI can only perform approved operations throu
 
 ## CLI Integration
 
-ClaudeR supports command-line interface (CLI) tools: the **Claude Code CLI**, the **OpenAI Codex CLI**, the **Qwen Code CLI**, and the **Google Gemini CLI**. This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
+ClaudeR supports command-line interface (CLI) tools: the **Claude Code CLI**, the **OpenAI Codex CLI**, the **GitHub Copilot CLI**, the **Qwen Code CLI**, and the **Google Gemini CLI**. This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
 
 ## Security Model
 
@@ -312,7 +314,7 @@ library(ClaudeR)
 install_clauder(use_uvx = FALSE, python_path = "/path/to/your/python")
 ```
 
-#### Option B: For CLI Tools (Claude Code / Codex / Qwen / Gemini)
+#### Option B: For CLI Tools (Claude Code / Codex / Copilot / Qwen / Gemini)
 
 This non-interactive function generates the exact command or JSON configuration needed for your CLI tool.
 
@@ -324,6 +326,9 @@ install_cli(tools = "claude")
 
 # For OpenAI Codex CLI
 install_cli(tools = "codex")
+
+# For GitHub Copilot CLI
+install_cli(tools = "copilot")
 
 # For Qwen Code CLI (requires `npm install -g @qwen-code/qwen-code`)
 install_cli(tools = "qwen")
@@ -340,6 +345,7 @@ install_cli(tools = "claude", use_uvx = FALSE, python_path = "/path/to/my/python
 
 After running the function, you must **manually apply the configuration**:
 - **For Claude / Codex / Qwen**: Copy the command printed in the R console and run it in your terminal.
+- **For Copilot**: Copy the printed `copilot mcp add` command, or merge the printed block into `~/.copilot/mcp-config.json`.
 - **For Gemini**: Copy the generated JSON and manually add it to your `gemini.json` settings file.
 
 After setup, **quit and restart** any active Desktop Apps or terminal sessions for the new settings to load.
@@ -364,7 +370,7 @@ The ClaudeR add-in will appear in your RStudio Viewer pane. Click **"Start Serve
 ### Part 2: In Your AI Tool
 
 - **For Desktop Apps**: Open the Claude Desktop App or Cursor and begin your session.
-- **For CLI Tools**: Open your terminal and use the `claude`, `codex`, `qwen`, or `gemini` commands to start interacting with your AI assistant.
+- **For CLI Tools**: Open your terminal and use the `claude`, `codex`, `copilot`, `qwen`, or `gemini` commands to start interacting with your AI assistant.
 
 > Note: You can regain console/active document control by clicking the stop button in the RStudio console. This closes the Shiny UI but the MCP server keeps running in the background and your AI agents stay connected. Re-run `claudeAddin()` to bring the viewer pane back with the same server state (port, session name, execution count). To fully stop the server, click **"Stop Server"** in the UI before closing.
 
@@ -424,7 +430,7 @@ If you can do it with R, your AI assistant can too.
 
 ## Limitations
 
-- Each R session can connect to one Claude Desktop/Cursor app at a time. However, multiple CLI agents (Claude Code, Codex, Qwen Code, Gemini) can share the same session alongside a Desktop app. To isolate agents, run separate RStudio windows with different session names and ports.
+- Each R session can connect to one Claude Desktop/Cursor app at a time. However, multiple CLI agents (Claude Code, Codex, GitHub Copilot CLI, Qwen Code, Gemini) can share the same session alongside a Desktop app. To isolate agents, run separate RStudio windows with different session names and ports.
 - R is single-threaded, but async jobs run in a separate process via `callr` so the main session stays responsive. The background process does not share the main session's environment by default. Use the `inputs`/`outputs` parameters on `execute_r_async` to auto-marshal data in and out, or write self-contained code that uses `saveRDS()`/`readRDS()` manually.
 
 ## License

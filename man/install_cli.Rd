@@ -8,8 +8,8 @@ install_cli(tools = "claude", use_uvx = TRUE, python_path = NULL, ...)
 }
 \arguments{
 \item{tools}{A character vector specifying which CLI tools to configure.
-Can be `"claude"`, `"codex"`, `"qwen"`, `"gemini"`, or a combination like
-`c("claude", "codex", "qwen")`.}
+Can be `"claude"`, `"codex"`, `"copilot"`, `"qwen"`, `"gemini"`,
+or a combination like `c("claude", "codex", "copilot")`.}
 
 \item{use_uvx}{Logical. If `TRUE` (the default), generates commands using
 `uvx clauder-mcp` which handles Python dependencies automatically. If
@@ -24,8 +24,8 @@ missing R dependencies.}
 }
 \description{
 An installer that configures ClaudeR to be used with command-line
-  AI tools like the Claude Code CLI, OpenAI Codex CLI, Qwen Code CLI,
-  and Google Gemini CLI.
+  AI tools like the Claude Code CLI, OpenAI Codex CLI, GitHub Copilot CLI,
+  Qwen Code CLI, and Google Gemini CLI.
 
   By default, it uses `uvx` to run the `clauder-mcp` PyPI package, which
   handles all Python dependencies automatically. No Python path or pip
@@ -34,6 +34,6 @@ An installer that configures ClaudeR to be used with command-line
 \details{
 This function will:
   1. Check for and install required R packages.
-  2. Provide you with the exact command to run (for Claude/Codex/Qwen) or the exact
-     JSON to copy (for Gemini) to complete the setup.
+  2. Provide you with the exact command to run (for Claude/Codex/Copilot/Qwen)
+     or the exact JSON to copy (for Gemini/Copilot) to complete the setup.
 }
