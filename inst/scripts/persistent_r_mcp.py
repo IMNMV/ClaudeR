@@ -1647,9 +1647,27 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
 
         if status == "running":
             elapsed = result.get("elapsed_seconds", "?")
+            progress = result.get("progress") or {}
+            progress_text = ""
+            stage = progress.get("stage")
+            message = progress.get("message")
+            percent = progress.get("percent")
+            updated_at = progress.get("updated_at")
+            if stage:
+                progress_bits = [f"stage={stage}"]
+                if percent is not None:
+                    progress_bits.append(f"percent={percent}")
+                if message:
+                    progress_bits.append(f"message={message}")
+                if updated_at:
+                    progress_bits.append(f"updated_at={updated_at}")
+                progress_text = " Latest progress: " + "; ".join(progress_bits) + "."
             return [types.TextContent(
                 type="text",
-                text=f"Job {job_id} is still running ({elapsed}s elapsed). Call get_async_result(\"{job_id}\") again to check."
+                text=(
+                    f"Job {job_id} is still running ({elapsed}s elapsed)."
+                    f"{progress_text} Call get_async_result(\"{job_id}\") again to check."
+                )
             )]
 
         # Job is complete
