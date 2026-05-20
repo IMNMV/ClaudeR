@@ -141,6 +141,29 @@ unwrap_viewer <- function() {
 # Package-level environment for non-blocking async execution.
 .claude_bg_jobs <- new.env(parent = emptyenv())
 
+read_background_progress <- function(progress_path) {
+  if (is.null(progress_path) || !file.exists(progress_path)) {
+    return(NULL)
+  }
+
+  tryCatch(readRDS(progress_path), error = function(e) NULL)
+}
+
+write_background_progress <- function(progress_path, stage, message = NULL, percent = NULL) {
+  if (is.null(progress_path)) {
+    return(invisible(NULL))
+  }
+
+  progress <- list(
+    stage = stage,
+    message = message,
+    percent = percent,
+    updated_at = format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
+  )
+  saveRDS(progress, progress_path)
+  invisible(progress)
+}
+
 #' Start a background R job via callr
 #' @param code R code to execute in a separate process
 #' @param job_id Unique identifier for the job
@@ -179,6 +202,8 @@ start_background_job <- function(code, job_id, settings = NULL, agent_id = NULL,
   outputs_path <- if (length(output_names) > 0) {
     tempfile(pattern = paste0("clauder_async_out_", job_id, "_"), fileext = ".rds")
   } else NULL
+  progress_path <- tempfile(pattern = paste0("clauder_async_progress_", job_id, "_"), fileext = ".rds")
+  write_background_progress(progress_path, stage = "submitted", message = "Job accepted")
 
   # Log / print
   if (settings$print_to_console) {
@@ -192,8 +217,20 @@ start_background_job <- function(code, job_id, settings = NULL, agent_id = NULL,
   }
 
   # Launch in a separate R process (skip .Rprofile to avoid startup noise in stderr)
-  job <- callr::r_bg(function(code, inputs_path, outputs_path, output_names) {
+  job <- callr::r_bg(function(code, inputs_path, outputs_path, output_names, progress_path) {
     work_env <- new.env(parent = globalenv())
+
+    work_env$clauder_progress <- function(stage, message = NULL, percent = NULL) {
+      progress <- list(
+        stage = stage,
+        message = message,
+        percent = percent,
+        updated_at = format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
+      )
+      saveRDS(progress, progress_path)
+      invisible(progress)
+    }
+    work_env$clauder_progress("started", "Background process started")
 
     if (!is.null(inputs_path) && file.exists(inputs_path)) {
       .clauder_inputs <- readRDS(inputs_path)
@@ -212,7 +249,7 @@ start_background_job <- function(code, job_id, settings = NULL, agent_id = NULL,
 
     list(success = TRUE, output = paste(output_lines, collapse = "\n"))
   }, args = list(code = code, inputs_path = inputs_path, outputs_path = outputs_path,
-                 output_names = output_names),
+                 output_names = output_names, progress_path = progress_path),
      supervise = TRUE, user_profile = FALSE)
 
   .claude_bg_jobs[[job_id]] <- list(
@@ -222,7 +259,8 @@ start_background_job <- function(code, job_id, settings = NULL, agent_id = NULL,
     agent_id = agent_id,
     inputs_path = inputs_path,
     outputs_path = outputs_path,
-    output_names = output_names
+    output_names = output_names,
+    progress_path = progress_path
   )
 
   # Record in history
@@ -260,7 +298,9 @@ kill_background_job <- function(job_id) {
   }
 
   # Cleanup marshaling tempfiles regardless of state.
-  for (p in c(job_info$inputs_path, job_info$outputs_path)) {
+  last_progress <- read_background_progress(job_info$progress_path)
+
+  for (p in c(job_info$inputs_path, job_info$outputs_path, job_info$progress_path)) {
     if (!is.null(p) && file.exists(p)) try(file.remove(p), silent = TRUE)
   }
 
@@ -270,7 +310,8 @@ kill_background_job <- function(job_id) {
     status = "cancelled",
     success = TRUE,
     was_alive = was_alive,
-    elapsed_seconds = round(elapsed)
+    elapsed_seconds = round(elapsed),
+    progress = last_progress
   )
 }
 
@@ -286,12 +327,16 @@ check_background_job <- function(job_id) {
 
   if (job$is_alive()) {
     elapsed <- as.numeric(difftime(Sys.time(), job_info$started, units = "secs"))
-    return(list(status = "running", elapsed_seconds = round(elapsed)))
+    return(list(
+      status = "running",
+      elapsed_seconds = round(elapsed),
+      progress = read_background_progress(job_info$progress_path)
+    ))
   }
 
   # Best-effort cleanup of marshaling tempfiles regardless of outcome.
   cleanup_files <- function() {
-    for (p in c(job_info$inputs_path, job_info$outputs_path)) {
+    for (p in c(job_info$inputs_path, job_info$outputs_path, job_info$progress_path)) {
       if (!is.null(p) && file.exists(p)) try(file.remove(p), silent = TRUE)
     }
   }
@@ -321,10 +366,14 @@ check_background_job <- function(job_id) {
       }
     }
 
+    final_progress <- read_background_progress(job_info$progress_path)
     cleanup_files()
     rm(list = job_id, envir = .claude_bg_jobs)
 
     out <- c(list(status = "complete"), result)
+    if (!is.null(final_progress)) {
+      out$progress <- final_progress
+    }
     if (length(marshaled_summary) > 0) {
       out$marshaled_outputs <- marshaled_summary
     }
@@ -332,9 +381,10 @@ check_background_job <- function(job_id) {
   }, error = function(e) {
     # callr wraps errors — dig out the original message
     err_msg <- if (!is.null(e$parent)) e$parent$message else e$message
+    final_progress <- read_background_progress(job_info$progress_path)
     cleanup_files()
     rm(list = job_id, envir = .claude_bg_jobs)
-    return(list(status = "complete", success = FALSE, error = err_msg))
+    return(list(status = "complete", success = FALSE, error = err_msg, progress = final_progress))
   })
 }
 
