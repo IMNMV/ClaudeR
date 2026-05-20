@@ -1693,6 +1693,24 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                 text="--- Outputs loaded into main session ---\n" + "\n".join(marshaled)
             ))
 
+        progress = result.get("progress") or {}
+        stage = progress.get("stage")
+        if stage:
+            progress_bits = [f"stage={stage}"]
+            percent = progress.get("percent")
+            message = progress.get("message")
+            updated_at = progress.get("updated_at")
+            if percent is not None:
+                progress_bits.append(f"percent={percent}")
+            if message:
+                progress_bits.append(f"message={message}")
+            if updated_at:
+                progress_bits.append(f"updated_at={updated_at}")
+            result_contents.append(types.TextContent(
+                type="text",
+                text="--- Final progress ---\n" + "; ".join(progress_bits)
+            ))
+
         return result_contents or [types.TextContent(
             type="text",
             text="Async job completed successfully but produced no output."

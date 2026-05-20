@@ -40,8 +40,8 @@ remove_discovery_file <- function(session_name) {
 
 pid_exists <- function(pid) {
   # MAJOR WARNING (Windows): never use tools::pskill(pid, signal = 0)
-  # as a liveness probe here. It has terminated live R sessions on this
-  # machine during multi-session startup. This helper must remain read-only.
+  # as a liveness probe here. It has been observed to terminate live R
+  # sessions during multi-session startup. This helper must remain read-only.
   pid_num <- suppressWarnings(as.integer(pid))
   if (is.na(pid_num) || pid_num <= 0L) return(FALSE)
 
