@@ -38,6 +38,36 @@ remove_discovery_file <- function(session_name) {
   if (file.exists(f)) file.remove(f)
 }
 
+pid_exists <- function(pid) {
+  # MAJOR WARNING (Windows): never use tools::pskill(pid, signal = 0)
+  # as a liveness probe here. It has terminated live R sessions on this
+  # machine during multi-session startup. This helper must remain read-only.
+  pid_num <- suppressWarnings(as.integer(pid))
+  if (is.na(pid_num) || pid_num <= 0L) return(FALSE)
+
+  if (.Platform$OS.type == "windows") {
+    cmd <- sprintf(
+      "if (Get-Process -Id %d -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }",
+      pid_num
+    )
+    status <- suppressWarnings(system2(
+      "powershell.exe",
+      c("-NoProfile", "-Command", cmd),
+      stdout = FALSE,
+      stderr = FALSE
+    ))
+    return(identical(status, 0L))
+  }
+
+  status <- suppressWarnings(system2(
+    "kill",
+    c("-0", as.character(pid_num)),
+    stdout = FALSE,
+    stderr = FALSE
+  ))
+  identical(status, 0L)
+}
+
 cleanup_stale_discovery_files <- function() {
   d <- discovery_dir()
   if (!dir.exists(d)) return(invisible(NULL))
@@ -45,8 +75,7 @@ cleanup_stale_discovery_files <- function() {
   for (f in files) {
     tryCatch({
       info <- jsonlite::fromJSON(f)
-      # signal = 0 checks if PID exists without killing it
-      pid_alive <- tools::pskill(info$pid, signal = 0)
+      pid_alive <- pid_exists(info$pid)
       if (!isTRUE(pid_alive)) file.remove(f)
     }, error = function(e) {
       # Corrupted file, remove it
