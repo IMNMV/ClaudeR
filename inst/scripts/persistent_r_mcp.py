@@ -363,6 +363,18 @@ def _run_subprocess_row(
             )
             output = completed.stdout
 
+        elif tool == "agy":
+            # Antigravity CLI. -p is an alias for --print (headless one-shot).
+            # Verified working against agy 1.0.5.
+            command = [tool_path, "-p", prompt]
+            if model:
+                command.extend(["--model", model])
+            completed = subprocess.run(
+                command, text=True,
+                capture_output=True, timeout=timeout
+            )
+            output = completed.stdout
+
         elif tool == "qwen":
             command = [tool_path, "--prompt", prompt]
             if model:
@@ -1082,7 +1094,7 @@ async def list_tools() -> List[types.Tool]:
             name="run_annotation_job",
             description=(
                 "Annotate a CSV dataset using a fresh subprocess (or Ollama HTTP call) per row, with no context bleed between rows. "
-                "Each row is scored by a brand-new claude, codex, gemini, qwen, or ollama process that sees only that row. "
+                "Each row is scored by a brand-new claude, codex, gemini, agy (Antigravity), qwen, or ollama process that sees only that row. "
                 "Runs in the background; returns a job ID immediately. "
                 "Use get_annotation_job_status to check progress and cancel_annotation_job to stop. "
                 "The original CSV is never modified; results go to {name}_annotating.csv. "
@@ -1097,7 +1109,7 @@ async def list_tools() -> List[types.Tool]:
                     },
                     "tool": {
                         "type": "string",
-                        "description": "Backend to use: 'claude' (default), 'codex', 'gemini', 'qwen' (Qwen Code CLI), or 'ollama' (local Ollama HTTP server). The first four require their respective CLI on PATH; ollama requires `ollama serve` running locally."
+                        "description": "Backend to use: 'claude' (default), 'codex', 'gemini', 'agy' (Antigravity CLI, Google's replacement for Gemini CLI starting 2026-06-18), 'qwen' (Qwen Code CLI), or 'ollama' (local Ollama HTTP server). The CLI tools require their respective binary on PATH; ollama requires `ollama serve` running locally."
                     },
                     "model": {
                         "type": "string",
@@ -2036,8 +2048,8 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             return [types.TextContent(type="text", text="Error: 'csv_path' is required.")]
         if not os.path.exists(csv_path):
             return [types.TextContent(type="text", text=f"Error: File not found: {csv_path}")]
-        if tool not in ("claude", "codex", "gemini", "qwen", "ollama"):
-            return [types.TextContent(type="text", text="Error: 'tool' must be 'claude', 'codex', 'gemini', 'qwen', or 'ollama'.")]
+        if tool not in ("claude", "codex", "gemini", "agy", "qwen", "ollama"):
+            return [types.TextContent(type="text", text="Error: 'tool' must be 'claude', 'codex', 'gemini', 'agy', 'qwen', or 'ollama'.")]
 
         if tool == "ollama":
             # No CLI binary; verify the Ollama server is reachable instead.

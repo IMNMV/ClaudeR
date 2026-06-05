@@ -1,14 +1,16 @@
 #' @title Install and Set Up ClaudeR for CLI Tools
 #' @description An installer that configures ClaudeR to be used with command-line
-#'   AI tools like the Claude Code CLI, OpenAI Codex CLI, and Google Gemini CLI.
+#'   AI tools: Claude Code CLI, OpenAI Codex CLI, Qwen Code CLI, Google Gemini
+#'   CLI, and Google Antigravity CLI (`agy`, the post-June-2026 replacement for
+#'   Gemini CLI).
 #'
 #'   By default, it uses `uvx` to run the `clauder-mcp` PyPI package, which
 #'   handles all Python dependencies automatically. No Python path or pip
 #'   install needed.
 #'
 #' @param tools A character vector specifying which CLI tools to configure.
-#'   Can be `"claude"`, `"codex"`, `"gemini"`, or a combination like
-#'   `c("claude", "codex")`.
+#'   Can be `"claude"`, `"codex"`, `"qwen"`, `"gemini"`, `"agy"`, or a
+#'   combination like `c("claude", "agy")`.
 #' @param use_uvx Logical. If `TRUE` (the default), generates commands using
 #'   `uvx clauder-mcp` which handles Python dependencies automatically. If
 #'   `FALSE`, falls back to the legacy method of finding a Python executable
@@ -24,9 +26,9 @@
 #' @export
 install_cli <- function(tools = "claude", use_uvx = TRUE, python_path = NULL, ...) {
   # --- 1. Parameter Validation ---
-  tools <- try(match.arg(tools, choices = c("claude", "codex", "gemini"), several.ok = TRUE), silent = TRUE)
+  tools <- try(match.arg(tools, choices = c("claude", "codex", "qwen", "gemini", "agy"), several.ok = TRUE), silent = TRUE)
   if (inherits(tools, "try-error")) {
-    stop("Invalid 'tools' argument. Please choose 'claude', 'codex', 'gemini', or a combination.", call. = FALSE)
+    stop("Invalid 'tools' argument. Please choose 'claude', 'codex', 'qwen', 'gemini', 'agy', or a combination.", call. = FALSE)
   }
 
   # --- 2. Check R Dependencies ---
@@ -144,6 +146,22 @@ install_cli <- function(tools = "claude", use_uvx = TRUE, python_path = NULL, ..
       cat(toml_block, "\n\n")
     }
 
+    if (tool == "qwen") {
+      remove_string <- 'qwen mcp remove r-studio 2>/dev/null'
+      if (use_uvx) {
+        add_string <- 'qwen mcp add --scope user --transport stdio r-studio uvx clauder-mcp'
+      } else {
+        add_string <- sprintf(
+          'qwen mcp add --scope user --transport stdio r-studio %s %s',
+          shQuote(mcp_command, type = "cmd"),
+          shQuote(mcp_args, type = "cmd")
+        )
+      }
+      cat("\n--- For Qwen Code CLI ---\n")
+      cat("Copy and paste this complete command into your terminal:\n\n")
+      cat(remove_string, ";", add_string, "\n\n")
+    }
+
     if (tool == "gemini") {
       if (use_uvx) {
         gemini_config <- list(
@@ -168,8 +186,42 @@ install_cli <- function(tools = "claude", use_uvx = TRUE, python_path = NULL, ..
       gemini_json_string <- jsonlite::toJSON(gemini_config, pretty = TRUE, auto_unbox = TRUE)
       cat("\n--- For Google Gemini CLI ---\n")
       cat("Edit your Gemini settings file (usually at '~/.gemini/settings.json').\n")
+      cat("Note: Gemini CLI shuts down June 18, 2026 (Enterprise tier excepted). For its replacement, use `install_cli(tools = \"agy\")`.\n")
       cat("Add or merge the following 'mcpServers' block into that file:\n\n")
       cat(gemini_json_string, "\n\n")
+    }
+
+    if (tool == "agy") {
+      # Antigravity CLI (binary: agy). Replaces Gemini CLI starting June 18, 2026.
+      # MCP servers now live in a dedicated file rather than inline in settings.json.
+      if (use_uvx) {
+        agy_config <- list(
+          mcpServers = list(
+            `r-studio` = list(
+              command = "uvx",
+              args = list("clauder-mcp")
+            )
+          )
+        )
+      } else {
+        agy_config <- list(
+          mcpServers = list(
+            `r-studio` = list(
+              command = mcp_command,
+              args = list(mcp_args),
+              env = list(PYTHONUNBUFFERED = "1")
+            )
+          )
+        )
+      }
+      agy_json_string <- jsonlite::toJSON(agy_config, pretty = TRUE, auto_unbox = TRUE)
+      cat("\n--- For Antigravity CLI (agy) ---\n")
+      cat("Antigravity CLI is Google's replacement for Gemini CLI (Gemini CLI shuts down June 18, 2026).\n")
+      cat("MCP servers now live in a dedicated config file. Create or edit:\n")
+      cat("  ~/.gemini/config/mcp_config.json   (global, applies to all workspaces)\n")
+      cat("  .agents/mcp_config.json            (per-workspace, in your project root)\n")
+      cat("Add or merge the following 'mcpServers' block into that file:\n\n")
+      cat(agy_json_string, "\n\n")
     }
   }
 

@@ -2,7 +2,7 @@
   <img src="assets/ClaudeR_logo.png" alt="ClaudeR Logo" width="150"/>
   <h1>ClaudeR - The Modern Researcher's Toolkit</h1>
   <p>
-    <b>Connect RStudio to Claude Code, Codex, Qwen Code, Gemini CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, automated manuscript auditing, and data annotation.</b>
+    <b>Connect RStudio to Claude Code, Codex, Qwen Code, Gemini CLI, Antigravity CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, automated manuscript auditing, and data annotation.</b>
   </p>
   <p>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
@@ -43,7 +43,8 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
-- **AI-Driven Data Annotation.** Five MCP tools (`load_annotation_data`, `annotate`, `run_annotation_job`, `get_annotation_job_status`, `cancel_annotation_job`) let an agent label a CSV dataset row by row without writing any code. Two modes: interactive (context accumulates across rows) or fully-isolated via `run_annotation_job` (one fresh `claude`, `codex`, `gemini`, or `qwen` subprocess per row, or a local `ollama` HTTP call for free, private, offline labeling). Codex jobs accept a `reasoning_effort` parameter; Ollama jobs accept an `ollama_base_url` parameter. The original file is never modified and sessions resume automatically if interrupted.
+- **Antigravity CLI (`agy`) support.** Google is retiring Gemini CLI on 2026-06-18 and replacing it with Antigravity CLI. `install_cli(tools = "agy")` generates the new `~/.gemini/config/mcp_config.json` block. `run_annotation_job` accepts `tool = "agy"` as a subprocess backend, verified against `agy 1.0.5`. Gemini CLI support stays (Enterprise tiers keep access past the cutoff). Also restores a missing `install_cli(tools = "qwen")` branch that was accidentally dropped in an earlier commit.
+- **AI-Driven Data Annotation.** Five MCP tools (`load_annotation_data`, `annotate`, `run_annotation_job`, `get_annotation_job_status`, `cancel_annotation_job`) let an agent label a CSV dataset row by row without writing any code. Two modes: interactive (context accumulates across rows) or fully-isolated via `run_annotation_job` (one fresh `claude`, `codex`, `gemini`, `agy`, or `qwen` subprocess per row, or a local `ollama` HTTP call for free, private, offline labeling). Codex jobs accept a `reasoning_effort` parameter; Ollama jobs accept an `ollama_base_url` parameter. The original file is never modified and sessions resume automatically if interrupted.
 - **Multi-Agent Coordination Protocol.** Built-in protocol for multiple agents sharing one RStudio session. Agents negotiate through a shared message board in the R environment, agree on a task plan, claim tasks before working, and cross-check each other's output. Load it with `multi_agent_prompt()`.
 - **`verify_references` tool.** Extracts DOIs from a manuscript's bibliography, queries the CrossRef API for each, and returns metadata (title, authors, year, journal) for comparison against manuscript claims. Non-resolving DOIs, metadata mismatches, and references without DOIs are flagged. Works standalone ("check my references") or as Pass 4 of Reviewer Zero.
 - **R Best Practices Protocol.** Built-in statistical analysis protocol covering EDA, assumption checking, model building, diagnostics, multiple-corrections, and reporting. Load it with `r_best_practices_prompt()` or tell the agent to read it.
@@ -252,7 +253,7 @@ This architecture ensures that the AI can only perform approved operations throu
 
 ## CLI Integration
 
-ClaudeR supports command-line interface (CLI) tools: the **Claude Code CLI**, the **OpenAI Codex CLI**, the **Qwen Code CLI**, and the **Google Gemini CLI**. This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
+ClaudeR supports command-line interface (CLI) tools: the **Claude Code CLI**, the **OpenAI Codex CLI**, the **Qwen Code CLI**, the **Google Gemini CLI**, and the **Google Antigravity CLI** (`agy`, the replacement for Gemini CLI starting 2026-06-18). This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
 
 ## Security Model
 
@@ -327,8 +328,11 @@ install_cli(tools = "codex")
 # For Qwen Code CLI (requires `npm install -g @qwen-code/qwen-code`)
 install_cli(tools = "qwen")
 
-# For Google Gemini CLI
+# For Google Gemini CLI (shuts down 2026-06-18 for non-Enterprise tiers)
 install_cli(tools = "gemini")
+
+# For Google Antigravity CLI (`agy`, the post-2026-06-18 Gemini CLI replacement)
+install_cli(tools = "agy")
 ```
 
 For users who cannot use `uvx`, fall back to the legacy Python path method:
