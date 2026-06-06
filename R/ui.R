@@ -1914,6 +1914,91 @@ multi_agent_prompt <- function() {
   invisible(txt)
 }
 
+#' Print the Lab Mode orchestration protocol
+#'
+#' Displays the built-in multi-agent research lab protocol. An orchestrator
+#' agent reads this protocol and dispatches specialist subagents (EDA,
+#' modeling, reviewer_zero, reporting) through parallel exploration, sequential
+#' synthesis, and an assembly review until the final deliverables are
+#' pristine. Maintains a markdown ledger of findings, snapshots every assembly
+#' round to disk, and produces a self-contained timestamped lab folder.
+#'
+#' Agent-agnostic: works on any host CLI with subagent primitives (Claude Code
+#' Task tool, Codex `[agents]`, Gemini CLI `/subagents`, Antigravity
+#' `invoke_subagent`). Falls back to sequential role-playing on single-agent
+#' CLIs.
+#'
+#' @param description Required. A research question or task statement. The
+#'   orchestrator will refuse to proceed if this is empty or too vague.
+#' @param roles Character vector of roles to dispatch in the parallel
+#'   exploration phase. Default: all four. Must be a subset of
+#'   `c("eda", "modeling", "reviewer_zero", "reporting")`.
+#' @param session_name Name of the RStudio session to connect to. Default
+#'   `"default"`. Use `list_sessions` to see what's available.
+#' @param project_dir Working directory where the lab folder will be created.
+#'   Default `"."`.
+#' @param output_subdir Subdirectory of `project_dir` that will contain the
+#'   timestamped lab folder. Default `"clauder_lab"`. Each invocation produces
+#'   a new timestamped subfolder so prior runs are never overwritten.
+#' @param max_assembly_rounds Maximum assembly review rounds before
+#'   escalating to the user. Default 3.
+#'
+#' @return The prompt text (invisibly), printed to the console.
+#' @export
+#' @examples
+#' \dontrun{
+#' ClaudeR::lab_mode_prompt(
+#'   description = "Does driving behavior moderate the relationship between
+#'                  horsepower and fuel economy in mtcars?",
+#'   session_name = "study_01"
+#' )
+#' }
+lab_mode_prompt <- function(description,
+                            roles = c("eda", "modeling", "reviewer_zero", "reporting"),
+                            session_name = "default",
+                            project_dir = ".",
+                            output_subdir = "clauder_lab",
+                            max_assembly_rounds = 3) {
+  if (missing(description) || !nzchar(trimws(description))) {
+    stop("`description` is required and must be a non-empty research question or task statement.",
+         call. = FALSE)
+  }
+  valid_roles <- c("eda", "modeling", "reviewer_zero", "reporting")
+  bad <- setdiff(roles, valid_roles)
+  if (length(bad) > 0) {
+    stop(sprintf("Unknown role(s): %s. Valid roles: %s.",
+                 paste(bad, collapse = ", "), paste(valid_roles, collapse = ", ")),
+         call. = FALSE)
+  }
+  if (!is.numeric(max_assembly_rounds) || max_assembly_rounds < 1) {
+    stop("`max_assembly_rounds` must be a positive integer.", call. = FALSE)
+  }
+
+  prompt_path <- system.file("prompts", "lab_mode.md", package = "ClaudeR")
+  if (!nzchar(prompt_path) || !file.exists(prompt_path)) {
+    stop("Lab Mode prompt template not found. Is ClaudeR installed correctly?")
+  }
+
+  # Build the timestamped lab folder path that will appear in the printed protocol.
+  ts <- format(Sys.time(), "%Y%m%d_%H%M%S", tz = "UTC")
+  lab_folder <- file.path(
+    project_dir, output_subdir,
+    sprintf("clauder_lab_%s_%s", session_name, ts)
+  )
+
+  txt <- paste(readLines(prompt_path, warn = FALSE), collapse = "\n")
+  txt <- gsub("{{DESCRIPTION}}", description, txt, fixed = TRUE)
+  txt <- gsub("{{SESSION_NAME}}", session_name, txt, fixed = TRUE)
+  txt <- gsub("{{LAB_FOLDER}}", lab_folder, txt, fixed = TRUE)
+  txt <- gsub("{{ROLES}}", paste(roles, collapse = ", "), txt, fixed = TRUE)
+  txt <- gsub("{{MAX_ROUNDS}}", as.character(as.integer(max_assembly_rounds)), txt, fixed = TRUE)
+  # Round placeholder in vote format is left as {{N}} intentionally — the orchestrator fills it per round.
+  txt <- gsub("Round {{N}}", "Round <N>", txt, fixed = TRUE)
+
+  cat(txt, "\n")
+  invisible(txt)
+}
+
 #' Load Claude settings
 #'
 #' @return A list containing Claude settings

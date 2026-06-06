@@ -43,6 +43,7 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
+- **Lab Mode (`lab_mode_prompt()`).** A multi-agent research orchestration protocol with three phases (parallel exploration → sequential synthesis → assembly review) until deliverables reach a pristine acceptance bar. Specialist subagents (EDA, modeling, reviewer_zero, reporting) share an append-only markdown ledger with F-ID-tagged findings, round snapshots, and an explicit anti-bias rule for the final assembly vote. Agent-agnostic: works on Claude Code's Task tool, Codex's `[agents]`, Gemini CLI's `/subagents`, and Antigravity's `invoke_subagent`. Falls back to sequential role-playing on single-agent CLIs.
 - **Antigravity CLI (`agy`) support.** Google is retiring Gemini CLI on 2026-06-18 and replacing it with Antigravity CLI. `install_cli(tools = "agy")` generates the new `~/.gemini/config/mcp_config.json` block. `run_annotation_job` accepts `tool = "agy"` as a subprocess backend, verified against `agy 1.0.5`. Gemini CLI support stays (Enterprise tiers keep access past the cutoff). Also restores a missing `install_cli(tools = "qwen")` branch that was accidentally dropped in an earlier commit.
 - **AI-Driven Data Annotation.** Five MCP tools (`load_annotation_data`, `annotate`, `run_annotation_job`, `get_annotation_job_status`, `cancel_annotation_job`) let an agent label a CSV dataset row by row without writing any code. Two modes: interactive (context accumulates across rows) or fully-isolated via `run_annotation_job` (one fresh `claude`, `codex`, `gemini`, `agy`, or `qwen` subprocess per row, or a local `ollama` HTTP call for free, private, offline labeling). Codex jobs accept a `reasoning_effort` parameter; Ollama jobs accept an `ollama_base_url` parameter. The original file is never modified and sessions resume automatically if interrupted.
 - **Multi-Agent Coordination Protocol.** Built-in protocol for multiple agents sharing one RStudio session. Agents negotiate through a shared message board in the R environment, agree on a task plan, claim tasks before working, and cross-check each other's output. Load it with `multi_agent_prompt()`.
@@ -85,6 +86,7 @@ claudeAddin()
 - [Reviewer Zero](#reviewer-zero-automated-academic-audits)
 - [R Best Practices Protocol](#r-best-practices-protocol)
 - [Multi-Agent Coordination Protocol](#multi-agent-coordination-protocol)
+- [Lab Mode](#lab-mode)
 - [CLI Integration](#cli-integration)
 - [Security Restrictions](#security-restrictions)
 - [Installation](#installation)
@@ -181,6 +183,30 @@ multi_agent_prompt()
 ```
 
 You can also just tell the agents to run `ClaudeR::multi_agent_prompt()` and they will read the protocol themselves.
+
+## Lab Mode
+
+Lab Mode is a heavier-weight multi-agent orchestration protocol for serious research workflows. Instead of agents loosely coordinating in one R session, an orchestrator dispatches specialist subagents (EDA, modeling, reviewer_zero, reporting) through three phases: parallel exploration, sequential synthesis (code consolidation → writeup → validation), and a final **assembly review** where every subagent must verify the deliverables against the audit trail and vote APPROVE or CONCERNS. The loop iterates until unanimous approval or the round cap is hit (concerns then surface to the user).
+
+Distinctive features:
+
+- **Timestamped lab folder** — every invocation produces `clauder_lab_<session>_<YYYYMMDD>_<HHMMSS>/`. Prior runs are never overwritten.
+- **Append-only ledger** — `ledger.md` records every finding with an F-ID. Findings can be flagged Modified or Retracted; nothing is ever deleted.
+- **Async-only execution** — non-trivial work runs through `execute_r_async` to avoid the single-session bottleneck, so parallel subagents don't queue on each other.
+- **Round snapshots** — every assembly round archives the lab state into `rounds/round_<N>/` so the full progression is auditable.
+- **Pristine acceptance criteria** — explicit, falsifiable bar: every Open finding reproduces from a clean R process, no Modified/Retracted leaks into the writeup, no hardcoded values, `analysis_final.R` runs end-to-end.
+- **Agent-agnostic** — works on Claude Code's Task tool, Codex's `[agents]`, Gemini CLI's `/subagents`, Antigravity's `invoke_subagent`. Falls back to sequential role-playing on single-agent CLIs.
+
+```r
+# Print the full protocol with your research question baked in
+ClaudeR::lab_mode_prompt(
+  description = "Does driving behavior moderate the relationship between
+                 horsepower and fuel economy in mtcars?",
+  session_name = "study_01"
+)
+```
+
+The orchestrator agent reads the printed protocol and runs the lab. Deliverables land in the timestamped folder: `ledger.md`, `analysis_final.R`, `final_writeup.qmd` (or `.md`), `validator_report.md`, and `assembly_log.md`.
 
 ## AI-Driven Data Annotation
 
