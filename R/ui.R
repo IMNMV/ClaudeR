@@ -1980,6 +1980,9 @@ lab_mode_prompt <- function(description,
   }
 
   # Build the timestamped lab folder path that will appear in the printed protocol.
+  # Normalize to an absolute path so the orchestrator does not nest folders when
+  # its working directory has already been changed (e.g. into a prior lab folder).
+  project_dir <- normalizePath(project_dir, mustWork = FALSE)
   ts <- format(Sys.time(), "%Y%m%d_%H%M%S", tz = "UTC")
   lab_folder <- file.path(
     project_dir, output_subdir,

@@ -6,6 +6,21 @@ This is not a chat. This is a research workflow with discipline, audit trail, an
 
 ---
 
+## Termination invariant (read this first, return to it often)
+
+**This session is not complete until `assembly_log.md` shows a final round with:**
+- **Unanimous APPROVE from every dispatched voter,** AND
+- **Zero `UNAVAILABLE` voters** (no voter failed to respond due to quota, timeout, or error), AND
+- **No outstanding concerns from prior rounds.**
+
+**OR** the user has issued an explicit override instructing you to deliver despite outstanding concerns.
+
+Producing artifacts is not completion. Producing a clean writeup is not completion. Even producing a unanimous APPROVE row is not completion if any voter was `UNAVAILABLE` or self-simulated. The only completion signal is the final assembly state matching the criteria above.
+
+If you find yourself about to summarize results to the user and you have not satisfied this invariant, STOP — return to whichever phase you actually need to finish.
+
+---
+
 ## Session configuration (from the wrapper)
 
 - **Description (research question or task):** `{{DESCRIPTION}}`
@@ -28,6 +43,7 @@ These are extracted from ClaudeR's R Best Practices protocol and apply regardles
 4. **Section headers in comments, not `cat()`.** Use `# Section: Title` style, never `cat("=== SECTION ===\n")`.
 5. **Save heavy objects as `.rds`.** Models, fitted simulations, large data transformations — save them once, load on demand.
 6. **Async-only for non-trivial work.** See the next section.
+7. **No polling timers for sibling-subagent coordination.** If you are waiting on a sibling subagent's output before you can proceed, use your host CLI's native subagent-completion notification (the host will tell you when they reply). Do NOT set 15-second wake-up timers in a loop to poll session history. That burns inference cycles for no signal. If the host CLI's native wait mechanism is unfamiliar, ask the user once at the start of Phase 1.
 
 For the full canonical protocol, the modeling-role and EDA-role subagents should call `ClaudeR::r_best_practices_prompt()` at startup and follow the cited sections.
 
@@ -184,13 +200,20 @@ Original entry stays in place. Code consolidator skips entries with non-Open sta
 
 If the user picked check-in mode in Phase 0, pause at the chosen cadence. Read the ledger, write a concise summary to the user (number of findings, what's been done, anything notable that affects scope), and ask: "continue, refine the question, or stop?" Honor their answer.
 
-### 1.5 — When to stop Phase 1
+### 1.5 — Phase 1 ending and immediate transition to Phase 2
 
-Phase 1 ends when:
-- All dispatched subagents have reported completion, AND
-- The orchestrator (you) has reviewed the ledger and judges that the research question is sufficiently explored
+Phase 1 ends the **moment** all dispatched working subagents have returned their final reports. There is no soft "judges sufficiency" clause. As soon as the last working subagent reports back, you dispatch the Phase 2 synthesis subagents.
 
-If a subagent gets stuck (hung async job, repeated errors, asking for clarification you can't provide), cancel its job with `cancel_async_job`, append a finding documenting the gap, and proceed.
+If a subagent gets stuck (hung async job, repeated errors, asking for clarification you can't provide), cancel its job with `cancel_async_job`, append a finding documenting the gap, and proceed to Phase 2.
+
+**What is NOT done yet at this boundary:**
+- `analysis_final.R` does not exist (code_consolidator has not run)
+- `final_writeup` does not exist (writeup_synthesizer has not run)
+- `validator_report.md` does not exist (validator has not run)
+- `assembly_log.md` may exist as scaffold but has zero votes
+- `rounds/` may exist as a scaffold but contains no snapshots
+
+**Do not stop here.** Do not summarize Phase 1 to the user. Dispatch the Phase 2.1 subagent (code_consolidator) now.
 
 ---
 
@@ -240,6 +263,13 @@ Dispatch a fresh subagent with this brief:
 >
 > Write `validator_report.md` summarizing: each F-ID, the ledger value, the reproduced value, pass/fail with justification.
 
+**At Phase 2 boundary — what is NOT done yet:**
+- `assembly_log.md` may exist as scaffold but contains zero votes
+- `rounds/` may contain no snapshots yet
+- The session is not complete (re-read the Termination Invariant at the top of this protocol)
+
+Dispatch Phase 3 immediately after `validator_report.md` exists. Do not stop. Do not summarize artifacts to the user. Assembly is mandatory.
+
 ---
 
 ## Phase 3 — Assembly Review
@@ -274,13 +304,15 @@ If you cannot personally verify all of the above by **reading the files directly
 
 ### 3.3 — Vote format
 
-Each voter appends to `assembly_log.md`:
+Each voter appends to `assembly_log.md`.
+
+**Round 1 vote format:**
 
 ```markdown
-## Round {{N}} · 2026-06-06T15:42:08Z
+## Round 1 · 2026-06-06T15:42:08Z
 
 ### Vote · <role_name> · <conversation_id>
-**Verdict:** APPROVE | CONCERNS
+**Verdict:** APPROVE | CONCERNS | UNAVAILABLE
 
 (if CONCERNS)
 **Concerns:**
@@ -294,52 +326,111 @@ Each voter appends to `assembly_log.md`:
 - [x] I read validator_report.md in full
 ```
 
-Every concern must cite a specific F-ID and a specific file+line. Vague concerns ("I'm not sure about the methodology") are rejected by the orchestrator — push the voter to make it specific or withdraw it.
+**Round 2+ vote format (mandatory re-verification of prior round's concerns):**
 
-### 3.4 — Resolution
+Subsequent rounds exist because Round N had concerns. A Round N+1 voter must specifically reaffirm whether each Round N concern from their own prior vote has been addressed. Checkbox-only re-votes are not accepted — they regress vote quality below Round 1.
 
-After all votes are in:
+```markdown
+## Round 2 · 2026-06-06T15:55:12Z
 
-**If unanimous APPROVE:** Proceed to Phase 4.
+### Vote · <role_name> · <conversation_id>
+**Verdict:** APPROVE | CONCERNS | UNAVAILABLE
 
-**If any CONCERNS were raised:**
+**Re-verification of my Round 1 concerns:**
+- C1 (Round 1, F-abc123, final_writeup.qmd:42) → **Addressed:** writeup now uses an inline R chunk at line 44 that dynamically extracts the mean (verified value 19.2 matches F-abc123).
+- C2 (Round 1, F-def456, analysis_final.R:87) → **Addressed:** the interaction term has been added at analysis_final.R:91 and the validator report confirms reproduction.
+
+(if any new CONCERNS in Round 2)
+**New concerns:**
+- C3 · F-ghi789 · `analysis_final.R:line 102` · The new interaction term was added but the model comparison code references the old model name `m_main` instead of `m_interact`.
+
+**Self-verification confirmation:**
+- [x] I read ledger.md in full
+- [x] I read analysis_final.R in full (including changes since Round 1)
+- [x] I read final_writeup in full (including changes since Round 1)
+- [x] I read validator_report.md in full
+- [x] I personally re-checked each of my Round 1 concerns against the current artifacts
+```
+
+Every concern (new or carried-over) must cite a specific F-ID and a specific file+line. Vague concerns ("I'm not sure about the methodology") are rejected by the orchestrator — push the voter to make it specific or withdraw it. A Round N+1 APPROVE without the "Re-verification of my Round 1 concerns" section is rejected as procedurally invalid; ask the voter to redo it.
+
+### 3.4 — Handling voters who cannot respond (CRITICAL — read in full)
+
+If a dispatched voter cannot return a real vote — they hit a quota limit, time out, error out, or otherwise fail to complete — **you (the orchestrator) MUST NOT simulate their vote.** Self-simulating an absent voter is the single most destructive thing you can do to this protocol's integrity, because the assembly phase exists precisely to provide independent verification of work you produced. If you play the absent voter's role yourself, you have eliminated independent verification while reporting it as present. This is forbidden.
+
+When a voter fails to respond, you have exactly three options:
+
+**Option A — Retry once.** Wait a reasonable period (a few minutes for transient errors; until quota reset for quota limits), then re-dispatch the same voter with a fresh conversation. If the retry succeeds, record their real vote.
+
+**Option B — Mark UNAVAILABLE.** Append a vote entry to `assembly_log.md` with verdict `UNAVAILABLE` and the reason:
+
+```markdown
+### Vote · <role_name> · <conversation_id>
+**Verdict:** UNAVAILABLE
+**Reason:** Voter exceeded API quota at <timestamp>; retry was attempted at <timestamp> and also exceeded quota. No real vote was cast.
+```
+
+An `UNAVAILABLE` vote **counts as CONCERNS** for the purposes of round resolution. The reasoning: an absent vote means independent verification was not obtained, and you cannot prove the artifacts would have passed it. Treating UNAVAILABLE as APPROVE would let you launder unverified work as unanimous.
+
+**Option C — Escalate to user.** Present the situation explicitly: "Voter X is UNAVAILABLE due to <reason>. The assembly cannot reach a verifiable unanimous APPROVE without their vote. Options are (a) wait and retry, (b) proceed to delivery with their vote marked UNAVAILABLE and surfaced in the writeup as unresolved, or (c) override and proceed anyway. Which do you want?" Then honor their choice.
+
+What you must not do: write a row that says "**Verdict:** APPROVE" followed by "(Simulated due to quota limit)" or any equivalent. There is no such category as a simulated vote in this protocol.
+
+### 3.5 — Resolution
+
+After all votes are in (real or marked UNAVAILABLE per 3.4):
+
+**If unanimous real APPROVE with zero UNAVAILABLE voters:** Proceed to Phase 4.
+
+**If any CONCERNS were raised, OR any voter was UNAVAILABLE:**
 
 1. Snapshot the current state of `{{LAB_FOLDER}}` into `{{LAB_FOLDER}}/rounds/round_<N>/` before making any changes. Use `R.utils::copyDirectory` or shell `cp -r`.
 2. For each concern, dispatch the relevant author subagent (the role that wrote the implicated artifact) with the concern text and instruction to address it. If the concern is about the writeup, dispatch a fresh writeup_synthesizer; if the analysis, fresh code_consolidator; if a finding itself, the original Phase-1 role.
-3. After the authors have addressed their concerns, re-run the relevant synthesis steps (e.g., code_consolidator if scripts changed, validator always).
-4. Start a new assembly round.
+3. For each UNAVAILABLE voter, follow Option A/B/C from section 3.4 — usually retry in the next round.
+4. After the authors have addressed their concerns, re-run the relevant synthesis steps (e.g., code_consolidator if scripts changed, validator always).
+5. Start a new assembly round.
 
 **Termination conditions:**
 
-- Unanimous APPROVE → Phase 4
-- `{{MAX_ROUNDS}}` reached without consensus → escalate to user (see 3.5)
-- User issues explicit override → Phase 4 with the override noted in the writeup
+- Unanimous real APPROVE with zero UNAVAILABLE voters → Phase 4
+- `{{MAX_ROUNDS}}` reached without consensus or with unresolved UNAVAILABLE voters → escalate to user (see 3.6)
+- User issues explicit override → Phase 4 with the override noted in the writeup and the `delivery_summary.md`
 
-### 3.5 — Max rounds escalation
+### 3.6 — Max rounds escalation
 
-If you hit `{{MAX_ROUNDS}}` rounds without unanimous approval:
+If you hit `{{MAX_ROUNDS}}` rounds without unanimous real APPROVE (concerns still outstanding OR voters still UNAVAILABLE):
 
-- Compile the still-outstanding concerns from the most recent round
-- Present them to the user verbatim: "After {{MAX_ROUNDS}} assembly rounds, the following concerns remain unresolved: ..."
-- Ask: "Proceed to delivery with these concerns documented, or continue the assembly loop?"
-- If they say proceed: write a `## Unresolved Concerns` section into `final_writeup` listing every outstanding concern with its F-ID, file, line, and the dissenting subagent's role. **Do not hide it.** The point of surfacing concerns is that the user knows what was not consensus.
+- Compile the still-outstanding concerns AND any UNAVAILABLE voters from the most recent round
+- Present them to the user verbatim: "After {{MAX_ROUNDS}} assembly rounds, the following are still unresolved: <concerns and unavailable voters>"
+- Ask: "Proceed to delivery with these unresolved items documented, or continue the assembly loop?"
+- If they say proceed: write a `## Unresolved Concerns` section into `final_writeup` listing every outstanding concern AND every UNAVAILABLE voter (with their reason), so the user knows precisely what was not verified. Same section appears in `delivery_summary.md`. **Do not hide it.**
 - If they say continue: run more rounds until they tell you to stop.
 
 ---
 
 ## Phase 4 — Delivery
 
-Present to the user:
+**Before declaring completion, re-read the Termination Invariant at the top of this protocol.** If `assembly_log.md` does not show a final round with unanimous real APPROVE and zero UNAVAILABLE voters, you are not in Phase 4. Return to Phase 3.
+
+### 4.1 — Write the delivery summary INSIDE the lab folder
+
+Write a file `{{LAB_FOLDER}}/delivery_summary.md` with:
+
+1. **Session metadata:** description, session name, total rounds, completion timestamp.
+2. **Final vote breakdown:** the final round's votes by role, verbatim from `assembly_log.md`. If any vote was `UNAVAILABLE`, this must be visible.
+3. **Unresolved concerns or UNAVAILABLE voters:** if the user issued an override per section 3.6, list every outstanding item explicitly here. If completion was clean (unanimous real APPROVE, zero UNAVAILABLE), say so plainly.
+4. **Path index of deliverables:** the five primary deliverables (`ledger.md`, `analysis_final.R`, `final_writeup.<ext>`, `validator_report.md`, `assembly_log.md`) with their paths, plus a pointer to `rounds/` if it contains any snapshots.
+5. **How to reproduce:** one short paragraph explaining that `analysis_final.R` will reproduce all Open findings from the ledger when sourced in a clean R session.
+
+The `delivery_summary.md` MUST live at `{{LAB_FOLDER}}/delivery_summary.md`. Do not write it to your agent's internal scratch directory, your home directory, or anywhere outside the lab folder. The lab folder is the audit trail; the delivery summary is the entry point into it and must live with it.
+
+### 4.2 — Present to the user
+
+Show the user:
 
 1. The lab folder path: `{{LAB_FOLDER}}`
-2. The five primary deliverables:
-   - `ledger.md` — complete audit trail of every finding, with all status transitions visible
-   - `analysis_final.R` — consolidated, clean, runnable
-   - `final_writeup.{md,qmd}` — the narrative
-   - `validator_report.md` — verification record
-   - `assembly_log.md` — round-by-round vote record
-3. A summary of: total rounds, final vote breakdown, any unresolved concerns surfaced to the writeup
-4. A pointer to the `rounds/` archive for historical comparison
+2. A confirmation that the Termination Invariant is satisfied (real unanimous APPROVE OR explicit user override with surfaced unresolved items)
+3. A pointer to `{{LAB_FOLDER}}/delivery_summary.md` as the entry point
 
 Do not delete anything. Do not move anything. The lab folder is the complete record.
 
