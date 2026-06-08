@@ -1983,6 +1983,27 @@ lab_mode_prompt <- function(description,
   # Normalize to an absolute path so the orchestrator does not nest folders when
   # its working directory has already been changed (e.g. into a prior lab folder).
   project_dir <- normalizePath(project_dir, mustWork = FALSE)
+
+  # If the resolved project_dir is itself inside a previous clauder_lab_* run,
+  # walk back up to a neutral parent so the new run doesn't get buried under
+  # prior runs. This handles the case where the user's R session has a stale
+  # working directory inside an old lab folder.
+  parts <- strsplit(project_dir, "/", fixed = TRUE)[[1]]
+  if (length(parts) > 0 && parts[1] == "") parts <- parts[-1]  # drop leading "" from absolute paths
+  nested_idx <- which(grepl("^clauder_lab_", parts))[1]
+  if (!is.na(nested_idx)) {
+    parent_parts <- if (nested_idx > 1) parts[seq_len(nested_idx - 1)] else character(0)
+    if (length(parent_parts) > 0 && parent_parts[length(parent_parts)] == output_subdir) {
+      parent_parts <- parent_parts[-length(parent_parts)]
+    }
+    neutral_dir <- if (length(parent_parts) > 0) paste0("/", paste(parent_parts, collapse = "/")) else "/"
+    message(sprintf(
+      "Note: project_dir was inside a previous lab folder (%s). Using neutral parent (%s) to prevent nesting. Pass project_dir explicitly to override.",
+      project_dir, neutral_dir
+    ))
+    project_dir <- neutral_dir
+  }
+
   ts <- format(Sys.time(), "%Y%m%d_%H%M%S", tz = "UTC")
   lab_folder <- file.path(
     project_dir, output_subdir,
