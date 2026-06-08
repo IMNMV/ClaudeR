@@ -19,6 +19,8 @@ Producing artifacts is not completion. Producing a clean writeup is not completi
 
 If you find yourself about to summarize results to the user and you have not satisfied this invariant, STOP — return to whichever phase you actually need to finish.
 
+**The deterministic completion signal is `lab_session_locked.json` in the lab folder.** That file is written by `ClaudeR::finalize_lab_session()` and only by that function. Its existence means the structural completion checks passed. Its absence means the session is not done, regardless of what you have written elsewhere. You cannot create this file by hand — the function writes it, or it does not exist.
+
 ---
 
 ## Session configuration (from the wrapper)
@@ -378,7 +380,30 @@ What you must not do: write a row that says "**Verdict:** APPROVE" followed by "
 
 ### 3.5 — Resolution
 
-After all votes are in (real or marked UNAVAILABLE per 3.4):
+**Before doing anything else in this section, run the deterministic round-closure check.** Call via `execute_r`:
+
+```r
+ClaudeR::validate_assembly_round(
+  lab_folder = "{{LAB_FOLDER}}",
+  round_n = <current_round_number>,
+  expected_roles = c("eda", "modeling", "reviewer_zero", "reporting")
+)
+```
+
+This function reads `assembly_log.md` and enforces, deterministically:
+- Every expected role has a vote row (catches silent absence — every voter must be on the record)
+- No "simulat" pattern appears (catches self-simulated votes)
+- All verdicts are `APPROVE`, `CONCERNS`, or `UNAVAILABLE`
+- For Round 2+: every `APPROVE` vote contains a `Re-verification of my Round` heading
+
+If the function errors, address the specific failure it identifies before proceeding. Common failures and fixes:
+- *"Missing votes from these expected roles: X"* — retry the absent voter, or mark them `UNAVAILABLE` with a reason
+- *"APPROVE vote without a Re-verification ... section"* — re-dispatch that voter and require the proper format
+- *"contains a 'simulat' pattern"* — you self-simulated a vote (forbidden); convert it to `UNAVAILABLE` or retry the real voter
+
+Paste the function's output (or error) into your reasoning so the user can audit. Only after the function returns successfully may you interpret the round below.
+
+After all votes are in (real or marked UNAVAILABLE per 3.4) AND `validate_assembly_round()` returns success:
 
 **If unanimous real APPROVE with zero UNAVAILABLE voters:** Proceed to Phase 4.
 
@@ -412,6 +437,31 @@ If you hit `{{MAX_ROUNDS}}` rounds without unanimous real APPROVE (concerns stil
 
 **Before declaring completion, re-read the Termination Invariant at the top of this protocol.** If `assembly_log.md` does not show a final round with unanimous real APPROVE and zero UNAVAILABLE voters, you are not in Phase 4. Return to Phase 3.
 
+### 4.0 — Deterministic finalization check (mandatory, before anything else in Phase 4)
+
+Call via `execute_r`:
+
+```r
+ClaudeR::finalize_lab_session(
+  lab_folder = "{{LAB_FOLDER}}",
+  expected_roles = c("eda", "modeling", "reviewer_zero", "reporting")
+)
+```
+
+This function enforces the Termination Invariant deterministically. It checks that all required artifacts exist, calls `validate_assembly_round()` on the final round, and confirms the final round is unanimous APPROVE with zero UNAVAILABLE voters. On success, **it writes `lab_session_locked.json` into the lab folder** — that file is the completion signal.
+
+If `finalize_lab_session()` errors, the session is not complete. Return to Phase 3, address the specific failure, and try again. Do not proceed to 4.1.
+
+If the user has explicitly issued an override per section 3.6 (deliver despite unresolved items), call with `allow_override = TRUE`. The lock file will record `override: true` so the user can audit the decision.
+
+Paste the function's output into your reasoning. Confirm `lab_session_locked.json` exists in the lab folder before continuing:
+
+```r
+file.exists(file.path("{{LAB_FOLDER}}", "lab_session_locked.json"))
+```
+
+This must return `TRUE` before you write the delivery summary.
+
 ### 4.1 — Write the delivery summary INSIDE the lab folder
 
 Write a file `{{LAB_FOLDER}}/delivery_summary.md` with:
@@ -429,8 +479,8 @@ The `delivery_summary.md` MUST live at `{{LAB_FOLDER}}/delivery_summary.md`. Do 
 Show the user:
 
 1. The lab folder path: `{{LAB_FOLDER}}`
-2. A confirmation that the Termination Invariant is satisfied (real unanimous APPROVE OR explicit user override with surfaced unresolved items)
-3. A pointer to `{{LAB_FOLDER}}/delivery_summary.md` as the entry point
+2. Confirmation that `lab_session_locked.json` exists in the lab folder (the deterministic completion signal). The user can verify with `file.exists(file.path("{{LAB_FOLDER}}", "lab_session_locked.json"))`.
+3. A pointer to `{{LAB_FOLDER}}/delivery_summary.md` as the entry point for the human-readable summary
 
 Do not delete anything. Do not move anything. The lab folder is the complete record.
 

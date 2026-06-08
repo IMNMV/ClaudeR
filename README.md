@@ -43,6 +43,7 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
+- **Lab Mode v2.2 — deterministic completion gates.** Two new exported R functions, `validate_assembly_round()` and `finalize_lab_session()`, that the orchestrator must call before declaring a round resolved and before Phase 4 delivery. They check the assembly log structurally and throw informative R-level errors if anything is missing (silent absent voters, missing re-verification sections in Round 2+, self-simulated votes, missing required artifacts). On successful finalization, `lab_session_locked.json` is written into the lab folder — that file's existence is the completion signal a user can verify in one line. Soft prose rules ("you should reject...") don't bind orchestrator agents reliably; R functions that throw deterministic errors do. Also fixes the path-nesting bug from v2 by auto-detecting and escaping when the orchestrator's working directory is inside a prior lab folder.
 - **Lab Mode v2 fixes.** Hardens the assembly phase against real-run failure modes observed on Antigravity Desktop and `agy` CLI: (1) explicit prohibition on simulating absent voters — if a voter hits a quota limit or times out, they're marked `UNAVAILABLE` (which counts as CONCERNS) rather than self-simulated APPROVE; (2) Round 2+ voters must specifically re-verify each Round 1 concern with file:line evidence, not just tick the "I read it" boxes; (3) termination invariant added at the top of the protocol so the orchestrator can't stop after Phase 1 or Phase 2 thinking it's done; (4) `delivery_summary.md` is now written inside the lab folder, not the agent's scratch directory; (5) the wrapper normalizes `project_dir` to an absolute path so lab folders don't nest when the orchestrator's cwd has been changed; (6) explicit anti-polling rule (no 15-second wakeup timers for sibling-subagent coordination — use the host CLI's native wait).
 - **Lab Mode (`lab_mode_prompt()`).** A multi-agent research orchestration protocol with three phases (parallel exploration → sequential synthesis → assembly review) until deliverables reach a pristine acceptance bar. Specialist subagents (EDA, modeling, reviewer_zero, reporting) share an append-only markdown ledger with F-ID-tagged findings, round snapshots, and an explicit anti-bias rule for the final assembly vote. Agent-agnostic: works on Claude Code's Task tool, Codex's `[agents]`, Gemini CLI's `/subagents`, and Antigravity's `invoke_subagent`. Falls back to sequential role-playing on single-agent CLIs.
 - **Antigravity CLI (`agy`) support.** Google is retiring Gemini CLI on 2026-06-18 and replacing it with Antigravity CLI. `install_cli(tools = "agy")` generates the new `~/.gemini/config/mcp_config.json` block. `run_annotation_job` accepts `tool = "agy"` as a subprocess backend, verified against `agy 1.0.5`. Gemini CLI support stays (Enterprise tiers keep access past the cutoff). Also restores a missing `install_cli(tools = "qwen")` branch that was accidentally dropped in an earlier commit.
@@ -187,15 +188,58 @@ You can also just tell the agents to run `ClaudeR::multi_agent_prompt()` and the
 
 ## Lab Mode
 
-Lab Mode is a heavier-weight multi-agent orchestration protocol for serious research workflows. Instead of agents loosely coordinating in one R session, an orchestrator dispatches specialist subagents (EDA, modeling, reviewer_zero, reporting) through three phases: parallel exploration, sequential synthesis (code consolidation → writeup → validation), and a final **assembly review** where every subagent must verify the deliverables against the audit trail and vote APPROVE or CONCERNS. The loop iterates until unanimous approval or the round cap is hit (concerns then surface to the user).
+Lab Mode is a heavier-weight multi-agent orchestration protocol that combines elements from Reviewer Zero, R Best Practices, and the Multi-Agent Coordination Protocol. It is known that a single agent performing an end-to-end task suffers from expected and non-expected failure modes. To help remedy that, another agent can be used (e.g., Multi-Agent Protocol). However, with the growing capabilities of subagents and inspired loop behavior, I have wanted to explore these in analytical workflows to see if they can remedy some failure modes. To capitalize on autonomous behavior and long-term deterministic harnesses, this protocol employs a three-part structure.
 
-Distinctive features:
+An orchestrator dispatches specialist subagents (EDA, modeling, reviewer_zero, reporting) through three phases:
+
+```
+                ┌────────────────────────────────────────────┐
+                │           Phase 1: Parallel Exploration    │
+                │                                            │
+                │   ┌──────┐  ┌──────────┐  ┌──────────────┐ │
+                │   │ EDA  │  │ Modeling │  │ Reviewer Zero│ │
+                │   └──┬───┘  └────┬─────┘  └──────┬───────┘ │
+                │      │           │               │         │
+                │      └───────────┼───────────────┘         │
+                │            ┌─────┴──────┐                  │
+                │            │ Reporting  │                  │
+                │            └─────┬──────┘                  │
+                └──────────────────┼─────────────────────────┘
+                                   │   (shared ledger.md)
+                                   ▼
+                ┌────────────────────────────────────────────┐
+                │         Phase 2: Sequential Synthesis      │
+                │                                            │
+                │  Code Consolidation ──▶ Writeup ──▶ Validation │
+                └──────────────────┬─────────────────────────┘
+                                   ▼
+                ┌────────────────────────────────────────────┐
+                │          Phase 3: Assembly Review          │
+                │                                            │
+                │   All subagents re-read artifacts and vote │
+                │   APPROVE / CONCERNS / UNAVAILABLE         │
+                │                                            │
+                │   ┌───────────────────────────────────┐    │
+                │   │  Loop until unanimous APPROVE     │    │
+                │   │  OR round cap (then escalate)     │    │
+                │   └───────────────────────────────────┘    │
+                └────────────────────────────────────────────┘
+```
+
+**Parallel exploration** — each agent is not dependent on another as they complete their task.
+
+**Sequential synthesis** — code consolidation → writeup → validation, in order.
+
+**Assembly review** — every subagent must verify the deliverables against the audit trail and vote APPROVE or CONCERNS. The loop iterates until unanimous approval or the round cap is hit (if it exits before unanimous agreement, those concerns are raised to you).
+
+To make this as efficient, auditable, clean, and deterministic as possible, the protocol includes the following features (if you think anything is missing, please raise an issue or submit a PR):
 
 - **Timestamped lab folder** — every invocation produces `clauder_lab_<session>_<YYYYMMDD>_<HHMMSS>/`. Prior runs are never overwritten.
 - **Append-only ledger** — `ledger.md` records every finding with an F-ID. Findings can be flagged Modified or Retracted; nothing is ever deleted.
 - **Async-only execution** — non-trivial work runs through `execute_r_async` to avoid the single-session bottleneck, so parallel subagents don't queue on each other.
 - **Round snapshots** — every assembly round archives the lab state into `rounds/round_<N>/` so the full progression is auditable.
 - **Pristine acceptance criteria** — explicit, falsifiable bar: every Open finding reproduces from a clean R process, no Modified/Retracted leaks into the writeup, no hardcoded values, `analysis_final.R` runs end-to-end.
+- **Deterministic completion gates** — `ClaudeR::validate_assembly_round()` and `ClaudeR::finalize_lab_session()` are R-level hard gates. They check the assembly log structurally and throw informative errors if anything is missing (silent absent voters, missing re-verification sections, self-simulated votes, missing artifacts). On finalization success, a `lab_session_locked.json` is written into the lab folder — that file's existence is the completion signal the user can verify in one line.
 - **Agent-agnostic** — works on Claude Code's Task tool, Codex's `[agents]`, Gemini CLI's `/subagents`, Antigravity's `invoke_subagent`. Falls back to sequential role-playing on single-agent CLIs.
 
 ```r
@@ -207,7 +251,7 @@ ClaudeR::lab_mode_prompt(
 )
 ```
 
-The orchestrator agent reads the printed protocol and runs the lab. Deliverables land in the timestamped folder: `ledger.md`, `analysis_final.R`, `final_writeup.qmd` (or `.md`), `validator_report.md`, and `assembly_log.md`.
+The orchestrator agent reads the printed protocol and runs the lab. Deliverables land in the timestamped folder: `ledger.md`, `analysis_final.R`, `final_writeup.qmd` (or `.md`), `validator_report.md`, `assembly_log.md`, `delivery_summary.md`, and on successful finalization, `lab_session_locked.json`.
 
 ## AI-Driven Data Annotation
 

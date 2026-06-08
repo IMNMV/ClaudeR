@@ -1914,6 +1914,213 @@ multi_agent_prompt <- function() {
   invisible(txt)
 }
 
+#' Validate that an assembly review round is structurally complete
+#'
+#' Deterministic check the orchestrator must call at the end of each assembly
+#' round before declaring it resolved. Throws an informative R-level error on
+#' any structural failure: missing voters, missing re-verification sections in
+#' Round 2+, forbidden patterns (e.g. self-simulated votes), or unrecognized
+#' verdicts. Returns invisibly on success so the orchestrator can confirm
+#' which checks passed.
+#'
+#' This is intentionally a hard gate. Soft "you should reject..." rules in the
+#' protocol are not reliably followed by orchestrator agents; an R function
+#' that errors loudly is.
+#'
+#' @param lab_folder Absolute path to the lab folder
+#' @param round_n Integer round number to validate (1, 2, ...)
+#' @param expected_roles Character vector of roles that should have voted in
+#'   this round. Default is the four Phase-1 working roles.
+#' @return Invisibly returns a list with `valid = TRUE`, the voted roles, and
+#'   the verdicts seen for the round.
+#' @export
+validate_assembly_round <- function(lab_folder,
+                                     round_n,
+                                     expected_roles = c("eda", "modeling", "reviewer_zero", "reporting")) {
+  if (missing(lab_folder) || !nzchar(lab_folder)) {
+    stop("`lab_folder` is required.", call. = FALSE)
+  }
+  if (!dir.exists(lab_folder)) {
+    stop(sprintf("Lab folder not found: %s", lab_folder), call. = FALSE)
+  }
+  if (!is.numeric(round_n) || round_n < 1) {
+    stop("`round_n` must be a positive integer.", call. = FALSE)
+  }
+  round_n <- as.integer(round_n)
+
+  log_path <- file.path(lab_folder, "assembly_log.md")
+  if (!file.exists(log_path)) {
+    stop(sprintf("assembly_log.md not found in lab folder: %s", log_path), call. = FALSE)
+  }
+
+  log_text <- paste(readLines(log_path, warn = FALSE), collapse = "\n")
+
+  # Forbidden patterns anywhere in the file.
+  if (grepl("simulat", log_text, ignore.case = TRUE)) {
+    stop("assembly_log.md contains a 'simulat' pattern. Self-simulated votes are forbidden (see protocol section 3.4).",
+         call. = FALSE)
+  }
+
+  # Isolate the section for round_n.
+  round_pattern <- sprintf("## Round %d\\b", round_n)
+  if (!grepl(round_pattern, log_text)) {
+    stop(sprintf("Round %d section not found in assembly_log.md.", round_n), call. = FALSE)
+  }
+  # Get everything from "## Round N" to the next "## Round" or end of file.
+  section_start <- regexpr(round_pattern, log_text)
+  section_text <- substring(log_text, section_start)
+  next_round_match <- regexpr(sprintf("## Round %d\\b", round_n + 1L), section_text)
+  if (next_round_match > 0) {
+    section_text <- substring(section_text, 1, next_round_match - 1L)
+  }
+
+  # Pull every "### Vote <separator> <role>" header. The protocol shows a
+  # middle-dot separator but agents may render it differently; match any short
+  # non-alphanumeric run between "Vote" and the role name.
+  vote_matches <- regmatches(section_text, gregexpr("### Vote[^A-Za-z0-9\n]+([A-Za-z0-9_-]+)", section_text))[[1]]
+  found_roles <- sub("^### Vote[^A-Za-z0-9\n]+", "", vote_matches)
+  found_roles <- unique(found_roles)
+  missing_roles <- setdiff(expected_roles, found_roles)
+  if (length(missing_roles) > 0) {
+    stop(sprintf(
+      "Round %d is missing votes from these expected roles: %s. Every dispatched voter must have a row (APPROVE / CONCERNS / UNAVAILABLE). Silent absence is forbidden.",
+      round_n, paste(missing_roles, collapse = ", ")
+    ), call. = FALSE)
+  }
+
+  # Pull every Verdict line and validate the values.
+  verdict_matches <- regmatches(section_text, gregexpr("\\*\\*Verdict:\\*\\*\\s*([A-Z]+)", section_text))[[1]]
+  verdicts <- sub("\\*\\*Verdict:\\*\\*\\s*", "", verdict_matches)
+  if (length(verdicts) < length(expected_roles)) {
+    stop(sprintf(
+      "Round %d has %d Verdict rows but expected at least %d (one per role).",
+      round_n, length(verdicts), length(expected_roles)
+    ), call. = FALSE)
+  }
+  valid_verdicts <- c("APPROVE", "CONCERNS", "UNAVAILABLE")
+  bad <- setdiff(verdicts, valid_verdicts)
+  if (length(bad) > 0) {
+    stop(sprintf(
+      "Round %d has unrecognized verdicts: %s. Allowed values: %s.",
+      round_n, paste(bad, collapse = ", "), paste(valid_verdicts, collapse = ", ")
+    ), call. = FALSE)
+  }
+
+  # For Round 2+, every APPROVE vote must contain a Re-verification section.
+  if (round_n >= 2L && any(verdicts == "APPROVE")) {
+    # Split section_text into per-vote chunks at each "### Vote " heading.
+    vote_chunk_pattern <- "### Vote[^A-Za-z0-9\n]+[^\n]+\n(?:.*?(?=### Vote|\\Z))"
+    vote_chunks <- regmatches(section_text, gregexpr(vote_chunk_pattern, section_text, perl = TRUE))[[1]]
+    for (chunk in vote_chunks) {
+      if (grepl("\\*\\*Verdict:\\*\\*\\s*APPROVE", chunk)) {
+        if (!grepl("Re-verification of my Round", chunk)) {
+          stop(sprintf(
+            "Round %d has an APPROVE vote without a 'Re-verification of my Round N-1 concerns' section. Round 2+ APPROVE votes MUST include this section. Reject the vote and ask the voter to redo it.",
+            round_n
+          ), call. = FALSE)
+        }
+      }
+    }
+  }
+
+  invisible(list(
+    valid = TRUE,
+    round = round_n,
+    voted_roles = found_roles,
+    verdicts = verdicts
+  ))
+}
+
+#' Finalize a Lab Mode session — hard gate before delivery
+#'
+#' Runs the full termination-invariant check and, on success, writes a
+#' `lab_session_locked.json` file inside the lab folder. The protocol requires
+#' the orchestrator to call this function before Phase 4 and reach success.
+#' The lock file is the deterministic completion signal — the user can verify
+#' in one line whether the session was properly finalized.
+#'
+#' Throws an R-level error on any failure, with a specific message identifying
+#' what's wrong.
+#'
+#' @param lab_folder Absolute path to the lab folder
+#' @param expected_roles Character vector of roles expected in the final round
+#' @param allow_override Logical. If TRUE, allows finalization even if the
+#'   final round has CONCERNS or UNAVAILABLE — but the user must have signaled
+#'   override (the function writes the lock file with `override = TRUE` so the
+#'   user can audit). Default FALSE.
+#' @return Invisibly returns the contents of the written lock file.
+#' @export
+finalize_lab_session <- function(lab_folder,
+                                  expected_roles = c("eda", "modeling", "reviewer_zero", "reporting"),
+                                  allow_override = FALSE) {
+  if (missing(lab_folder) || !nzchar(lab_folder)) {
+    stop("`lab_folder` is required.", call. = FALSE)
+  }
+  if (!dir.exists(lab_folder)) {
+    stop(sprintf("Lab folder not found: %s", lab_folder), call. = FALSE)
+  }
+
+  # All required artifacts must exist before delivery.
+  required <- c("ledger.md", "analysis_final.R", "validator_report.md", "assembly_log.md")
+  missing_files <- required[!file.exists(file.path(lab_folder, required))]
+  if (length(missing_files) > 0) {
+    stop(sprintf(
+      "Lab folder missing required artifacts: %s. The session cannot be finalized.",
+      paste(missing_files, collapse = ", ")
+    ), call. = FALSE)
+  }
+  writeup_files <- list.files(lab_folder, pattern = "^final_writeup\\.(md|qmd)$", full.names = FALSE)
+  if (length(writeup_files) == 0) {
+    stop("Lab folder has no final_writeup.md or final_writeup.qmd. The session cannot be finalized.",
+         call. = FALSE)
+  }
+
+  # Identify the final round in assembly_log.md.
+  log_text <- paste(readLines(file.path(lab_folder, "assembly_log.md"), warn = FALSE), collapse = "\n")
+  if (grepl("simulat", log_text, ignore.case = TRUE)) {
+    stop("assembly_log.md contains a 'simulat' pattern. Self-simulated votes are forbidden.", call. = FALSE)
+  }
+  round_numbers <- as.integer(regmatches(
+    log_text,
+    gregexpr("## Round (\\d+)", log_text)
+  )[[1]] |> sub("## Round ", "", x = _))
+  if (length(round_numbers) == 0) {
+    stop("assembly_log.md has no Round sections. Cannot identify a final round.", call. = FALSE)
+  }
+  final_round <- max(round_numbers)
+
+  # Per-round structural check on the final round.
+  per_round <- validate_assembly_round(lab_folder, final_round, expected_roles)
+
+  # The final round must be unanimous APPROVE with zero UNAVAILABLE
+  # — unless the caller passed allow_override = TRUE.
+  unanimous_approve <- all(per_round$verdicts == "APPROVE")
+  if (!unanimous_approve && !isTRUE(allow_override)) {
+    bad <- per_round$verdicts[per_round$verdicts != "APPROVE"]
+    stop(sprintf(
+      "Final round (Round %d) is not unanimous APPROVE — saw verdicts: %s. The session cannot be finalized without either resolving these or passing allow_override = TRUE.",
+      final_round, paste(bad, collapse = ", ")
+    ), call. = FALSE)
+  }
+
+  result <- list(
+    complete = TRUE,
+    override = isTRUE(allow_override) && !unanimous_approve,
+    lab_folder = normalizePath(lab_folder, mustWork = FALSE),
+    final_round = final_round,
+    voted_roles = per_round$voted_roles,
+    verdicts = per_round$verdicts,
+    writeup_file = writeup_files[1],
+    validated_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+  )
+
+  lock_path <- file.path(lab_folder, "lab_session_locked.json")
+  jsonlite::write_json(result, lock_path, auto_unbox = TRUE, pretty = TRUE)
+
+  message(sprintf("Lab session finalized. Lock file written to %s", lock_path))
+  invisible(result)
+}
+
 #' Print the Lab Mode orchestration protocol
 #'
 #' Displays the built-in multi-agent research lab protocol. An orchestrator
