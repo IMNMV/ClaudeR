@@ -9,6 +9,7 @@
     <a href="https://github.com/IMNMV/ClaudeR/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
     <a href="https://github.com/IMNMV/ClaudeR/stargazers"><img src="https://img.shields.io/github/stars/IMNMV/ClaudeR?style=social" alt="GitHub stars"></a>
     <br/>
+    <a href="https://github.com/IMNMV/ClaudeR/actions/workflows/ci.yml"><img src="https://github.com/IMNMV/ClaudeR/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
     <a href="https://github.com/IMNMV/ClaudeR/commits/main"><img src="https://img.shields.io/github/last-commit/IMNMV/ClaudeR/main" alt="GitHub last commit"></a>
     <a href="https://pypi.org/project/clauder-mcp/"><img src="https://img.shields.io/pypi/v/clauder-mcp" alt="PyPI version"></a>
     <img src="https://img.shields.io/badge/R-%3E%3D4.0-blue?logo=r" alt="R version">
@@ -43,6 +44,8 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
+- **Deep-dive audit release (R 0.3.1 / clauder-mcp 0.6.2).** 20+ bug fixes across the addin, bridge, and Lab Mode: reopened addin UIs now share live state with the running server (settings toggles work again after closing/reopening the UI), plot capture is device-aware (`png(); plot(); dev.off()` can no longer resend a stale on-screen figure), `modify_code_section` no longer corrupts replacements containing backslashes, async job results are idempotent and survive bridge timeouts, error responses include everything printed before the error, one agent's long computation no longer tells other agents the addin is down, and Lab Mode's Round-2+ re-verification gate actually fires. Session tokens now come from OS entropy. Logging is on by default. CI (GitHub Actions) now guards every push: R functional checks plus a real MCP stdio handshake against the built bridge.
+- **mcp SDK pinned to 1.x.** The MCP 2026-07-28 spec release shipped `mcp` 2.0.0 to PyPI, which removes the server API the bridge is built on. `clauder-mcp` >= 0.6.1 pins `mcp<2`; if your bridge broke, run `uvx --refresh clauder-mcp`. SDK 2.0 migration (and the new Tasks extension for async tools) is planned.
 - **AI-Driven Data Annotation.** Two new MCP tools (`load_annotation_data`, `annotate`) let an agent label a CSV dataset row by row without writing any code. Define annotation fields in a `_schema` column, call `data_annotation_prompt()` to get the protocol, and the agent handles the rest. The original file is never modified and sessions resume automatically if interrupted.
 - **Multi-Agent Coordination Protocol.** Built-in protocol for multiple agents sharing one RStudio session. Agents negotiate through a shared message board in the R environment, agree on a task plan, claim tasks before working, and cross-check each other's output. Load it with `multi_agent_prompt()`.
 - **`verify_references` tool.** Extracts DOIs from a manuscript's bibliography, queries the CrossRef API for each, and returns metadata (title, authors, year, journal) for comparison against manuscript claims. Non-resolving DOIs, metadata mismatches, and references without DOIs are flagged. Works standalone ("check my references") or as Pass 4 of Reviewer Zero.
@@ -85,7 +88,7 @@ claudeAddin()
 - [R Best Practices Protocol](#r-best-practices-protocol)
 - [Multi-Agent Coordination Protocol](#multi-agent-coordination-protocol)
 - [CLI Integration](#cli-integration)
-- [Security Restrictions](#security-restrictions)
+- [Security Model](#security-model)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Logging Options](#logging-options)

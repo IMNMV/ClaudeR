@@ -114,7 +114,7 @@ configure <- function(for_cursor = FALSE, use_uvx = TRUE, python_path = NULL) {
   # --- Write the updated config back to the file ---
   jsonlite::write_json(config, config_path, pretty = TRUE, auto_unbox = TRUE)
 
-  message("\nConfiguration complete! ✨")
+  message("\nConfiguration complete!")
   message("Please completely QUIT and RESTART the Claude Desktop (or Cursor) app.")
   invisible(config_path)
 }
@@ -143,7 +143,7 @@ install_clauder <- function(for_cursor = FALSE, use_uvx = TRUE, python_path = NU
 
   if (length(missing_r_deps) > 0) {
     message(paste("Installing missing R packages:", paste(missing_r_deps, collapse = ", ")))
-    install.packages(missing_r_deps, ...)
+    utils::install.packages(missing_r_deps, ...)
   } else {
     message("All required R dependencies are already installed.")
   }
@@ -198,7 +198,7 @@ install_clauder <- function(for_cursor = FALSE, use_uvx = TRUE, python_path = NU
   step_num <- if (use_uvx) "Step 3" else "Step 3"
   message(paste0("\n--- ", step_num, ": Running automatic MCP configuration ---"))
   tryCatch({
-    ClaudeR:::configure(for_cursor = for_cursor, use_uvx = use_uvx, python_path = python_path)
+    configure(for_cursor = for_cursor, use_uvx = use_uvx, python_path = python_path)
   }, error = function(e) {
     message("\nConfiguration failed with an error:")
     stop(e$message)

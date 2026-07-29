@@ -10,6 +10,8 @@ log_code_to_file(code, log_path, agent_id = NULL)
 \item{code}{The R code to log}
 
 \item{log_path}{The path to the log file}
+
+\item{agent_id}{Optional agent identifier used to attribute the entry}
 }
 \value{
 Invisible NULL

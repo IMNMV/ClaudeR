@@ -2,3 +2,13 @@
 ^\.Rproj\.user$
 assets
 ^\.github$
+^\.claude$
+^clauder-mcp$
+^Dockerfile$
+^glama\.json$
+^llms-install\.md$
+^.*__pycache__$
+^.*\.DS_Store$
+^Rplots\.pdf$
+^LICENSE\.md$
+^\.mcpregistry_.*$

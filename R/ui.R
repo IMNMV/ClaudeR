@@ -24,10 +24,22 @@ discovery_dir <- function() {
 # Python MCP bridge: the bridge reads `token` and echoes it back in the
 # X-Clauder-Token header. Written 0600 so other local users cannot read it.
 generate_session_token <- function() {
-  # Must not disturb the caller's RNG stream. This is a reproducibility tool:
-  # silently advancing .Random.seed when the server starts would change the
-  # results of any subsequent set.seed()-less simulation. Snapshot, reseed from
-  # system entropy, then put the user's stream back exactly as we found it.
+  # Prefer OS entropy: unguessable, and touches nothing in the R session.
+  # /dev/urandom exists on macOS and Linux.
+  bytes <- tryCatch({
+    con <- file("/dev/urandom", "rb")
+    on.exit(close(con), add = TRUE)
+    readBin(con, "raw", 32L)
+  }, error = function(e) NULL, warning = function(w) NULL)
+  if (!is.null(bytes) && length(bytes) == 32L) {
+    return(paste(sprintf("%02x", as.integer(bytes)), collapse = ""))
+  }
+
+  # Fallback (Windows): time/pid-seeded RNG. Must not disturb the caller's
+  # RNG stream -- this is a reproducibility tool, and silently advancing
+  # .Random.seed when the server starts would change the results of any
+  # subsequent set.seed()-less simulation. Snapshot, reseed, then put the
+  # user's stream back exactly as we found it.
   had_seed <- exists(".Random.seed", envir = globalenv(), inherits = FALSE)
   old_seed <- if (had_seed) get(".Random.seed", envir = globalenv()) else NULL
   on.exit({
@@ -89,7 +101,7 @@ cleanup_stale_discovery_files <- function() {
 # Drawing *events* answer the question the snapshot comparison cannot.
 # plot.new()/grid.newpage() fire on every new plot; the rest fire when code
 # adds to an existing one. Tracing is installed once per session rather than
-# per call, so it costs nothing on the hot path — which also lets us drop the
+# per call, so it costs nothing on the hot path -- which also lets us drop the
 # two recordPlot() deep-copies that previously ran on every single execution,
 # including calls that touch no graphics at all.
 .claude_plot_env <- new.env(parent = emptyenv())
@@ -184,7 +196,7 @@ is_screen_device <- function() {
 .claude_viewer_env$suppress <- FALSE
 
 wrap_viewer <- function() {
-  # Don't double-wrap — if we already saved the original, skip
+  # Don't double-wrap -- if we already saved the original, skip
 
   if (!is.null(.claude_viewer_env$original_viewer)) return(invisible())
   orig <- getOption("viewer")
@@ -370,7 +382,7 @@ check_background_job <- function(job_id) {
   job_info <- .claude_bg_jobs[[job_id]]
 
   # Already collected: replay the stored result. This makes polling
-  # idempotent — if the bridge timed out mid-collection, its retry still
+  # idempotent -- if the bridge timed out mid-collection, its retry still
   # gets the output instead of a spurious not_found.
   if (!is.null(job_info$final)) {
     return(job_info$final)
@@ -401,7 +413,7 @@ check_background_job <- function(job_id) {
     sprintf("  %s: %s [%s]", name, cls, shape)
   }
 
-  # Job finished — get result
+  # Job finished -- get result
   tryCatch({
     result <- job$get_result()
 
@@ -425,7 +437,7 @@ check_background_job <- function(job_id) {
     .claude_bg_jobs[[job_id]] <- list(final = out, started = job_info$started)
     return(out)
   }, error = function(e) {
-    # callr wraps errors — dig out the original message
+    # callr wraps errors -- dig out the original message
     err_msg <- if (!is.null(e$parent)) e$parent$message else e$message
     cleanup_files()
     out <- list(status = "complete", success = FALSE, error = err_msg)
@@ -455,7 +467,7 @@ claudeAddin <- function() {
   server_state <- if (resuming) .claude_server_env$server else NULL
 
   # Load settings. The canonical copy lives in .claude_server_env so the HTTP
-  # handler and any reopened addin UI share one set of live values — otherwise
+  # handler and any reopened addin UI share one set of live values -- otherwise
   # a reopened UI would edit a fresh frame while the handler kept reading the
   # frame it closed over at server start, and toggles would silently stop
   # affecting the running server.
@@ -483,10 +495,10 @@ claudeAddin <- function() {
           #
           # Two independent defences, deliberately decoupled:
           #
-          # 1. Origin block — always on. Only browsers set Origin, and the MCP
+          # 1. Origin block -- always on. Only browsers set Origin, and the MCP
           #    bridge never does, so this closes the drive-by-webpage vector at
           #    zero compatibility cost.
-          # 2. Token check — opt-in (settings$require_token). Enforcing it
+          # 2. Token check -- opt-in (settings$require_token). Enforcing it
           #    rejects any bridge older than clauder-mcp 0.6.0, so it stays off
           #    until the user has updated both halves. Turn it on in Advanced.
           if (!is.null(req$HTTP_ORIGIN)) {
@@ -505,7 +517,7 @@ claudeAddin <- function() {
               return(list(
                 status = 401L,
                 headers = list('Content-Type' = 'application/json'),
-                body = '{"error": "Unauthorized: missing or invalid X-Clauder-Token. Your clauder-mcp bridge is older than 0.6.0 — run `uvx --refresh clauder-mcp`, or untick Require token in the addin Advanced panel."}'
+                body = '{"error": "Unauthorized: missing or invalid X-Clauder-Token. Your clauder-mcp bridge is older than 0.6.0 -- run `uvx --refresh clauder-mcp`, or untick Require token in the addin Advanced panel."}'
               ))
             }
           } else if (is.null(supplied_token) && !isTRUE(.claude_server_env$warned_no_token)) {
@@ -1114,7 +1126,7 @@ claudeAddin <- function() {
             .claude_server_env$token <- NULL
             state$running <- FALSE
 
-            # Restore the viewer and untrace graphics functions — this path
+            # Restore the viewer and untrace graphics functions -- this path
             # bypasses Stop Server, which normally does this cleanup
             unwrap_viewer()
             remove_draw_tracers()
@@ -1137,7 +1149,7 @@ claudeAddin <- function() {
       invalidateLater(2000)
     })
 
-    # Close handler — just close the UI, keep the server running
+    # Close handler -- just close the UI, keep the server running
     observeEvent(input$done, {
       invisible(stopApp())
     })
@@ -1150,7 +1162,7 @@ claudeAddin <- function() {
 #'
 #' `output` already carries the printed representation of the value, so
 #' serializing the object itself is only useful when it is small. Anything
-#' larger gets a shape summary instead — otherwise a visible `1:1e6` would
+#' larger gets a shape summary instead -- otherwise a visible `1:1e6` would
 #' ship a million numbers as JSON on top of the printed output that already
 #' describes them.
 #'
@@ -1281,8 +1293,8 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
     # --- BEFORE eval: snapshot device state to detect stale plots ---
     devices_before <- dev.list()
     # Only needed for the no-tracing fallback below. When tracing is active this
-    # deep-copy of the display list — previously paid on every call, graphics or
-    # not — is skipped entirely.
+    # deep-copy of the display list -- previously paid on every call, graphics or
+    # not -- is skipped entirely.
     baseline_plot <- if (!tracing_active && !is.null(devices_before)) {
       tryCatch(recordPlot(), error = function(e) NULL)
     } else NULL
@@ -1294,7 +1306,7 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
     on.exit(.claude_viewer_env$suppress <- FALSE, add = TRUE)
 
     # sink() only diverts stdout. Warnings and message() go to stderr, so
-    # without this the agent never sees them — including the ones that matter
+    # without this the agent never sees them -- including the ones that matter
     # most (non-convergence, singular fits, NAs introduced by coercion).
     # Handlers do not muffle: the conditions still reach the console as usual.
     collected_conditions <- character(0)
@@ -1367,7 +1379,7 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
         # A traced draw event is authoritative: it fires on a redraw of an
         # identical figure, which the old display-list comparison reported as
         # stale (and so never sent to the agent). It only counts if the draw
-        # landed on the *current, screen* device — `png(f); plot(x); dev.off()`
+        # landed on the *current, screen* device -- `png(f); plot(x); dev.off()`
         # fires the tracer too, and capturing then would resend the old figure
         # still sitting on the screen device.
         if (tracing_active) {
@@ -1378,7 +1390,7 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
           new_plot_exists <- !identical(devices_before, devices_after)
         }
 
-        # Fallback only if tracing could not be installed — better to pay for
+        # Fallback only if tracing could not be installed -- better to pay for
         # the old comparison than to silently drop plots.
         if (!new_plot_exists && !tracing_active) {
           current_plot <- tryCatch(recordPlot(), error = function(e) NULL)
@@ -1616,6 +1628,7 @@ validate_code_security <- function(code) {
 #'
 #' @param code The R code to log
 #' @param log_path The path to the log file
+#' @param agent_id Optional agent identifier used to attribute the entry
 #' @return Invisible NULL
 
 log_code_to_file <- function(code, log_path, agent_id = NULL) {
@@ -1656,6 +1669,7 @@ log_code_to_file <- function(code, log_path, agent_id = NULL) {
 #' @param code The R code that caused the error
 #' @param error_message The error message
 #' @param log_path The path to the log file
+#' @param agent_id Optional agent identifier used to attribute the entry
 #' @return Invisible NULL
 
 log_error_to_file <- function(code, error_message, log_path, agent_id = NULL) {
@@ -2104,7 +2118,7 @@ verify_references_impl <- function(file_path = NULL, text = NULL,
   for (i in seq_along(dois)) {
     doi <- dois[i]
     results[[i]] <- tryCatch({
-      api_url <- paste0("https://api.crossref.org/works/", URLencode(doi, reserved = TRUE))
+      api_url <- paste0("https://api.crossref.org/works/", utils::URLencode(doi, reserved = TRUE))
       raw <- jsonlite::fromJSON(api_url)
       msg <- raw$message
 
@@ -2315,7 +2329,7 @@ validate_assembly_round <- function(lab_folder,
   log_text <- paste(readLines(log_path, warn = FALSE), collapse = "\n")
 
   # Forbidden pattern: simulated votes. Only flag lines mentioning both
-  # "simulat*" and "vote" — a bare "simulat" match would reject legitimate
+  # "simulat*" and "vote" -- a bare "simulat" match would reject legitimate
   # analysis discussion (Monte Carlo simulations, simulation studies).
   log_lines <- strsplit(log_text, "\n", fixed = TRUE)[[1]]
   sim_vote <- grepl("simulat", log_lines, ignore.case = TRUE) &
@@ -2375,7 +2389,7 @@ validate_assembly_round <- function(lab_folder,
   # For Round 2+, every APPROVE vote must contain a Re-verification section.
   if (round_n >= 2L && any(verdicts == "APPROVE")) {
     # Split section_text into per-vote chunks at each "### Vote " heading.
-    # (?s) lets .*? cross newlines — without it the pattern matches nothing
+    # (?s) lets .*? cross newlines -- without it the pattern matches nothing
     # on real multi-line vote blocks and this gate silently never fires.
     vote_chunk_pattern <- "(?s)### Vote[^A-Za-z0-9\n]+[^\n]*\n.*?(?=### Vote|\\Z)"
     vote_chunks <- regmatches(section_text, gregexpr(vote_chunk_pattern, section_text, perl = TRUE))[[1]]
@@ -2405,12 +2419,12 @@ validate_assembly_round <- function(lab_folder,
   ))
 }
 
-#' Finalize a Lab Mode session — hard gate before delivery
+#' Finalize a Lab Mode session -- hard gate before delivery
 #'
 #' Runs the full termination-invariant check and, on success, writes a
 #' `lab_session_locked.json` file inside the lab folder. The protocol requires
 #' the orchestrator to call this function before Phase 4 and reach success.
-#' The lock file is the deterministic completion signal — the user can verify
+#' The lock file is the deterministic completion signal -- the user can verify
 #' in one line whether the session was properly finalized.
 #'
 #' Throws an R-level error on any failure, with a specific message identifying
@@ -2419,7 +2433,7 @@ validate_assembly_round <- function(lab_folder,
 #' @param lab_folder Absolute path to the lab folder
 #' @param expected_roles Character vector of roles expected in the final round
 #' @param allow_override Logical. If TRUE, allows finalization even if the
-#'   final round has CONCERNS or UNAVAILABLE — but the user must have signaled
+#'   final round has CONCERNS or UNAVAILABLE -- but the user must have signaled
 #'   override (the function writes the lock file with `override = TRUE` so the
 #'   user can audit). Default FALSE.
 #' @return Invisibly returns the contents of the written lock file.
@@ -2471,12 +2485,12 @@ finalize_lab_session <- function(lab_folder,
   per_round <- validate_assembly_round(lab_folder, final_round, expected_roles)
 
   # The final round must be unanimous APPROVE with zero UNAVAILABLE
-  # — unless the caller passed allow_override = TRUE.
+  # -- unless the caller passed allow_override = TRUE.
   unanimous_approve <- all(per_round$verdicts == "APPROVE")
   if (!unanimous_approve && !isTRUE(allow_override)) {
     bad <- per_round$verdicts[per_round$verdicts != "APPROVE"]
     stop(sprintf(
-      "Final round (Round %d) is not unanimous APPROVE — saw verdicts: %s. The session cannot be finalized without either resolving these or passing allow_override = TRUE.",
+      "Final round (Round %d) is not unanimous APPROVE -- saw verdicts: %s. The session cannot be finalized without either resolving these or passing allow_override = TRUE.",
       final_round, paste(bad, collapse = ", ")
     ), call. = FALSE)
   }
@@ -2603,7 +2617,7 @@ lab_mode_prompt <- function(description,
   txt <- gsub("{{LAB_FOLDER}}", lab_folder, txt, fixed = TRUE)
   txt <- gsub("{{ROLES}}", paste(roles, collapse = ", "), txt, fixed = TRUE)
   txt <- gsub("{{MAX_ROUNDS}}", as.character(as.integer(max_assembly_rounds)), txt, fixed = TRUE)
-  # Round placeholder in vote format is left as {{N}} intentionally — the orchestrator fills it per round.
+  # Round placeholder in vote format is left as {{N}} intentionally -- the orchestrator fills it per round.
   txt <- gsub("Round {{N}}", "Round <N>", txt, fixed = TRUE)
 
   cat(txt, "\n")

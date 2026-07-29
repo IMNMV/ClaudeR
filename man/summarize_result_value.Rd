@@ -17,7 +17,7 @@ A JSON-serializable summary of `value`
 \description{
 `output` already carries the printed representation of the value, so
 serializing the object itself is only useful when it is small. Anything
-larger gets a shape summary instead — otherwise a visible `1:1e6` would
+larger gets a shape summary instead -- otherwise a visible `1:1e6` would
 ship a million numbers as JSON on top of the printed output that already
 describes them.
 }

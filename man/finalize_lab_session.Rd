@@ -2,7 +2,7 @@
 % Please edit documentation in R/ui.R
 \name{finalize_lab_session}
 \alias{finalize_lab_session}
-\title{Finalize a Lab Mode session — hard gate before delivery}
+\title{Finalize a Lab Mode session -- hard gate before delivery}
 \usage{
 finalize_lab_session(
   lab_folder,
@@ -16,7 +16,7 @@ finalize_lab_session(
 \item{expected_roles}{Character vector of roles expected in the final round}
 
 \item{allow_override}{Logical. If TRUE, allows finalization even if the
-final round has CONCERNS or UNAVAILABLE — but the user must have signaled
+final round has CONCERNS or UNAVAILABLE -- but the user must have signaled
 override (the function writes the lock file with `override = TRUE` so the
 user can audit). Default FALSE.}
 }
@@ -27,7 +27,7 @@ Invisibly returns the contents of the written lock file.
 Runs the full termination-invariant check and, on success, writes a
 `lab_session_locked.json` file inside the lab folder. The protocol requires
 the orchestrator to call this function before Phase 4 and reach success.
-The lock file is the deterministic completion signal — the user can verify
+The lock file is the deterministic completion signal -- the user can verify
 in one line whether the session was properly finalized.
 }
 \details{

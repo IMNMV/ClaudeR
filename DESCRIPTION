@@ -5,7 +5,6 @@ Authors@R: person("Nykko", "Vitali", email = "nykvt@icloud.com", role = c("aut",
 Description: Connects RStudio with Claude AI to enable interactive coding sessions.
 License: MIT + file LICENSE
 Encoding: UTF-8
-LazyData: true
 Depends:
     R (>= 4.0)
 Imports:

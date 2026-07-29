@@ -12,6 +12,8 @@ log_error_to_file(code, error_message, log_path, agent_id = NULL)
 \item{error_message}{The error message}
 
 \item{log_path}{The path to the log file}
+
+\item{agent_id}{Optional agent identifier used to attribute the entry}
 }
 \value{
 Invisible NULL
