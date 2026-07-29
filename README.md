@@ -2,7 +2,7 @@
   <img src="assets/ClaudeR_logo.png" alt="ClaudeR Logo" width="150"/>
   <h1>ClaudeR - The Modern Researcher's Toolkit</h1>
   <p>
-    <b>Connect RStudio to Claude Code, Codex, Qwen Code, Gemini CLI, Antigravity CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, automated manuscript auditing, and data annotation.</b>
+    <b>Connect RStudio to Claude Code, Codex, Gemini CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, and automated manuscript auditing.</b>
   </p>
   <p>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
@@ -18,7 +18,7 @@
 
 ---
 
-**ClaudeR** is an R package that forges a direct link between RStudio and MCP configured LLM agents like Claude Code, Codex, or Qwen Code. This allows interactive coding sessions where the agent can execute code in your active RStudio environment so it can see the executed code and any generated plots in real-time. If you need help editing a script, a quick analysis done, or an LLM to audit your statistical claims against any manuscript before submission: ClaudeR has got your back.
+**ClaudeR** is an R package that forges a direct link between RStudio and MCP configured LLM agents like Claude Code or Codex. This allows interactive coding sessions where the agent can execute code in your active RStudio environment so it can see the executed code and any generated plots in real-time. If you need help editing a script, a quick analysis done, or an LLM to audit your statistical claims against any manuscript before submission: ClaudeR has got your back.
 
 This package, additionally, allows multiple agents to work on one script, or it can make multiple RStudio windows siloed so multiple agents can operate independently on different datasets. It's also compatible with Cursor and any service that support MCP servers.
 
@@ -43,11 +43,7 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
-- **Lab Mode v2.2 — deterministic completion gates.** Two new exported R functions, `validate_assembly_round()` and `finalize_lab_session()`, that the orchestrator must call before declaring a round resolved and before Phase 4 delivery. They check the assembly log structurally and throw informative R-level errors if anything is missing (silent absent voters, missing re-verification sections in Round 2+, self-simulated votes, missing required artifacts). On successful finalization, `lab_session_locked.json` is written into the lab folder — that file's existence is the completion signal a user can verify in one line. Soft prose rules ("you should reject...") don't bind orchestrator agents reliably; R functions that throw deterministic errors do. Also fixes the path-nesting bug from v2 by auto-detecting and escaping when the orchestrator's working directory is inside a prior lab folder.
-- **Lab Mode v2 fixes.** Hardens the assembly phase against real-run failure modes observed on Antigravity Desktop and `agy` CLI: (1) explicit prohibition on simulating absent voters — if a voter hits a quota limit or times out, they're marked `UNAVAILABLE` (which counts as CONCERNS) rather than self-simulated APPROVE; (2) Round 2+ voters must specifically re-verify each Round 1 concern with file:line evidence, not just tick the "I read it" boxes; (3) termination invariant added at the top of the protocol so the orchestrator can't stop after Phase 1 or Phase 2 thinking it's done; (4) `delivery_summary.md` is now written inside the lab folder, not the agent's scratch directory; (5) the wrapper normalizes `project_dir` to an absolute path so lab folders don't nest when the orchestrator's cwd has been changed; (6) explicit anti-polling rule (no 15-second wakeup timers for sibling-subagent coordination — use the host CLI's native wait).
-- **Lab Mode (`lab_mode_prompt()`).** A multi-agent research orchestration protocol with three phases (parallel exploration → sequential synthesis → assembly review) until deliverables reach a pristine acceptance bar. Specialist subagents (EDA, modeling, reviewer_zero, reporting) share an append-only markdown ledger with F-ID-tagged findings, round snapshots, and an explicit anti-bias rule for the final assembly vote. Agent-agnostic: works on Claude Code's Task tool, Codex's `[agents]`, Gemini CLI's `/subagents`, and Antigravity's `invoke_subagent`. Falls back to sequential role-playing on single-agent CLIs.
-- **Antigravity CLI (`agy`) support.** Google is retiring Gemini CLI on 2026-06-18 and replacing it with Antigravity CLI. `install_cli(tools = "agy")` generates the new `~/.gemini/config/mcp_config.json` block. `run_annotation_job` accepts `tool = "agy"` as a subprocess backend, verified against `agy 1.0.5`. Gemini CLI support stays (Enterprise tiers keep access past the cutoff). Also restores a missing `install_cli(tools = "qwen")` branch that was accidentally dropped in an earlier commit.
-- **AI-Driven Data Annotation.** Five MCP tools (`load_annotation_data`, `annotate`, `run_annotation_job`, `get_annotation_job_status`, `cancel_annotation_job`) let an agent label a CSV dataset row by row without writing any code. Two modes: interactive (context accumulates across rows) or fully-isolated via `run_annotation_job` (one fresh `claude`, `codex`, `gemini`, `agy`, or `qwen` subprocess per row, or a local `ollama` HTTP call for free, private, offline labeling). Codex jobs accept a `reasoning_effort` parameter; Ollama jobs accept an `ollama_base_url` parameter. The original file is never modified and sessions resume automatically if interrupted.
+- **AI-Driven Data Annotation.** Two new MCP tools (`load_annotation_data`, `annotate`) let an agent label a CSV dataset row by row without writing any code. Define annotation fields in a `_schema` column, call `data_annotation_prompt()` to get the protocol, and the agent handles the rest. The original file is never modified and sessions resume automatically if interrupted.
 - **Multi-Agent Coordination Protocol.** Built-in protocol for multiple agents sharing one RStudio session. Agents negotiate through a shared message board in the R environment, agree on a task plan, claim tasks before working, and cross-check each other's output. Load it with `multi_agent_prompt()`.
 - **`verify_references` tool.** Extracts DOIs from a manuscript's bibliography, queries the CrossRef API for each, and returns metadata (title, authors, year, journal) for comparison against manuscript claims. Non-resolving DOIs, metadata mismatches, and references without DOIs are flagged. Works standalone ("check my references") or as Pass 4 of Reviewer Zero.
 - **R Best Practices Protocol.** Built-in statistical analysis protocol covering EDA, assumption checking, model building, diagnostics, multiple-corrections, and reporting. Load it with `r_best_practices_prompt()` or tell the agent to read it.
@@ -61,7 +57,7 @@ claudeAddin()
 - **Export clean script.** Click "Export Clean Script" in the Shiny addin to strip all timestamps, agent labels, and log headers from a session log, producing a runnable `.R` file with just the code. Error blocks are preserved as comments. Also available programmatically via `export_log_as_script()`.
 - **PyPI package (`clauder-mcp`).** The Python MCP bridge is now available as a standalone package on PyPI. Run it with `uvx clauder-mcp` for zero-config setup with no Python path or pip install needed. The installers (`install_cli()` and `install_clauder()`) default to uvx, with a `use_uvx = FALSE` fallback for legacy setups.
 - **`read_file` tool.** Agents can now read any text file from disk (.R, .qmd, .csv, .log, etc.) without it being open in RStudio. Enables session continuity workflows: point an agent at a previous log file and tell it to pick up where the last session left off.
-- **Codex + Qwen Code CLI support.** `install_cli(tools = "codex")` and `install_cli(tools = "qwen")` generate setup commands for OpenAI Codex and the [Qwen Code CLI](https://github.com/QwenLM/qwen-code) (Alibaba's gemini-cli fork). Both join Claude Code and Gemini as supported CLI agents.
+- **Codex CLI support.** `install_cli(tools = "codex")` generates the setup command for OpenAI Codex. Codex joins Claude Code and Gemini as a supported CLI agent.
 - **Multi-agent orchestration.** Run multiple AI agents on the same R session or spread them across separate RStudio windows. Each agent gets a unique ID on startup. Console output, log files, and execution history are all attributed per agent, so you always know who did what. On its very first tool call, each agent receives a context briefing with its own ID, any other agents active on the session, and the log file path, giving it full awareness of the shared environment without any manual setup. Agents can call `get_session_history` to review what other agents have done, or read the shared log file directly. The Shiny viewer tracks connected agents in real-time.
 - **Session discovery.** Each RStudio session writes a discovery file to `~/.claude_r_sessions/` on startup. AI agents find sessions automatically with no hardcoded ports. Name your sessions (e.g. "analysis", "modeling") and run them on different ports. When multiple sessions exist, agents automatically route to the session named "default". Non-default agents should call `connect_session` to bind to their target session. Single-session setups work with zero config.
 - **Redesigned Shiny viewer.** Cleaner UI with grouped panels for Session, Agents, Logging, and Advanced settings. Shows connected agents and execution count in real-time. Click the `?` button for a built-in guide on multi-session setup and agent identity.
@@ -88,7 +84,6 @@ claudeAddin()
 - [Reviewer Zero](#reviewer-zero-automated-academic-audits)
 - [R Best Practices Protocol](#r-best-practices-protocol)
 - [Multi-Agent Coordination Protocol](#multi-agent-coordination-protocol)
-- [Lab Mode](#lab-mode)
 - [CLI Integration](#cli-integration)
 - [Security Restrictions](#security-restrictions)
 - [Installation](#installation)
@@ -124,11 +119,6 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`verify_references`**: Verify academic references by extracting DOIs and checking them against the CrossRef API. Returns metadata (title, authors, year, journal) for comparison. References without DOIs are flagged for manual web search.
 - **`create_task_list`**: Generate a task list based on your prompt to prevent omissions in long-context tasks.
 - **`update_task_status`**: Track progress for each task in the generated list.
-- **`load_annotation_data`**: Load a CSV for annotation. Creates a working copy, parses the `_schema` column, and displays the first unannotated row. Resumable if interrupted.
-- **`annotate`**: Annotate the current row, validate against the schema, save immediately, and auto-load the next row.
-- **`run_annotation_job`**: Annotate a full CSV in the background, with no context bleed between rows. Each row is scored by a fresh `claude`, `codex`, `gemini`, or `qwen` subprocess, or by a local `ollama` HTTP call (for free, private, offline annotation). Accepts a `reasoning_effort` parameter (`low`, `medium`, `high`) for Codex and an `ollama_base_url` parameter to point at a remote Ollama server.
-- **`get_annotation_job_status`**: Check progress of a running or completed annotation job.
-- **`cancel_annotation_job`**: Cancel a running background annotation job. Rows completed before cancellation are preserved in the output file.
 
 With these tools, you can:
 
@@ -136,7 +126,7 @@ With these tools, you can:
 - **Feedback & Assistance**: Get explanations of your R scripts or request edits at specific lines.
 - **Visualization**: The AI can generate, view, and refine plots and visualizations.
 - **Data Analysis**: Let the AI analyze your datasets and iteratively provide insights.
-- **Multi-Agent Workflows**: Run Claude Desktop, Claude Code, Codex, Qwen Code, and Gemini CLI on the same R session simultaneously. Each agent is uniquely identified, and they can see each other's work through shared history and log files.
+- **Multi-Agent Workflows**: Run Claude Desktop, Claude Code, and Gemini CLI on the same R session simultaneously. Each agent is uniquely identified, and they can see each other's work through shared history and log files.
 - **Long-Running Analysis**: Async execution handles model fitting, simulations, and large data processing without timing out.
 - **Code Logging**: Save all code executed by the AI to log files for future reference. Every entry is tagged with the agent that ran it.
 - **Console Printing**: Print the AI's code to the console before execution.
@@ -144,7 +134,6 @@ With these tools, you can:
 - **Dynamic Summaries**: Summaries can dynamically pull results from objects and data frames to safeguard against hallucinations.
 - **Quarto Renders**: The AI can create and render Quarto presentations. For best results, ask for a .qmd file and for it to be rendered in HTML when it's finished.
 - **Reviewer Zero**: A built-in protocol for automated academic auditing. The AI reads a manuscript block-by-block, extracts every statistical claim into a registry, verifies its extraction, then recomputes each claim against the author's R code. Run `reviewer_zero_prompt()` for the full protocol. See the [Reviewer Zero](#reviewer-zero-automated-academic-audits) section below.
-- **Data Annotation**: Label CSV datasets row by row using the built-in annotation tools. Define the annotation schema in a `_schema` column, run `data_annotation_prompt()` to get the protocol, and annotate interactively or in fully isolated subprocess-per-row mode with `run_annotation_job`.
 
 ## Reviewer Zero: Automated Academic Audits
 
@@ -186,76 +175,9 @@ multi_agent_prompt()
 
 You can also just tell the agents to run `ClaudeR::multi_agent_prompt()` and they will read the protocol themselves.
 
-## Lab Mode
-
-Lab Mode is a heavier-weight multi-agent orchestration protocol that combines elements from Reviewer Zero, R Best Practices, and the Multi-Agent Coordination Protocol. It is known that a single agent performing an end-to-end task suffers from expected and non-expected failure modes. To help remedy that, another agent can be used (e.g., Multi-Agent Protocol). However, with the growing capabilities of subagents and inspired loop behavior, I have wanted to explore these in analytical workflows to see if they can remedy some failure modes. To capitalize on autonomous behavior and long-term deterministic harnesses, this protocol employs a three-part structure.
-
-An orchestrator dispatches specialist subagents (EDA, modeling, reviewer_zero, reporting) through three phases:
-
-```
-                ┌────────────────────────────────────────────┐
-                │           Phase 1: Parallel Exploration    │
-                │                                            │
-                │   ┌──────┐  ┌──────────┐  ┌──────────────┐ │
-                │   │ EDA  │  │ Modeling │  │ Reviewer Zero│ │
-                │   └──┬───┘  └────┬─────┘  └──────┬───────┘ │
-                │      │           │               │         │
-                │      └───────────┼───────────────┘         │
-                │            ┌─────┴──────┐                  │
-                │            │ Reporting  │                  │
-                │            └─────┬──────┘                  │
-                └──────────────────┼─────────────────────────┘
-                                   │   (shared ledger.md)
-                                   ▼
-                ┌────────────────────────────────────────────┐
-                │         Phase 2: Sequential Synthesis      │
-                │                                            │
-                │  Code Consolidation ──▶ Writeup ──▶ Validation │
-                └──────────────────┬─────────────────────────┘
-                                   ▼
-                ┌────────────────────────────────────────────┐
-                │          Phase 3: Assembly Review          │
-                │                                            │
-                │   All subagents re-read artifacts and vote │
-                │   APPROVE / CONCERNS / UNAVAILABLE         │
-                │                                            │
-                │   ┌───────────────────────────────────┐    │
-                │   │  Loop until unanimous APPROVE     │    │
-                │   │  OR round cap (then escalate)     │    │
-                │   └───────────────────────────────────┘    │
-                └────────────────────────────────────────────┘
-```
-
-**Parallel exploration** — each agent is not dependent on another as they complete their task.
-
-**Sequential synthesis** — code consolidation → writeup → validation, in order.
-
-**Assembly review** — every subagent must verify the deliverables against the audit trail and vote APPROVE or CONCERNS. The loop iterates until unanimous approval or the round cap is hit (if it exits before unanimous agreement, those concerns are raised to you).
-
-To make this as efficient, auditable, clean, and deterministic as possible, the protocol includes the following features (if you think anything is missing, please raise an issue or submit a PR):
-
-- **Timestamped lab folder** — every invocation produces `clauder_lab_<session>_<YYYYMMDD>_<HHMMSS>/`. Prior runs are never overwritten.
-- **Append-only ledger** — `ledger.md` records every finding with an F-ID. Findings can be flagged Modified or Retracted; nothing is ever deleted.
-- **Async-only execution** — non-trivial work runs through `execute_r_async` to avoid the single-session bottleneck, so parallel subagents don't queue on each other.
-- **Round snapshots** — every assembly round archives the lab state into `rounds/round_<N>/` so the full progression is auditable.
-- **Pristine acceptance criteria** — explicit, falsifiable bar: every Open finding reproduces from a clean R process, no Modified/Retracted leaks into the writeup, no hardcoded values, `analysis_final.R` runs end-to-end.
-- **Deterministic completion gates** — `ClaudeR::validate_assembly_round()` and `ClaudeR::finalize_lab_session()` are R-level hard gates. They check the assembly log structurally and throw informative errors if anything is missing (silent absent voters, missing re-verification sections, self-simulated votes, missing artifacts). On finalization success, a `lab_session_locked.json` is written into the lab folder — that file's existence is the completion signal the user can verify in one line.
-- **Agent-agnostic** — works on Claude Code's Task tool, Codex's `[agents]`, Gemini CLI's `/subagents`, Antigravity's `invoke_subagent`. Falls back to sequential role-playing on single-agent CLIs.
-
-```r
-# Print the full protocol with your research question baked in
-ClaudeR::lab_mode_prompt(
-  description = "Does driving behavior moderate the relationship between
-                 horsepower and fuel economy in mtcars?",
-  session_name = "study_01"
-)
-```
-
-The orchestrator agent reads the printed protocol and runs the lab. Deliverables land in the timestamped folder: `ledger.md`, `analysis_final.R`, `final_writeup.qmd` (or `.md`), `validator_report.md`, `assembly_log.md`, `delivery_summary.md`, and on successful finalization, `lab_session_locked.json`.
-
 ## AI-Driven Data Annotation
 
-ClaudeR includes a purpose-built annotation workflow for labelling CSV datasets with an AI agent. The agent works through the dataset row by row using two dedicated MCP tools with no code required on the agent's end.
+ClaudeR includes a purpose-built annotation workflow for labelling CSV datasets with an AI agent. The agent works through the dataset row by row using two dedicated MCP tools — no code required on the agent's end.
 
 **CSV format:** add a `_schema` column to your file and define the annotation fields in the first row using a simple type syntax:
 
@@ -274,41 +196,7 @@ Supported types: `choice[a,b,c]`, `float[min,max]`, `int[min,max]`, `bool`, `tex
 data_annotation_prompt()
 ```
 
-Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row. The original file is never modified and sessions are automatically resumable if interrupted.
-
-**Two annotation modes are available:** The default `load_annotation_data` + `annotate` flow runs inside the agent's existing conversation where context accumulates across rows, which can be useful for consistency but may introduce anchoring on long datasets. For full row isolation, use `run_annotation_job` instead: it spawns a fresh `claude`, `codex`, `gemini`, or `qwen` subprocess per row, or sends each row to a local `ollama` server, so every annotation is made with zero memory of prior rows.
-
-**Mode 1: Full context (interactive):**
-```
-You are annotating a dataset. Your only job is to call annotation tools. Do not write code or use any other tools.
-
-Step 1: Call load_annotation_data with:
-- csv_path: /path/to/your/file.csv
-
-Step 2: For each row displayed, call annotate with the fields defined in the schema.
-
-Step 3: After each annotate call, the next row loads automatically. Keep annotating until you see "Annotation complete."
-
-If you get a validation error, read it carefully and call annotate again with corrected values.
-```
-
-**Mode 2: Isolated context (subprocess per row):**
-```
-You are annotating a dataset.
-
-Step 1: Call run_annotation_job with:
-- csv_path: /path/to/your/file.csv
-- tool: claude            # or "codex" / "gemini" / "qwen" / "ollama"
-- model: qwen2.5          # ollama only: any model tag you have pulled
-- reasoning_effort: high  # codex only: low | medium | high
-- ollama_base_url: http://localhost:11434  # ollama only, defaults shown
-
-Step 2: Once you have the job ID, periodically call get_annotation_job_status with that ID to check progress.
-
-To stop early, call cancel_annotation_job with the job ID. Rows already annotated are preserved.
-
-That's it. The annotation runs automatically in the background. Do not call any other tools unless checking status.
-```
+Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row — the original file is never modified and sessions are automatically resumable if interrupted.
 
 ## How It Works
 
@@ -324,27 +212,48 @@ This architecture ensures that the AI can only perform approved operations throu
 
 ## CLI Integration
 
-ClaudeR supports command-line interface (CLI) tools: the **Claude Code CLI**, the **OpenAI Codex CLI**, the **Qwen Code CLI**, the **Google Gemini CLI**, and the **Google Antigravity CLI** (`agy`, the replacement for Gemini CLI starting 2026-06-18). This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
+ClaudeR now supports command-line interface (CLI) tools like the **Claude Code CLI**, the **OpenAI Codex CLI**, and the **Google Gemini CLI**. This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
 
 ## Security Model
 
 ClaudeR is a **supervised power tool**. The agent executes R code in your live RStudio session, the same session where your data and variables live. You should review what it does, just as you would review a colleague's code before running it.
 
-### What ClaudeR blocks
+### Server authentication
 
-- **System commands**: `system()`, `system2()`, `shell()`, and related calls are blocked to prevent the agent from reaching outside R.
-- **File deletion**: `unlink()`, `file.remove()`, and shell commands containing `rm` are prohibited.
-- **Error feedback**: Blocked operations return a clear error message explaining why.
+Binding to `127.0.0.1` is **not** a security boundary. Any other process on your machine can post code to the port — and so can any webpage you visit, via a cross-origin POST that browsers send without a CORS preflight. Either one is arbitrary code execution in your R session. ClaudeR has two defences:
+
+- **Origin block (always on).** Any request carrying an `Origin` header is rejected with a 403. Only browsers set `Origin`, and the MCP bridge never does, so this closes the drive-by-webpage vector with no configuration and no compatibility cost.
+- **Session token (opt-in).** On **Start Server**, ClaudeR mints a random token and writes it to the discovery file (mode `0600`, readable only by you). The bridge reads it and echoes it back as `X-Clauder-Token`. Tick **Require auth token** under *Advanced* to reject every request that lacks it — this closes the local-process vector too.
+
+The token is **off by default** because enforcing it rejects any bridge older than `clauder-mcp` 0.6.0, which would break existing installs on upgrade. To turn it on:
+
+```bash
+uvx --refresh clauder-mcp    # get a bridge that sends the token
+```
+
+Then tick **Require auth token** in the addin's Advanced panel and restart the server. Until you do, the addin prints a one-time console notice when a token-less bridge connects.
+
+### Guardrails (not a sandbox)
+
+`validate_code_security()` rejects the obvious footguns — `system()`, `system2()`, `shell()`, `rstudioapi::terminal`, and recursive/wildcard deletes. Treat this as a **seatbelt, not a sandbox**. It is a regex blocklist and it is trivially bypassable by design (`get("system")(...)`, `do.call`, `eval(parse(...))`, and so on). It is there to catch careless generation, not a determined agent. The agent's job is to run arbitrary R, so there is no version of this that is airtight.
 
 ### What ClaudeR does NOT restrict
 
-The agent can still read files, install packages, create/overwrite objects in your environment, and consume compute resources. These are necessary for the agent to be useful, but they mean you should:
+The agent can read any file you can read, install packages, overwrite objects in your environment, make network calls, and consume compute. These are necessary for it to be useful. So:
 
-- **Use logging** (enabled by default) so you have a full record of every line the agent executed and which agent ran it.
-- **Work in a project directory** to limit what the agent can see.
-- **Review before trusting**: especially for Reviewer Zero audits, treat the output as a draft review that should be verified.
+- **Use logging** (enabled by default) for a full record of every line executed and which agent ran it.
+- **Work in a project directory** to limit what the agent sees by default.
+- **Review before trusting**: especially for Reviewer Zero audits, treat the output as a draft that you verify.
 
-> These restrictions only apply to code executed by the AI. Your manually executed R code is not affected.
+### Prompt injection: read this before auditing someone else's manuscript
+
+ClaudeR deliberately combines three things: an agent that can **execute arbitrary R**, tools that pull in **untrusted third-party content** (`read_file`, `get_viewer_content`, `verify_references`, `load_annotation_data`), and an R session that can **write files and reach the network**.
+
+That combination means a manuscript, CSV, or HTML widget authored by someone else is untrusted input on a path to code execution. Reviewer Zero's whole premise — point the agent at a paper you did not write — is exactly the risky shape. A document containing text aimed at the *model* rather than the reader can redirect what the agent does.
+
+No filter fixes this, because running code is the feature. Mitigate by treating agent sessions over third-party documents as you would running a stranger's script: do it in a project directory, keep logging on, read the log, and don't leave credentials lying around in the working directory or environment.
+
+> Restrictions apply only to code executed by the AI. Your manually executed R code is unaffected.
 
 ## Installation
 
@@ -383,7 +292,7 @@ library(ClaudeR)
 install_clauder(use_uvx = FALSE, python_path = "/path/to/your/python")
 ```
 
-#### Option B: For CLI Tools (Claude Code / Codex / Qwen / Gemini)
+#### Option B: For CLI Tools (Claude Code / Codex / Gemini)
 
 This non-interactive function generates the exact command or JSON configuration needed for your CLI tool.
 
@@ -396,14 +305,8 @@ install_cli(tools = "claude")
 # For OpenAI Codex CLI
 install_cli(tools = "codex")
 
-# For Qwen Code CLI (requires `npm install -g @qwen-code/qwen-code`)
-install_cli(tools = "qwen")
-
-# For Google Gemini CLI (shuts down 2026-06-18 for non-Enterprise tiers)
+# For Google Gemini CLI
 install_cli(tools = "gemini")
-
-# For Google Antigravity CLI (`agy`, the post-2026-06-18 Gemini CLI replacement)
-install_cli(tools = "agy")
 ```
 
 For users who cannot use `uvx`, fall back to the legacy Python path method:
@@ -413,7 +316,7 @@ install_cli(tools = "claude", use_uvx = FALSE, python_path = "/path/to/my/python
 ```
 
 After running the function, you must **manually apply the configuration**:
-- **For Claude / Codex / Qwen**: Copy the command printed in the R console and run it in your terminal.
+- **For Claude / Codex**: Copy the command printed in the R console and run it in your terminal.
 - **For Gemini**: Copy the generated JSON and manually add it to your `gemini.json` settings file.
 
 After setup, **quit and restart** any active Desktop Apps or terminal sessions for the new settings to load.
@@ -438,7 +341,7 @@ The ClaudeR add-in will appear in your RStudio Viewer pane. Click **"Start Serve
 ### Part 2: In Your AI Tool
 
 - **For Desktop Apps**: Open the Claude Desktop App or Cursor and begin your session.
-- **For CLI Tools**: Open your terminal and use the `claude`, `codex`, `qwen`, or `gemini` commands to start interacting with your AI assistant.
+- **For CLI Tools**: Open your terminal and use the `claude` or `gemini` commands to start interacting with your AI assistant.
 
 > Note: You can regain console/active document control by clicking the stop button in the RStudio console. This closes the Shiny UI but the MCP server keeps running in the background and your AI agents stay connected. Re-run `claudeAddin()` to bring the viewer pane back with the same server state (port, session name, execution count). To fully stop the server, click **"Stop Server"** in the UI before closing.
 
@@ -468,8 +371,7 @@ If you can do it with R, your AI assistant can too.
 - **Session Persistence**: Variables, data, and functions created by the AI remain in your R session.
 - **Code Visibility**: By default, the AI's code is printed to your console.
 - **Port Configuration**: The default port is `8787`, but you can change it if needed.
-- **Package Installation**: The AI can install packages. Use clear prompts to guide its behavior. If you care about reproducibility, work inside an [`renv`](https://rstudio.github.io/renv/) project: `renv` hijacks `install.packages()` for the active session, so the agent's installs go into your project library instead of your global one.
-- **Stopping the Connection**: Closing the Shiny addin (console Stop button or Done) does **not** kill the MCP server. Re-run `claudeAddin()` to bring the Viewer back with the same server state. To fully stop the bridge, click **"Stop Server"** in the addin UI before closing.
+- **Package Installation**: The AI can install packages. Use clear prompts to guide its behavior.
 
 ## Troubleshooting
 
@@ -498,8 +400,9 @@ If you can do it with R, your AI assistant can too.
 
 ## Limitations
 
-- Each R session can connect to one Claude Desktop/Cursor app at a time. However, multiple CLI agents (Claude Code, Codex, Qwen Code, Gemini) can share the same session alongside a Desktop app. To isolate agents, run separate RStudio windows with different session names and ports.
-- R is single-threaded, but async jobs run in a separate process via `callr` so the main session stays responsive. The background process does not share the main session's environment by default. Use the `inputs`/`outputs` parameters on `execute_r_async` to auto-marshal data in and out, or write self-contained code that uses `saveRDS()`/`readRDS()` manually.
+- Each R session can connect to one Claude Desktop/Cursor app at a time. However, multiple CLI agents (Claude Code, Gemini CLI) can share the same session alongside a Desktop app. To isolate agents, run separate RStudio windows with different session names and ports.
+- You can stop the connection to the Shiny UI by clicking the Stop button in the console to make changes alongside the AI, but to stop the connection you will need to restart the RSession.
+- R is single-threaded, but async jobs run in a separate process via `callr` so the main session stays responsive. The background process does not share the main session's environment, so async code must be self-contained.
 
 ## License
 

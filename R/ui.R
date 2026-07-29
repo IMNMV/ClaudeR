@@ -20,17 +20,41 @@ discovery_dir <- function() {
   file.path(base, ".claude_r_sessions")
 }
 
-write_discovery_file <- function(session_name, port) {
+# The discovery file doubles as the shared-secret channel between R and the
+# Python MCP bridge: the bridge reads `token` and echoes it back in the
+# X-Clauder-Token header. Written 0600 so other local users cannot read it.
+generate_session_token <- function() {
+  # Must not disturb the caller's RNG stream. This is a reproducibility tool:
+  # silently advancing .Random.seed when the server starts would change the
+  # results of any subsequent set.seed()-less simulation. Snapshot, reseed from
+  # system entropy, then put the user's stream back exactly as we found it.
+  had_seed <- exists(".Random.seed", envir = globalenv(), inherits = FALSE)
+  old_seed <- if (had_seed) get(".Random.seed", envir = globalenv()) else NULL
+  on.exit({
+    if (had_seed) {
+      assign(".Random.seed", old_seed, envir = globalenv())
+    } else if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) {
+      rm(".Random.seed", envir = globalenv())
+    }
+  }, add = TRUE)
+
+  set.seed(NULL)  # reseed from time/pid entropy
+  paste(sprintf("%02x", sample.int(256L, 32L, replace = TRUE) - 1L), collapse = "")
+}
+
+write_discovery_file <- function(session_name, port, token) {
   d <- discovery_dir()
-  if (!dir.exists(d)) dir.create(d, recursive = TRUE)
+  if (!dir.exists(d)) dir.create(d, recursive = TRUE, mode = "0700")
   info <- list(
     session_name = session_name,
     port = port,
     pid = Sys.getpid(),
+    token = token,
     started_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%S")
   )
-  jsonlite::write_json(info, file.path(d, paste0(session_name, ".json")),
-                       auto_unbox = TRUE, pretty = TRUE)
+  f <- file.path(d, paste0(session_name, ".json"))
+  jsonlite::write_json(info, f, auto_unbox = TRUE, pretty = TRUE)
+  try(Sys.chmod(f, mode = "0600"), silent = TRUE)
 }
 
 remove_discovery_file <- function(session_name) {
@@ -54,6 +78,79 @@ cleanup_stale_discovery_files <- function() {
     })
   }
   invisible(NULL)
+}
+
+# --- Plot Draw Detection ---
+# Comparing recordPlot() snapshots before/after eval cannot distinguish
+# "redrew the same figure" from "drew nothing": both leave a byte-identical
+# display list. A genuine redraw is therefore misread as stale and the agent
+# silently stops receiving images from the third identical redraw onward.
+#
+# Drawing *events* answer the question the snapshot comparison cannot.
+# plot.new()/grid.newpage() fire on every new plot; the rest fire when code
+# adds to an existing one. Tracing is installed once per session rather than
+# per call, so it costs nothing on the hot path — which also lets us drop the
+# two recordPlot() deep-copies that previously ran on every single execution,
+# including calls that touch no graphics at all.
+.claude_plot_env <- new.env(parent = emptyenv())
+.claude_plot_env$drew <- FALSE
+.claude_plot_env$traced <- NULL
+
+.claude_draw_fns <- list(
+  graphics = c("plot.new", "plot.xy", "abline", "text.default", "mtext",
+               "title", "axis", "box", "legend", "rect", "polygon",
+               "segments", "arrows"),
+  grid     = c("grid.newpage", "grid.draw")
+)
+
+install_draw_tracers <- function() {
+  if (!is.null(.claude_plot_env$traced)) return(invisible(.claude_plot_env$traced))
+
+  # The tracer is evaluated inside the traced function's own namespace, so it
+  # cannot reference names defined here. bquote() splices the environment
+  # object itself into the call, making it self-contained wherever it runs.
+  tracer <- bquote(assign("drew", TRUE, envir = .(.claude_plot_env)))
+
+  installed <- list()
+  for (pkg in names(.claude_draw_fns)) {
+    if (!requireNamespace(pkg, quietly = TRUE)) next
+
+    # Both bindings must be traced. The namespace binding catches internal
+    # calls (points() -> plot.xy()); the attached package binding catches the
+    # user's top-level calls. Tracing only the namespace silently misses
+    # abline(), which reaches the device via .External.graphics() without
+    # passing through any other traced function.
+    envs <- list(asNamespace(pkg))
+    attached <- paste0("package:", pkg)
+    if (attached %in% search()) envs <- c(envs, list(as.environment(attached)))
+
+    for (fn in .claude_draw_fns[[pkg]]) {
+      for (env in envs) {
+        ok <- tryCatch({
+          suppressMessages(trace(fn, tracer = tracer, print = FALSE, where = env))
+          TRUE
+        }, error = function(e) FALSE)
+        if (ok) installed[[length(installed) + 1L]] <- list(fn = fn, where = env)
+      }
+    }
+  }
+  .claude_plot_env$traced <- installed
+  invisible(installed)
+}
+
+remove_draw_tracers <- function() {
+  tr <- .claude_plot_env$traced
+  if (!is.null(tr)) {
+    for (t in tr) {
+      try(suppressMessages(untrace(t$fn, where = t$where)), silent = TRUE)
+    }
+  }
+  .claude_plot_env$traced <- NULL
+  invisible(NULL)
+}
+
+.onUnload <- function(libpath) {
+  remove_draw_tracers()
 }
 
 # --- Agent History Environment ---
@@ -107,6 +204,7 @@ unwrap_viewer <- function() {
 .claude_server_env$port <- NULL
 .claude_server_env$session_name <- NULL
 .claude_server_env$execution_count <- 0L
+.claude_server_env$token <- NULL
 
 # --- Background Jobs (callr) ---
 # Package-level environment for non-blocking async execution.
@@ -345,6 +443,48 @@ claudeAddin <- function() {
       port = port,
       app = list(
         call = function(req) {
+          # --- Auth gate ---
+          # Binding to 127.0.0.1 is not a security boundary: any local process
+          # can reach this port, and a webpage can POST to it cross-origin
+          # without a CORS preflight (text/plain body). Both would land as
+          # arbitrary R execution.
+          #
+          # Two independent defences, deliberately decoupled:
+          #
+          # 1. Origin block — always on. Only browsers set Origin, and the MCP
+          #    bridge never does, so this closes the drive-by-webpage vector at
+          #    zero compatibility cost.
+          # 2. Token check — opt-in (settings$require_token). Enforcing it
+          #    rejects any bridge older than clauder-mcp 0.6.0, so it stays off
+          #    until the user has updated both halves. Turn it on in Advanced.
+          if (!is.null(req$HTTP_ORIGIN)) {
+            return(list(
+              status = 403L,
+              headers = list('Content-Type' = 'application/json'),
+              body = '{"error": "Forbidden: browser-originated requests are not accepted"}'
+            ))
+          }
+
+          expected_token <- .claude_server_env$token
+          supplied_token <- req$HTTP_X_CLAUDER_TOKEN
+
+          if (isTRUE(.claude_server_env$require_token)) {
+            if (is.null(expected_token) || !identical(supplied_token, expected_token)) {
+              return(list(
+                status = 401L,
+                headers = list('Content-Type' = 'application/json'),
+                body = '{"error": "Unauthorized: missing or invalid X-Clauder-Token. Your clauder-mcp bridge is older than 0.6.0 — run `uvx --refresh clauder-mcp`, or untick Require token in the addin Advanced panel."}'
+              ))
+            }
+          } else if (is.null(supplied_token) && !isTRUE(.claude_server_env$warned_no_token)) {
+            .claude_server_env$warned_no_token <- TRUE
+            message(
+              "[ClaudeR] Bridge connected without an auth token (clauder-mcp < 0.6.0). ",
+              "Any local process can reach this port. After updating the bridge, ",
+              "tick 'Require token' in the addin's Advanced panel to lock it down."
+            )
+          }
+
           # Handle POST requests (receiving code from Claude)
           if (req$REQUEST_METHOD == "POST") {
             # Parse the request body
@@ -550,7 +690,18 @@ claudeAddin <- function() {
         )
       ),
       wellPanel(
-        actionButton("kill_process", "Force Release Port", class = "btn-warning btn-sm")
+        actionButton("kill_process", "Force Release Port", class = "btn-warning btn-sm"),
+        tags$hr(style = "margin: 10px 0;"),
+        checkboxInput("require_token",
+          "Require auth token (needs clauder-mcp >= 0.6.0)",
+          value = isTRUE(settings$require_token)
+        ),
+        tags$div(
+          style = "font-size: 11px; color: #777; margin-top: -8px;",
+          "Rejects any request without this session's token. Update your bridge",
+          tags$code("uvx --refresh clauder-mcp"),
+          "before enabling, then restart the server."
+        )
       )
     )
   )
@@ -582,6 +733,14 @@ claudeAddin <- function() {
     observeEvent(input$log_file_path, {
       settings$log_file_path <<- input$log_file_path
       save_claude_settings(settings)
+    }, ignoreInit = TRUE)
+    observeEvent(input$require_token, {
+      settings$require_token <<- input$require_token
+      save_claude_settings(settings)
+      if (isTRUE(state$running)) {
+        showNotification("Restart the server for the token setting to take effect.",
+                         type = "warning")
+      }
     }, ignoreInit = TRUE)
 
     # Open log file button
@@ -760,6 +919,11 @@ claudeAddin <- function() {
             showNotification("Fresh start: log, history, and agents reset", type = "message")
           }
 
+          # Mint the session token before the server starts accepting requests.
+          .claude_server_env$token <- generate_session_token()
+          .claude_server_env$require_token <- isTRUE(input$require_token)
+          .claude_server_env$warned_no_token <- FALSE
+
           server_state <<- start_http_server(input$port)
           running <<- TRUE
           state$running <- TRUE
@@ -768,7 +932,7 @@ claudeAddin <- function() {
           session_name <- trimws(input$session_name)
           if (session_name == "") session_name <- paste0("session_", input$port)
           active_session_name <<- session_name
-          write_discovery_file(session_name, input$port)
+          write_discovery_file(session_name, input$port, .claude_server_env$token)
 
           # Create log file with session name in the filename
           # Use <<- so the HTTP handler closure sees the updated path
@@ -819,6 +983,7 @@ claudeAddin <- function() {
           .claude_server_env$port <- NULL
           .claude_server_env$session_name <- NULL
           .claude_server_env$execution_count <- 0L
+          .claude_server_env$token <- NULL
 
           # Reset execution count and agent history
           execution_count <<- 0
@@ -833,6 +998,9 @@ claudeAddin <- function() {
 
           # Restore original viewer
           unwrap_viewer()
+
+          # Don't leave graphics functions traced in the user's session
+          remove_draw_tracers()
 
           # Force garbage collection to ensure port is released
           gc()
@@ -890,6 +1058,7 @@ claudeAddin <- function() {
             .claude_server_env$port <- NULL
             .claude_server_env$session_name <- NULL
             .claude_server_env$execution_count <- 0L
+            .claude_server_env$token <- NULL
             running <<- FALSE
             state$running <- FALSE
 
@@ -927,6 +1096,74 @@ claudeAddin <- function() {
   }
 
   runGadget(ui, server, viewer = paneViewer())
+}
+
+#' Summarize a result value for transport back to the agent
+#'
+#' `output` already carries the printed representation of the value, so
+#' serializing the object itself is only useful when it is small. Anything
+#' larger gets a shape summary instead — otherwise a visible `1:1e6` would
+#' ship a million numbers as JSON on top of the printed output that already
+#' describes them.
+#'
+#' @param value The value returned by the evaluated code
+#' @param max_len Longest atomic vector to serialize verbatim
+#' @return A JSON-serializable summary of `value`
+summarize_result_value <- function(value, max_len = 100L) {
+  if (is.data.frame(value)) {
+    return(list(
+      is_dataframe = TRUE,
+      dimensions = dim(value),
+      head = utils::head(value, 10)
+    ))
+  }
+  if (inherits(value, "ggplot")) {
+    return("ggplot object - see plot output")
+  }
+  if (is.atomic(value) && length(value) <= max_len && is.null(dim(value))) {
+    return(value)
+  }
+
+  summary <- list(
+    truncated = TRUE,
+    class = paste(class(value), collapse = "/"),
+    length = length(value),
+    note = "Object too large to serialize. See the printed output above."
+  )
+  if (!is.null(dim(value))) summary$dimensions <- dim(value)
+  summary
+}
+
+#' Cap captured console output before sending it to the agent
+#'
+#' A visible large object prints its entire contents to stdout, so uncapped
+#' output is the larger of the two payload bombs (`summarize_result_value`
+#' handles the other). Keeps the head and the tail: the head shows what the
+#' object looks like, and the tail preserves the warnings and messages, which
+#' are appended last and matter most.
+#'
+#' @param lines Character vector of captured output lines
+#' @param max_lines Maximum lines to keep
+#' @param max_chars Hard character ceiling applied after line trimming
+#' @return A single truncated string
+truncate_output <- function(lines, max_lines = 500L, max_chars = 50000L) {
+  if (length(lines) > max_lines) {
+    head_n <- as.integer(max_lines * 0.8)
+    tail_n <- max_lines - head_n
+    lines <- c(
+      utils::head(lines, head_n),
+      sprintf("... [%d lines omitted] ...", length(lines) - max_lines),
+      utils::tail(lines, tail_n)
+    )
+  }
+  txt <- paste(lines, collapse = "\n")
+  if (nchar(txt) > max_chars) {
+    txt <- paste0(
+      substr(txt, 1L, max_chars),
+      sprintf("\n... [output truncated at %d characters]", max_chars)
+    )
+  }
+  txt
 }
 
 #' Execute R code in the active RStudio session
@@ -979,13 +1216,24 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
   plot_file_jpeg <- tempfile(fileext = ".jpeg")
 
   tryCatch({
+    # Arm draw detection before sink() opens, so trace()'s own one-time
+    # "Tracing function ..." chatter cannot land in the agent's output.
+    tracers <- install_draw_tracers()
+    tracing_active <- length(tracers) > 0
+    .claude_plot_env$drew <- FALSE
+
     # Create a connection to capture output
     output_file <- tempfile()
     sink(output_file, split = TRUE)  # split=TRUE sends output to console AND capture
 
     # --- BEFORE eval: snapshot device state to detect stale plots ---
     devices_before <- dev.list()
-    baseline_plot <- tryCatch(recordPlot(), error = function(e) NULL)
+    # Only needed for the no-tracing fallback below. When tracing is active this
+    # deep-copy of the display list — previously paid on every call, graphics or
+    # not — is skipped entirely.
+    baseline_plot <- if (!tracing_active && !is.null(devices_before)) {
+      tryCatch(recordPlot(), error = function(e) NULL)
+    } else NULL
 
     # Suppress viewer during agent execution so htmlwidgets don't steal the pane
     # Reset last_url so viewer_captured only flags for THIS execution
@@ -993,8 +1241,24 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
     .claude_viewer_env$suppress <- TRUE
     on.exit(.claude_viewer_env$suppress <- FALSE, add = TRUE)
 
+    # sink() only diverts stdout. Warnings and message() go to stderr, so
+    # without this the agent never sees them — including the ones that matter
+    # most (non-convergence, singular fits, NAs introduced by coercion).
+    # Handlers do not muffle: the conditions still reach the console as usual.
+    collected_conditions <- character(0)
+
     # Execute code in the global environment
-    result <- withVisible(eval(parse(text = code), envir = env))
+    result <- withCallingHandlers(
+      withVisible(eval(parse(text = code), envir = env)),
+      warning = function(w) {
+        collected_conditions <<- c(collected_conditions,
+                                   paste0("Warning: ", conditionMessage(w)))
+      },
+      message = function(m) {
+        collected_conditions <<- c(collected_conditions,
+                                   paste0("Message: ", sub("\n$", "", conditionMessage(m))))
+      }
+    )
 
     # Print the result if it would be auto-printed in console
     if (result$visible) {
@@ -1006,6 +1270,9 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
 
     # Read the captured output
     output <- readLines(output_file, warn = FALSE)
+    if (length(collected_conditions) > 0) {
+      output <- c(output, collected_conditions)
+    }
 
     # --- AFTER eval: only capture if a NEW plot was actually created ---
     captured_plot <- FALSE
@@ -1041,17 +1308,22 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
           })
         })
       }
-      # For base graphics: only capture if device state actually changed
+      # For base graphics: only capture if this execution actually drew something
       else if (!is.null(dev.list())) {
         devices_after <- dev.list()
-        current_plot <- tryCatch(recordPlot(), error = function(e) NULL)
 
-        # Determine if a NEW plot was actually drawn by this execution
-        new_plot_exists <- FALSE
-        if (!identical(devices_before, devices_after)) {
-          new_plot_exists <- TRUE
-        } else if (!is.null(current_plot) && !identical(current_plot, baseline_plot)) {
-          new_plot_exists <- TRUE
+        # A traced draw event is authoritative: it fires on a redraw of an
+        # identical figure, which the old display-list comparison reported as
+        # stale (and so never sent to the agent).
+        new_plot_exists <- isTRUE(.claude_plot_env$drew) ||
+          !identical(devices_before, devices_after)
+
+        # Fallback only if tracing could not be installed — better to pay for
+        # the old comparison than to silently drop plots.
+        if (!new_plot_exists && !tracing_active) {
+          current_plot <- tryCatch(recordPlot(), error = function(e) NULL)
+          new_plot_exists <- !is.null(current_plot) &&
+            !identical(current_plot, baseline_plot)
         }
 
         if (new_plot_exists) {
@@ -1090,30 +1362,12 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
     # Prepare the response
     response <- list(
       success = TRUE,
-      output = paste(output, collapse = "\n")
+      output = truncate_output(output)
     )
 
     # Include the result value if available
     if (exists("result") && !is.null(result$value)) {
-      # Add result to response
-      response$result <- if (is.data.frame(result$value)) {
-        # For dataframes, convert to a readable format
-        list(
-          is_dataframe = TRUE,
-          dimensions = dim(result$value),
-          head = utils::head(result$value, 10)
-        )
-      } else if (inherits(result$value, "ggplot")) {
-        # For ggplot objects
-        "ggplot object - see plot output"
-      } else {
-        # For other objects, try to convert to JSON
-        tryCatch({
-          result$value
-        }, error = function(e) {
-          as.character(result$value)
-        })
-      }
+      response$result <- summarize_result_value(result$value)
     }
 
     # Include plot if available
@@ -2240,7 +2494,11 @@ load_claude_settings <- function() {
   default_settings <- list(
     print_to_console = TRUE,
     log_to_file = FALSE,
-    log_file_path = file.path(path.expand("~"), "claude_r_logs.R")
+    log_file_path = file.path(path.expand("~"), "claude_r_logs.R"),
+    # Off by default: enforcing the token rejects any clauder-mcp older than
+    # 0.6.0, which would break existing installs on upgrade. Users flip this on
+    # once both halves are updated.
+    require_token = FALSE
   )
 
   # Try to load settings from a settings file

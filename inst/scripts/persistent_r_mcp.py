@@ -39,6 +39,7 @@ else:
     SESSIONS_DIR = os.path.expanduser("~/.claude_r_sessions")
 _agent_id: Optional[str] = None       # Set in main()
 _target_session: Optional[str] = None  # Set by connect_session tool
+_target_token: Optional[str] = None    # Per-session auth token from the discovery file
 _agent_introduced: bool = False        # First-call introduction flag
 
 # Cache variable to store the result of the ggplot2 check
@@ -108,14 +109,19 @@ def discover_sessions() -> List[Dict[str, Any]]:
 
 def get_r_addin_url() -> Optional[str]:
     """Get the URL for the active R session. Binds on first resolution and
-    stays sticky. Prefers the 'default' session when no target is set."""
-    global _target_session
+    stays sticky. Prefers the 'default' session when no target is set.
+
+    Also latches the session's auth token, which the R server requires on
+    every request (see _auth_headers)."""
+    global _target_session, _target_token
     sessions = discover_sessions()
     if not sessions:
+        _target_token = None
         return R_ADDIN_URL
     if _target_session:
         for s in sessions:
             if s["session_name"] == _target_session:
+                _target_token = s.get("token")
                 return f"http://127.0.0.1:{s['port']}"
         _target_session = None  # bound session gone, re-pick
     # Pick: prefer "default" name, else lowest port
@@ -124,7 +130,16 @@ def get_r_addin_url() -> Optional[str]:
         sessions.sort(key=lambda s: s.get("port", 99999))
         pick = sessions[0]
     _target_session = pick["session_name"]
+    _target_token = pick.get("token")
     return f"http://127.0.0.1:{pick['port']}"
+
+
+def _auth_headers() -> Dict[str, str]:
+    """Token proving we read the discovery file, which only this user can read.
+    The R server rejects any request without it — localhost alone is not a
+    security boundary (any local process, and any webpage via a no-preflight
+    cross-origin POST, can otherwise reach the execute endpoint)."""
+    return {"X-Clauder-Token": _target_token} if _target_token else {}
 
 
 def parse_args():
@@ -142,20 +157,21 @@ async def check_ggplot_installed() -> bool:
     Caches the result for subsequent calls.
     """
     global _is_ggplot_installed
-    # If we've already checked, return the cached result immediately.
-    if _is_ggplot_installed is not None:
-        return _is_ggplot_installed
+    # Only a positive result is cached. Caching a negative would keep refusing
+    # plot calls for the rest of the session even after the agent installs
+    # ggplot2 — which it is explicitly allowed to do.
+    if _is_ggplot_installed:
+        return True
 
     result = await execute_r_code_via_addin("print(requireNamespace('ggplot2', quietly = TRUE))")
 
     if result.get("success") and "TRUE" in result.get("output", ""):
         print("ggplot2 check successful.", file=sys.stderr)
         _is_ggplot_installed = True
-    else:
-        print("ggplot2 not found in R environment.", file=sys.stderr)
-        _is_ggplot_installed = False
-    
-    return _is_ggplot_installed
+        return True
+
+    print("ggplot2 not found in R environment.", file=sys.stderr)
+    return False
 
 def escape_r_string(s: str) -> str:
     """Escape special characters for safe inclusion in R double-quoted strings."""
@@ -186,6 +202,7 @@ async def execute_r_code_via_addin(code: str) -> Dict[str, Any]:
             response = await client.post(
                 url,
                 json=payload,
+                headers=_auth_headers(),
                 timeout=120.0
             )
             response.raise_for_status()
@@ -210,7 +227,8 @@ async def post_to_r_addin(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"success": False, "error": "No R sessions found. Start the ClaudeR addin in RStudio first."}
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, timeout=10.0)
+            response = await client.post(url, json=payload,
+                                         headers=_auth_headers(), timeout=10.0)
             response.raise_for_status()
             return response.json()
     except Exception as e:
@@ -227,7 +245,7 @@ async def check_addin_status(return_info: bool = False):
         return None if return_info else False
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=2.0)
+            response = await client.get(url, headers=_auth_headers(), timeout=2.0)
             if response.status_code == 200:
                 if return_info:
                     return response.json()
@@ -1535,7 +1553,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         ignore_case = arguments.get("ignore_case", False)
         escaped_pattern = escape_r_string(pattern)
         escaped_root = escape_r_string(root_dir)
-        code = f'ClaudeR:::search_project_code_impl("{escaped_pattern}", extensions = "{extensions}", root_dir = "{escaped_root}", max_results = {max_results}L, ignore_case = {"TRUE" if ignore_case else "FALSE"})'
+        escaped_extensions = escape_r_string(extensions)
+        code = f'ClaudeR:::search_project_code_impl("{escaped_pattern}", extensions = "{escaped_extensions}", root_dir = "{escaped_root}", max_results = {max_results}L, ignore_case = {"TRUE" if ignore_case else "FALSE"})'
         result = await execute_r_code_via_addin(code)
         if result.get("success", False):
             output = result.get("output", "No results.")
