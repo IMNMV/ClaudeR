@@ -1,6 +1,6 @@
 [project]
 name = "clauder-mcp"
-version = "0.6.0"
+version = "0.6.1"
 description = "MCP server connecting AI assistants to RStudio for interactive R coding and data analysis"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -8,7 +8,9 @@ authors = [{ name = "Nykko Vitali" }]
 keywords = ["r", "rstudio", "mcp", "llm", "data-science"]
 license = { text = "MIT" }
 dependencies = [
-    "mcp>=1.0.0",
+    # mcp 2.0 (spec 2026-07-28) removed the Server.list_tools/call_tool
+    # decorator API this server is built on — resolve 1.x until we migrate
+    "mcp>=1.0.0,<2",
     "httpx",
 ]
 

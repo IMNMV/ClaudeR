@@ -69,14 +69,15 @@ install_cli <- function(tools = "claude", use_uvx = TRUE, python_path = NULL, ..
 
     # Install Python dependencies
     message("\n--- Step 3: Installing Python dependencies ---")
-    message("Attempting to install 'mcp' and 'httpx' using pip...")
+    message("Attempting to install 'mcp' (<2) and 'httpx' using pip...")
     tryCatch({
-      system2(final_python_path, args = c("-m", "pip", "install", "--upgrade", "mcp", "httpx"))
+      # mcp 2.0 removed the decorator API the bundled server uses; stay on 1.x
+      system2(final_python_path, args = c("-m", "pip", "install", "--upgrade", "mcp<2", "httpx"))
       message("Python dependencies installed successfully.")
     }, warning = function(w) {
       message("\nWarning during pip install: ", w$message)
     }, error = function(e) {
-      message("\nError during pip install. Please ensure pip is available or install 'mcp' and 'httpx' manually.", call. = FALSE)
+      message("\nError during pip install. Please ensure pip is available or install manually: pip install 'mcp<2' httpx", call. = FALSE)
     })
 
     mcp_script_path <- system.file("scripts", "persistent_r_mcp.py", package = "ClaudeR")

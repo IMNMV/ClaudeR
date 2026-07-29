@@ -161,9 +161,10 @@ install_clauder <- function(for_cursor = FALSE, use_uvx = TRUE, python_path = NU
     }
 
     if (nzchar(temp_python_path)) {
-      message(paste("Attempting to install 'mcp' and 'httpx' using pip from:", temp_python_path))
+      message(paste("Attempting to install 'mcp' (<2) and 'httpx' using pip from:", temp_python_path))
       tryCatch({
-        system2(temp_python_path, args = c("-m", "pip", "install", "--upgrade", "mcp", "httpx"))
+        # mcp 2.0 removed the decorator API the bundled server uses; stay on 1.x
+        system2(temp_python_path, args = c("-m", "pip", "install", "--upgrade", "mcp<2", "httpx"))
       }, warning = function(w) {
         message("\nWarning during pip install: ", w$message)
         if (grepl("externally-managed-environment", w$message)) {
@@ -173,7 +174,7 @@ install_clauder <- function(for_cursor = FALSE, use_uvx = TRUE, python_path = NU
         message("\nError during pip install: ", e$message)
       })
     } else {
-      warning("Could not find a Python executable. Please install 'mcp' and 'httpx' manually using pip.")
+      warning("Could not find a Python executable. Please install manually: pip install 'mcp<2' httpx")
     }
   } else {
     message("\n--- Step 2: Using uvx (recommended) ---")
