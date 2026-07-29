@@ -3,3 +3,14 @@
 .Rproj.user
 ClaudeR.Rproj
 .Rhistory
+
+# Credentials — never commit
+.mcpregistry_*
+
+# Build artifacts
+clauder-mcp/dist/
+__pycache__/
+*.pyc
+
+# R plot artifacts
+Rplots.pdf
