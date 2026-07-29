@@ -220,7 +220,7 @@ async def execute_r_code_via_addin(code: str) -> Dict[str, Any]:
             "error": f"Error communicating with RStudio: {str(e)}"
         }
 
-async def post_to_r_addin(payload: Dict[str, Any]) -> Dict[str, Any]:
+async def post_to_r_addin(payload: Dict[str, Any], timeout: float = 10.0) -> Dict[str, Any]:
     """Send an arbitrary JSON payload to the R addin HTTP server."""
     url = get_r_addin_url()
     if url is None:
@@ -228,7 +228,7 @@ async def post_to_r_addin(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload,
-                                         headers=_auth_headers(), timeout=10.0)
+                                         headers=_auth_headers(), timeout=timeout)
             response.raise_for_status()
             return response.json()
     except Exception as e:
@@ -245,12 +245,17 @@ async def check_addin_status(return_info: bool = False):
         return None if return_info else False
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, headers=_auth_headers(), timeout=2.0)
+            response = await client.get(url, headers=_auth_headers(), timeout=5.0)
             if response.status_code == 200:
                 if return_info:
                     return response.json()
                 return True
-    except:
+    except httpx.TimeoutException:
+        # R is single-threaded: a timeout here usually means the session is
+        # busy running another agent's synchronous code, not that the addin
+        # is down. Treat it as alive so callers queue instead of erroring.
+        return None if return_info else True
+    except Exception:
         pass
     return None if return_info else False
 
@@ -266,7 +271,12 @@ async def get_agent_introduction() -> str:
     ]
 
     if info:
-        other_agents = [a for a in info.get("connected_agents", []) if a != _agent_id and a != "unknown"]
+        agents = info.get("connected_agents", [])
+        if isinstance(agents, str):
+            # Older R servers unbox a single-element array to a bare string;
+            # without this guard we'd iterate it character by character.
+            agents = [agents]
+        other_agents = [a for a in agents if a != _agent_id and a != "unknown"]
         if other_agents:
             lines.append(f"Other agents active on this session: {', '.join(other_agents)}")
             lines.append("These are other AI agents executing code in the same R environment. Coordinate to avoid conflicts.")
@@ -430,7 +440,8 @@ def _run_subprocess_row(
                 return None, "", f"Ollama returned HTTP {e.response.status_code}: {body}"
 
         else:  # codex
-            last_msg_path = tempfile.mktemp(suffix=".txt")
+            fd, last_msg_path = tempfile.mkstemp(suffix=".txt")
+            os.close(fd)
             command = [
                 tool_path, "exec",
                 "-c", "mcp_servers={}",
@@ -1282,13 +1293,16 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             )]
         
         result = await execute_r_code_via_addin(arguments["code"])
-        
+
         if not result.get("success", False):
-            return [types.TextContent(
-                type="text",
-                text=f"R Error: {result.get('error', 'Unknown error')}"
-            )]
-        
+            err_text = f"R Error: {result.get('error', 'Unknown error')}"
+            # Include whatever printed before the error — often the context
+            # the agent needs to fix the code
+            if result.get("output"):
+                err_text = f"{result['output']}\n\n{err_text}"
+            result_contents.append(types.TextContent(type="text", text=err_text))
+            return result_contents
+
         # Add text output
         if "output" in result and result["output"]:
             result_contents.append(types.TextContent(
@@ -1636,7 +1650,10 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         if _agent_id:
             payload["agent_id"] = _agent_id
 
-        result = await post_to_r_addin(payload)
+        # Generous timeout: submission synchronously saveRDS()es the marshaled
+        # inputs in the main session, which can be slow for large objects. A
+        # premature timeout would make the agent resubmit a job that started.
+        result = await post_to_r_addin(payload, timeout=120.0)
 
         if not result.get("success", False):
             return [types.TextContent(
@@ -1665,8 +1682,9 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         # Throttle polling — wait before checking
         await asyncio.sleep(10)
 
-        # Ask R for the job status
-        result = await post_to_r_addin({"check_job": job_id})
+        # Ask R for the job status. Collection loads outputs back into the
+        # main session (readRDS + assign), which can be slow for big results.
+        result = await post_to_r_addin({"check_job": job_id}, timeout=120.0)
 
         status = result.get("status", "unknown")
 
@@ -1840,16 +1858,20 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             }} else {{
                 lines <- readLines(fpath, warn = FALSE)
                 total <- length(lines)
-                sl <- {start_r}
-                el <- {end_r}
-                if (is.null(sl)) sl <- 1L
-                if (is.null(el)) el <- total
-                sl <- max(1L, min(sl, total))
-                el <- max(sl, min(el, total))
-                subset_lines <- lines[sl:el]
-                numbered <- paste0("[L", sprintf("%04d", sl:el), "] ", subset_lines)
-                hint <- sprintf("\\n[Lines %d-%d of %d total]", sl, el, total)
-                list(success = TRUE, output = paste0(paste(numbered, collapse = "\\n"), hint))
+                if (total == 0L) {{
+                    list(success = TRUE, output = "[File exists but is empty (0 lines)]")
+                }} else {{
+                    sl <- {start_r}
+                    el <- {end_r}
+                    if (is.null(sl)) sl <- 1L
+                    if (is.null(el)) el <- total
+                    sl <- max(1L, min(sl, total))
+                    el <- max(sl, min(el, total))
+                    subset_lines <- lines[sl:el]
+                    numbered <- paste0("[L", sprintf("%04d", sl:el), "] ", subset_lines)
+                    hint <- sprintf("\\n[Lines %d-%d of %d total]", sl, el, total)
+                    list(success = TRUE, output = paste0(paste(numbered, collapse = "\\n"), hint))
+                }}
             }}
         }}, error = function(e) {{
             list(success = FALSE, error = e$message)
@@ -1901,9 +1923,14 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                 text="Error: Both 'search_pattern' and 'replacement' parameters are required"
             )]
         
-        # Escape special characters for R string
-        search_pattern = arguments["search_pattern"].replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "\\'")
-        replacement = arguments["replacement"].replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "\\'")
+        # search_pattern is a regex by design: escape for the R string
+        # literal only, so the user's regex reaches gsub() intact.
+        search_pattern = escape_r_string(arguments["search_pattern"])
+        # replacement is literal text, but gsub() treats backslash as a
+        # metacharacter (backrefs \1..\9). Escape once for gsub semantics,
+        # then once more for the R string literal — otherwise replacements
+        # containing paths or escaped strings get silently corrupted.
+        replacement = escape_r_string(arguments["replacement"].replace("\\", "\\\\"))
         
         # Get line constraints if provided
         line_start = arguments.get("line_start", "NULL")

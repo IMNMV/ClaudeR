@@ -370,7 +370,7 @@ If you can do it with R, your AI assistant can too.
 
 - **Session Persistence**: Variables, data, and functions created by the AI remain in your R session.
 - **Code Visibility**: By default, the AI's code is printed to your console.
-- **Port Configuration**: The default port is `8787`, but you can change it if needed.
+- **Port Configuration**: The default port is `8787`, but you can change it if needed. On **RStudio Server**, 8787 is the IDE's own port — pick a different one (e.g. 8788).
 - **Package Installation**: The AI can install packages. Use clear prompts to guide its behavior.
 
 ## Troubleshooting

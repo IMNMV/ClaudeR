@@ -1,11 +1,13 @@
 Package: ClaudeR
 Title: R Integration for Claude AI
-Version: 0.3.0
+Version: 0.3.1
 Authors@R: person("Nykko", "Vitali", email = "nykvt@icloud.com", role = c("aut", "cre"))
 Description: Connects RStudio with Claude AI to enable interactive coding sessions.
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
+Depends:
+    R (>= 4.0)
 Imports:
     base64enc,
     callr,
@@ -15,8 +17,11 @@ Imports:
     jsonlite,
     miniUI,
     rstudioapi,
-    shiny
+    shiny,
+    tools,
+    utils
 Suggests:
     devtools,
-RoxygenNote: 7.3.2
-
+    officer,
+    pdftools
+RoxygenNote: 7.3.3

@@ -77,7 +77,7 @@ install_cli <- function(tools = "claude", use_uvx = TRUE, python_path = NULL, ..
     }, warning = function(w) {
       message("\nWarning during pip install: ", w$message)
     }, error = function(e) {
-      message("\nError during pip install. Please ensure pip is available or install manually: pip install 'mcp<2' httpx", call. = FALSE)
+      message("\nError during pip install. Please ensure pip is available or install manually: pip install 'mcp<2' httpx")
     })
 
     mcp_script_path <- system.file("scripts", "persistent_r_mcp.py", package = "ClaudeR")

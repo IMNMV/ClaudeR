@@ -11,23 +11,23 @@ claude_rstudio_addin(port = 8787)
 in the addin's Session panel instead.}
 }
 \value{
-See \code{\link[=claudeAddin]{claudeAddin()}}.
+See [claudeAddin()].
 }
 \description{
-Deprecated. Use \code{\link[=claudeAddin]{claudeAddin()}} instead.
+Deprecated. Use [claudeAddin()] instead.
 }
 \details{
 This used to be a second, independent implementation of the addin server.
-It was never wired to the RStudio Addins menu (\code{inst/rstudio/addins.dcf}
-binds \code{claudeAddin}) and the README never referenced it, but it remained
-exported -- so calling it started a server that had drifted badly out of
-sync with the real one: no \code{Origin} block, no auth token, and no support
+It was never wired to the RStudio Addins menu (`inst/rstudio/addins.dcf`
+binds `claudeAddin`) and the README never referenced it, but it remained
+exported — so calling it started a server that had drifted badly out of
+sync with the real one: no `Origin` block, no auth token, and no support
 for async jobs, job cancellation, or viewer capture. Tools would silently
 fail against it.
 
-It is now a thin shim that forwards to \code{\link[=claudeAddin]{claudeAddin()}}, so existing calls
+It is now a thin shim that forwards to [claudeAddin()], so existing calls
 keep working and route through the maintained, authenticated server.
 }
 \seealso{
-\code{\link[=claudeAddin]{claudeAddin()}}
+[claudeAddin()]
 }

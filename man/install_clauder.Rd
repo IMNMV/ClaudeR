@@ -4,14 +4,17 @@
 \alias{install_clauder}
 \title{Install and Set Up ClaudeR}
 \usage{
-install_clauder(for_cursor = FALSE, python_path = NULL, ...)
+install_clauder(for_cursor = FALSE, use_uvx = TRUE, python_path = NULL, ...)
 }
 \arguments{
 \item{for_cursor}{Logical. If TRUE, configures for Cursor. Defaults to FALSE.}
 
-\item{python_path}{Optional. A character string specifying the absolute path
-to the Python executable to use. If NULL (the default), the script will
-attempt to find a system Python.}
+\item{use_uvx}{Logical. If TRUE (the default), configures using `uvx clauder-mcp`
+which handles Python dependencies automatically. If FALSE, falls back to
+finding a Python executable and installing dependencies via pip.}
+
+\item{python_path}{Optional. Only used when `use_uvx = FALSE`. A character
+string specifying the absolute path to the Python executable.}
 
 \item{...}{Additional arguments passed to `install.packages`.}
 }
@@ -22,7 +25,6 @@ A helper function that installs all necessary R and Python
 \details{
 This function will:
   1. Check for and install required R packages.
-  2. Attempt to install required Python packages (`mcp`, `httpx`) using the
-     specified or found Python.
+  2. If `use_uvx = FALSE`, attempt to install required Python packages.
   3. Call `configure()` to set up the MCP connection automatically.
 }
