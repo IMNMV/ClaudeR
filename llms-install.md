@@ -53,7 +53,7 @@ Each function prints the exact command or config you need to apply. For CLI tool
 
 ### Step 3: Start the Server in RStudio (Manual Step)
 
-The user must run this in RStudio — it cannot be done from a terminal:
+The user must run this in RStudio; it cannot be done from a terminal:
 
 ```R
 library(ClaudeR)

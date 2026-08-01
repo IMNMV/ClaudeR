@@ -87,6 +87,7 @@ claudeAddin()
 - [Reviewer Zero](#reviewer-zero-automated-academic-audits)
 - [R Best Practices Protocol](#r-best-practices-protocol)
 - [Multi-Agent Coordination Protocol](#multi-agent-coordination-protocol)
+- [AI-Driven Data Annotation](#ai-driven-data-annotation)
 - [CLI Integration](#cli-integration)
 - [Security Model](#security-model)
 - [Installation](#installation)
@@ -180,7 +181,7 @@ You can also just tell the agents to run `ClaudeR::multi_agent_prompt()` and the
 
 ## AI-Driven Data Annotation
 
-ClaudeR includes a purpose-built annotation workflow for labelling CSV datasets with an AI agent. The agent works through the dataset row by row using two dedicated MCP tools — no code required on the agent's end.
+ClaudeR includes a purpose-built annotation workflow for labelling CSV datasets with an AI agent. The agent works through the dataset row by row using two dedicated MCP tools, with no code required on the agent's end.
 
 **CSV format:** add a `_schema` column to your file and define the annotation fields in the first row using a simple type syntax:
 
@@ -199,7 +200,7 @@ Supported types: `choice[a,b,c]`, `float[min,max]`, `int[min,max]`, `bool`, `tex
 data_annotation_prompt()
 ```
 
-Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row — the original file is never modified and sessions are automatically resumable if interrupted.
+Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row. The original file is never modified, and sessions are automatically resumable if interrupted.
 
 ## How It Works
 
@@ -223,10 +224,10 @@ ClaudeR is a **supervised power tool**. The agent executes R code in your live R
 
 ### Server authentication
 
-Binding to `127.0.0.1` is **not** a security boundary. Any other process on your machine can post code to the port — and so can any webpage you visit, via a cross-origin POST that browsers send without a CORS preflight. Either one is arbitrary code execution in your R session. ClaudeR has two defences:
+Binding to `127.0.0.1` is **not** a security boundary. Any other process on your machine can post code to the port, and so can any webpage you visit, via a cross-origin POST that browsers send without a CORS preflight. Either one is arbitrary code execution in your R session. ClaudeR has two defences:
 
 - **Origin block (always on).** Any request carrying an `Origin` header is rejected with a 403. Only browsers set `Origin`, and the MCP bridge never does, so this closes the drive-by-webpage vector with no configuration and no compatibility cost.
-- **Session token (opt-in).** On **Start Server**, ClaudeR mints a random token and writes it to the discovery file (mode `0600`, readable only by you). The bridge reads it and echoes it back as `X-Clauder-Token`. Tick **Require auth token** under *Advanced* to reject every request that lacks it — this closes the local-process vector too.
+- **Session token (opt-in).** On **Start Server**, ClaudeR mints a random token and writes it to the discovery file (mode `0600`, readable only by you). The bridge reads it and echoes it back as `X-Clauder-Token`. Tick **Require auth token** under *Advanced* to reject every request that lacks it. This closes the local-process vector too.
 
 The token is **off by default** because enforcing it rejects any bridge older than `clauder-mcp` 0.6.0, which would break existing installs on upgrade. To turn it on:
 
@@ -238,7 +239,7 @@ Then tick **Require auth token** in the addin's Advanced panel and restart the s
 
 ### Guardrails (not a sandbox)
 
-`validate_code_security()` rejects the obvious footguns — `system()`, `system2()`, `shell()`, `rstudioapi::terminal`, and recursive/wildcard deletes. Treat this as a **seatbelt, not a sandbox**. It is a regex blocklist and it is trivially bypassable by design (`get("system")(...)`, `do.call`, `eval(parse(...))`, and so on). It is there to catch careless generation, not a determined agent. The agent's job is to run arbitrary R, so there is no version of this that is airtight.
+`validate_code_security()` rejects the obvious footguns: `system()`, `system2()`, `shell()`, `rstudioapi::terminal`, and recursive/wildcard deletes. Treat this as a **seatbelt, not a sandbox**. It is a regex blocklist and it is trivially bypassable by design (`get("system")(...)`, `do.call`, `eval(parse(...))`, and so on). It is there to catch careless generation, not a determined agent. The agent's job is to run arbitrary R, so there is no version of this that is airtight.
 
 ### What ClaudeR does NOT restrict
 
@@ -252,7 +253,7 @@ The agent can read any file you can read, install packages, overwrite objects in
 
 ClaudeR deliberately combines three things: an agent that can **execute arbitrary R**, tools that pull in **untrusted third-party content** (`read_file`, `get_viewer_content`, `verify_references`, `load_annotation_data`), and an R session that can **write files and reach the network**.
 
-That combination means a manuscript, CSV, or HTML widget authored by someone else is untrusted input on a path to code execution. Reviewer Zero's whole premise — point the agent at a paper you did not write — is exactly the risky shape. A document containing text aimed at the *model* rather than the reader can redirect what the agent does.
+That combination means a manuscript, CSV, or HTML widget authored by someone else is untrusted input on a path to code execution. Reviewer Zero's whole premise (point the agent at a paper you did not write) is exactly the risky shape. A document containing text aimed at the *model* rather than the reader can redirect what the agent does.
 
 No filter fixes this, because running code is the feature. Mitigate by treating agent sessions over third-party documents as you would running a stranger's script: do it in a project directory, keep logging on, read the log, and don't leave credentials lying around in the working directory or environment.
 
@@ -373,7 +374,7 @@ If you can do it with R, your AI assistant can too.
 
 - **Session Persistence**: Variables, data, and functions created by the AI remain in your R session.
 - **Code Visibility**: By default, the AI's code is printed to your console.
-- **Port Configuration**: The default port is `8787`, but you can change it if needed. On **RStudio Server**, 8787 is the IDE's own port — pick a different one (e.g. 8788).
+- **Port Configuration**: The default port is `8787`, but you can change it if needed. On **RStudio Server**, 8787 is the IDE's own port, so pick a different one (e.g. 8788).
 - **Package Installation**: The AI can install packages. Use clear prompts to guide its behavior.
 
 ## Troubleshooting
@@ -404,7 +405,7 @@ If you can do it with R, your AI assistant can too.
 ## Limitations
 
 - Each R session can connect to one Claude Desktop/Cursor app at a time. However, multiple CLI agents (Claude Code, Gemini CLI) can share the same session alongside a Desktop app. To isolate agents, run separate RStudio windows with different session names and ports.
-- You can stop the connection to the Shiny UI by clicking the Stop button in the console to make changes alongside the AI, but to stop the connection you will need to restart the RSession.
+- You can close the Shiny UI (Stop button in the console) to work alongside the AI. The server keeps running in the background and agents stay connected; re-run `claudeAddin()` to bring the UI back, or click **Stop Server** in the UI to fully stop it.
 - R is single-threaded, but async jobs run in a separate process via `callr` so the main session stays responsive. The background process does not share the main session's environment, so async code must be self-contained.
 
 ## License
