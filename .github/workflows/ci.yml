@@ -57,21 +57,4 @@ jobs:
       - name: Unit tests
         run: smoke/bin/python -m pytest clauder-mcp/tests -q
       - name: stdio initialize + tools/list handshake
-        run: |
-          printf '%s\n%s\n%s\n' \
-            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
-            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-          | timeout 30 smoke/bin/clauder-mcp 2>/dev/null \
-          | python3 -c '
-          import json, sys
-          seen = {}
-          for line in sys.stdin:
-              m = json.loads(line)
-              if m.get("id") in (1, 2):
-                  seen[m["id"]] = m
-          assert seen[1]["result"]["serverInfo"]["name"] == "r-studio", seen.get(1)
-          tools = seen[2]["result"]["tools"]
-          assert len(tools) >= 25, f"expected >= 25 tools, got {len(tools)}"
-          print(f"handshake OK, {len(tools)} tools")
-          '
+        run: timeout 60 python3 .github/scripts/handshake.py smoke/bin/clauder-mcp
