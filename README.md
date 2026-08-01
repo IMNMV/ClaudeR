@@ -216,7 +216,7 @@ This architecture ensures that the AI can only perform approved operations throu
 
 ## CLI Integration
 
-ClaudeR now supports command-line interface (CLI) tools like the **Claude Code CLI**, the **OpenAI Codex CLI**, and the **Google Gemini CLI**. This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
+ClaudeR supports command-line interface (CLI) agents: the **Claude Code CLI**, the **OpenAI Codex CLI**, the **Qwen Code CLI**, the **Google Antigravity CLI** (`agy`), and the legacy **Google Gemini CLI** (which shuts down June 18, 2026; `agy` is its replacement). This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
 
 ## Security Model
 
@@ -309,7 +309,13 @@ install_cli(tools = "claude")
 # For OpenAI Codex CLI
 install_cli(tools = "codex")
 
-# For Google Gemini CLI
+# For Qwen Code CLI
+install_cli(tools = "qwen")
+
+# For Google Antigravity CLI (agy, Gemini CLI's replacement)
+install_cli(tools = "agy")
+
+# For Google Gemini CLI (legacy; shuts down June 18, 2026)
 install_cli(tools = "gemini")
 ```
 
@@ -320,8 +326,9 @@ install_cli(tools = "claude", use_uvx = FALSE, python_path = "/path/to/my/python
 ```
 
 After running the function, you must **manually apply the configuration**:
-- **For Claude / Codex**: Copy the command printed in the R console and run it in your terminal.
-- **For Gemini**: Copy the generated JSON and manually add it to your `gemini.json` settings file.
+- **For Claude / Codex / Qwen**: Copy the command printed in the R console and run it in your terminal.
+- **For Antigravity (agy)**: Copy the generated JSON into `~/.gemini/config/mcp_config.json` (global) or `.agents/mcp_config.json` (per-workspace).
+- **For Gemini (legacy)**: Copy the generated JSON and manually add it to your `~/.gemini/settings.json` file.
 
 After setup, **quit and restart** any active Desktop Apps or terminal sessions for the new settings to load.
 
@@ -404,7 +411,7 @@ If you can do it with R, your AI assistant can too.
 
 ## Limitations
 
-- Each R session can connect to one Claude Desktop/Cursor app at a time. However, multiple CLI agents (Claude Code, Gemini CLI) can share the same session alongside a Desktop app. To isolate agents, run separate RStudio windows with different session names and ports.
+- Each R session can connect to one Claude Desktop/Cursor app at a time. However, multiple CLI agents (Claude Code, Codex, Qwen, agy) can share the same session alongside a Desktop app. To isolate agents, run separate RStudio windows with different session names and ports.
 - You can close the Shiny UI (Stop button in the console) to work alongside the AI. The server keeps running in the background and agents stay connected; re-run `claudeAddin()` to bring the UI back, or click **Stop Server** in the UI to fully stop it.
 - R is single-threaded, but async jobs run in a separate process via `callr` so the main session stays responsive. The background process does not share the main session's environment, so async code must be self-contained.
 

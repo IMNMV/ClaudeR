@@ -36,7 +36,19 @@ library(ClaudeR)
 install_cli(tools = "codex")
 ```
 
-**For Google Gemini CLI:**
+**For Qwen Code CLI:**
+
+```r
+install_cli(tools = "qwen")
+```
+
+**For Google Antigravity CLI (agy, Gemini CLI's replacement):**
+
+```r
+install_cli(tools = "agy")
+```
+
+**For Google Gemini CLI (legacy; shuts down June 18, 2026):**
 ```R
 library(ClaudeR)
 install_cli(tools = "gemini")
