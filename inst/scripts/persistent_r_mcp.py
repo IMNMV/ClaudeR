@@ -296,6 +296,9 @@ async def get_agent_introduction() -> str:
     lines.append("  ClaudeR::r_best_practices_prompt()   - Statistical analysis protocol")
     lines.append("  ClaudeR::multi_agent_prompt()        - Multi-agent coordination protocol")
     lines.append("")
+    lines.append("Safety: call checkpoint_session before risky changes (overwrites, removals,")
+    lines.append("destructive transformations); restore_session rolls the environment back.")
+    lines.append("")
     lines.append("Context-saving rules:")
     lines.append("  - Do NOT use installed.packages(). Use requireNamespace('pkg') to check for a specific package.")
     lines.append("  - Do NOT use bare ls(). Use head(ls(), 20) or search for specific objects with exists('name').")
@@ -1254,6 +1257,68 @@ async def list_tools() -> List[types.Tool]:
                 "readOnlyHint": False,
                 "destructiveHint": False,
                 "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="checkpoint_session",
+            description=(
+                "Save a snapshot of the R global environment to disk so it can be rolled back "
+                "later with restore_session. Use this BEFORE risky operations: overwriting or "
+                "removing objects, destructive data transformations, or loading files into "
+                "existing names. Checkpoints survive R restarts; only the 10 most recent are kept."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "label": {
+                        "type": "string",
+                        "description": "Optional short label recorded in the checkpoint filename (e.g. 'before_refit')."
+                    }
+                }
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="restore_session",
+            description=(
+                "Roll the R global environment back to a checkpoint created with "
+                "checkpoint_session. Restores the most recent checkpoint unless one is named. "
+                "The current state is saved as a 'pre_restore' checkpoint first, so the restore "
+                "itself is undoable. Objects created after the checkpoint are removed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "checkpoint": {
+                        "type": "string",
+                        "description": "Optional checkpoint filename from list_checkpoints. Omit to restore the most recent."
+                    }
+                }
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": True,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="list_checkpoints",
+            description="List saved R session checkpoints (file, time, size MB) for the current session, newest last.",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
                 "openWorldHint": False,
             }
         ),
@@ -2351,6 +2416,52 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             f"Call `annotate` with: {annot_fields}"
         )
         return [types.TextContent(type="text", text=msg)]
+
+    elif name == "checkpoint_session":
+        label = arguments.get("label")
+        code = (
+            f'ClaudeR::checkpoint_session(label = "{escape_r_string(label)}")'
+            if label else "ClaudeR::checkpoint_session()"
+        )
+        result = await execute_r_code_via_addin(code)
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error creating checkpoint: {result.get('error', 'Unknown error')}"
+            )]
+        result_contents.append(types.TextContent(
+            type="text", text=result.get("output", "Checkpoint saved.")
+        ))
+        return result_contents
+
+    elif name == "restore_session":
+        chk = arguments.get("checkpoint")
+        code = (
+            f'ClaudeR::restore_session(checkpoint = "{escape_r_string(chk)}")'
+            if chk else "ClaudeR::restore_session()"
+        )
+        result = await execute_r_code_via_addin(code)
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error restoring checkpoint: {result.get('error', 'Unknown error')}"
+            )]
+        result_contents.append(types.TextContent(
+            type="text", text=result.get("output", "Session restored.")
+        ))
+        return result_contents
+
+    elif name == "list_checkpoints":
+        result = await execute_r_code_via_addin("print(ClaudeR::list_session_checkpoints())")
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error listing checkpoints: {result.get('error', 'Unknown error')}"
+            )]
+        result_contents.append(types.TextContent(
+            type="text", text=result.get("output", "No checkpoints.")
+        ))
+        return result_contents
 
     return [types.TextContent(
         type="text",

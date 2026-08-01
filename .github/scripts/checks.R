@@ -15,6 +15,7 @@ for (f in list.files("R", full.names = TRUE, pattern = "[.][rR]$")) {
 
 env <- new.env()
 sys.source("R/ui.R", envir = env)
+sys.source("R/checkpoints.R", envir = env)
 
 # --- 2. Lab-mode assembly gates ---
 lab <- tempfile("labtest"); dir.create(lab)
@@ -75,6 +76,35 @@ r <- tryCatch({
   grepl("analysis.R:1", out, fixed = TRUE)
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("search handles regex-metachar paths") else fail("search metachar path:", r)
+
+# --- 5. checkpoint / restore round-trip ---
+cdir <- tempfile("chk")
+env2 <- new.env()
+env2$x <- 42L
+env2$df <- data.frame(a = 1:3)
+r <- tryCatch({
+  suppressMessages(env$checkpoint_session(label = "t1", envir = env2, dir = cdir))
+  env2$x <- 99L
+  rm("df", envir = env2)
+  suppressMessages(env$restore_session(envir = env2, dir = cdir, backup = FALSE))
+  identical(env2$x, 42L) && exists("df", envir = env2) && nrow(env2$df) == 3
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("checkpoint/restore round-trip") else fail("checkpoint round-trip:", r)
+
+r <- tryCatch({
+  lst <- suppressMessages(env$list_session_checkpoints(dir = cdir))
+  nrow(lst) >= 1 && grepl("t1", lst$file[1])
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("list_session_checkpoints") else fail("list checkpoints:", r)
+
+# restore with backup=TRUE must save current state first and not restore it
+r <- tryCatch({
+  env2$y <- "new object"
+  suppressMessages(env$restore_session(envir = env2, dir = cdir, backup = TRUE))
+  lst <- suppressMessages(env$list_session_checkpoints(dir = cdir))
+  !exists("y", envir = env2) && any(grepl("pre_restore", lst$file))
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("restore backs up current state first") else fail("pre_restore backup:", r)
 
 if (!ok) quit(status = 1)
 cat("\nAll checks passed.\n")

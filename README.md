@@ -44,6 +44,8 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
+- **Session checkpoints (R 0.4.0 / clauder-mcp 0.7.0).** Three new MCP tools: `checkpoint_session` snapshots the R global environment to disk, `restore_session` rolls it back (saving the current state first, so restores are undoable), and `list_checkpoints` shows what's available. Agents are briefed to checkpoint before risky operations; users can always recover from the console with `ClaudeR::restore_session()`.
+- **Reviewer Zero: preregistration audits and robustness checks.** `reviewer_zero_prompt(prereg_path = ...)` appends a Pass 5 that audits the executed analysis against the preregistered plan and produces a complete deviation report. `reviewer_zero_prompt(robustness = TRUE)` appends a Pass 6 that runs a specification-curve analysis on the primary claims: defensible alternative specs fan out through background jobs and come back as a sensitivity table plus a specification curve.
 - **Deep-dive audit release (R 0.3.1 / clauder-mcp 0.6.2).** 20+ bug fixes across the addin, bridge, and Lab Mode: reopened addin UIs now share live state with the running server (settings toggles work again after closing/reopening the UI), plot capture is device-aware (`png(); plot(); dev.off()` can no longer resend a stale on-screen figure), `modify_code_section` no longer corrupts replacements containing backslashes, async job results are idempotent and survive bridge timeouts, error responses include everything printed before the error, one agent's long computation no longer tells other agents the addin is down, and Lab Mode's Round-2+ re-verification gate actually fires. Session tokens now come from OS entropy. Logging is on by default. CI (GitHub Actions) now guards every push: R functional checks plus a real MCP stdio handshake against the built bridge.
 - **mcp SDK pinned to 1.x.** The MCP 2026-07-28 spec release shipped `mcp` 2.0.0 to PyPI, which removes the server API the bridge is built on. `clauder-mcp` >= 0.6.1 pins `mcp<2`; if your bridge broke, run `uvx --refresh clauder-mcp`. SDK 2.0 migration (and the new Tasks extension for async tools) is planned.
 - **AI-Driven Data Annotation.** Two new MCP tools (`load_annotation_data`, `annotate`) let an agent label a CSV dataset row by row without writing any code. Define annotation fields in a `_schema` column, call `data_annotation_prompt()` to get the protocol, and the agent handles the rest. The original file is never modified and sessions resume automatically if interrupted.
@@ -121,6 +123,9 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`search_project_code`**: Search for a regex pattern across project source files (.R, .Rmd, .qmd). Returns file, line number, and snippet.
 - **`probe_scripts`**: Source R scripts in a clean background session and report what objects are created (names, classes, dimensions) without affecting your main session.
 - **`verify_references`**: Verify academic references by extracting DOIs and checking them against the CrossRef API. Returns metadata (title, authors, year, journal) for comparison. References without DOIs are flagged for manual web search.
+- **`checkpoint_session`**: Snapshot the R global environment to disk before risky operations. Checkpoints survive R restarts.
+- **`restore_session`**: Roll the environment back to a checkpoint. The current state is saved first, so a restore is itself undoable. Also callable from the console (`ClaudeR::restore_session()`) when you need to recover from an agent mistake yourself.
+- **`list_checkpoints`**: List saved checkpoints for the current session.
 - **`create_task_list`**: Generate a task list based on your prompt to prevent omissions in long-context tasks.
 - **`update_task_status`**: Track progress for each task in the generated list.
 
@@ -153,6 +158,21 @@ ClaudeR includes a built-in protocol for AI-driven technical review of academic 
 ```r
 # Print the full protocol prompt to give to your AI agent
 reviewer_zero_prompt()
+
+# Optional Pass 5: audit the analysis against your preregistration.
+# Produces a deviation report (followed / disclosed deviation /
+# undisclosed deviation / not executed) plus a list of exploratory
+# analyses that are not labelled as such.
+reviewer_zero_prompt(prereg_path = "prereg.docx")
+
+# Optional Pass 6: specification-curve robustness check. The agent
+# enumerates defensible alternative analysis choices for the primary
+# claims, runs the grid in background jobs, and reports a sensitivity
+# table plus a specification curve.
+reviewer_zero_prompt(robustness = TRUE)
+
+# Both extensions together
+reviewer_zero_prompt(prereg_path = "prereg.docx", robustness = TRUE)
 ```
 
 The protocol works with `.docx`, `.pdf`, `.qmd`, `.Rmd`, `.tex`, or plain text manuscripts and supports multi-script R projects.

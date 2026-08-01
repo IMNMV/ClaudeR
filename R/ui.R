@@ -2238,16 +2238,46 @@ data_annotation_prompt <- function() {
 #'
 #' Displays the built-in Reviewer Zero academic auditing protocol.
 #' This prompt guides an AI assistant through a 4-pass verification of
-#' quantitative claims in a manuscript against source code.
+#' quantitative claims in a manuscript against source code, with two
+#' optional extension passes.
 #'
+#' @param prereg_path Optional path to a preregistration file (.docx, .pdf,
+#'   .qmd, .md, or plain text). When supplied, a Pass 5 is appended that
+#'   audits the executed analysis against the preregistered plan and
+#'   produces a deviation report (followed / disclosed deviation /
+#'   undisclosed deviation / not executed), plus a list of unlabelled
+#'   exploratory additions.
+#' @param robustness Logical. When TRUE, a Pass 6 is appended that runs a
+#'   specification-curve robustness check on the manuscript's primary
+#'   claims: the agent enumerates defensible alternative analysis choices,
+#'   fans the grid out through background jobs, and reports a sensitivity
+#'   table and specification curve.
 #' @return The prompt text (invisibly), printed to the console.
 #' @export
-reviewer_zero_prompt <- function() {
+reviewer_zero_prompt <- function(prereg_path = NULL, robustness = FALSE) {
   prompt_path <- system.file("prompts", "reviewer_zero.md", package = "ClaudeR")
   if (!nzchar(prompt_path) || !file.exists(prompt_path)) {
     stop("Reviewer Zero prompt template not found. Is ClaudeR installed correctly?")
   }
   txt <- paste(readLines(prompt_path, warn = FALSE), collapse = "\n")
+
+  if (!is.null(prereg_path)) {
+    prereg_path <- path.expand(prereg_path)
+    if (!file.exists(prereg_path)) {
+      stop("Preregistration file not found: ", prereg_path, call. = FALSE)
+    }
+    ext_path <- system.file("prompts", "reviewer_zero_prereg.md", package = "ClaudeR")
+    ext <- paste(readLines(ext_path, warn = FALSE), collapse = "\n")
+    ext <- gsub("{{PREREG_PATH}}", prereg_path, ext, fixed = TRUE)
+    txt <- paste0(txt, "\n", ext)
+  }
+
+  if (isTRUE(robustness)) {
+    ext_path <- system.file("prompts", "reviewer_zero_robustness.md", package = "ClaudeR")
+    ext <- paste(readLines(ext_path, warn = FALSE), collapse = "\n")
+    txt <- paste0(txt, "\n", ext)
+  }
+
   cat(txt, "\n")
   invisible(txt)
 }

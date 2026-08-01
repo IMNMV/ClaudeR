@@ -4,7 +4,21 @@
 \alias{reviewer_zero_prompt}
 \title{Print the Reviewer Zero prompt template}
 \usage{
-reviewer_zero_prompt()
+reviewer_zero_prompt(prereg_path = NULL, robustness = FALSE)
+}
+\arguments{
+\item{prereg_path}{Optional path to a preregistration file (.docx, .pdf,
+.qmd, .md, or plain text). When supplied, a Pass 5 is appended that
+audits the executed analysis against the preregistered plan and
+produces a deviation report (followed / disclosed deviation /
+undisclosed deviation / not executed), plus a list of unlabelled
+exploratory additions.}
+
+\item{robustness}{Logical. When TRUE, a Pass 6 is appended that runs a
+specification-curve robustness check on the manuscript's primary
+claims: the agent enumerates defensible alternative analysis choices,
+fans the grid out through background jobs, and reports a sensitivity
+table and specification curve.}
 }
 \value{
 The prompt text (invisibly), printed to the console.
@@ -12,5 +26,6 @@ The prompt text (invisibly), printed to the console.
 \description{
 Displays the built-in Reviewer Zero academic auditing protocol.
 This prompt guides an AI assistant through a 4-pass verification of
-quantitative claims in a manuscript against source code.
+quantitative claims in a manuscript against source code, with two
+optional extension passes.
 }
