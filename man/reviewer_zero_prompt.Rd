@@ -4,7 +4,7 @@
 \alias{reviewer_zero_prompt}
 \title{Print the Reviewer Zero prompt template}
 \usage{
-reviewer_zero_prompt(prereg_path = NULL, robustness = FALSE)
+reviewer_zero_prompt(prereg_path = NULL, robustness = FALSE, writeback = FALSE)
 }
 \arguments{
 \item{prereg_path}{Optional path to a preregistration file (.docx, .pdf,
@@ -19,6 +19,12 @@ specification-curve robustness check on the manuscript's primary
 claims: the agent enumerates defensible alternative analysis choices,
 fans the grid out through background jobs, and reports a sensitivity
 table and specification curve.}
+
+\item{writeback}{Logical. When TRUE (and the manuscript is a .docx), a
+final step is appended: every flagged claim is written back into the
+manuscript as a native Word comment via [annotate_manuscript()], so
+findings can be accepted or dismissed in Word. The annotated copy is
+written alongside the original, which is never modified.}
 }
 \value{
 The prompt text (invisibly), printed to the console.

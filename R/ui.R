@@ -2104,11 +2104,28 @@ verify_references_impl <- function(file_path = NULL, text = NULL,
   old_timeout <- options(timeout = 10)
   on.exit(options(old_timeout), add = TRUE)
 
-  if (length(dois) == 0) {
+  # arXiv IDs (new-style NNNN.NNNNN). Checked against the arXiv API, with a
+  # published-version lookup so preprint citations of published work surface.
+  arxiv_pattern <- "arXiv[:. ]\\s*(\\d{4}\\.\\d{4,5})"
+  arxiv_ids <- unique(unlist(lapply(
+    regmatches(text, gregexpr(arxiv_pattern, text, perl = TRUE, ignore.case = TRUE)),
+    function(m) sub(arxiv_pattern, "\\1", m, perl = TRUE, ignore.case = TRUE)
+  )))
+  arxiv_ids <- utils::head(arxiv_ids[nzchar(arxiv_ids)], 10L)
+
+  # Reference entries with neither a DOI nor an arXiv ID: try bibliographic
+  # matching. Blocks are blank-line-separated chunks of plausible entry size.
+  blocks <- strsplit(text, "\n\\s*\n")[[1]]
+  nodoi_refs <- utils::head(Filter(function(b) {
+    flat <- trimws(gsub("\\s+", " ", b))
+    nchar(flat) >= 50 && nchar(flat) <= 600 &&
+      !grepl(doi_pattern, b, perl = TRUE) &&
+      !grepl(arxiv_pattern, b, perl = TRUE, ignore.case = TRUE)
+  }, blocks), 15L)
+
+  if (length(dois) == 0 && length(arxiv_ids) == 0 && length(nodoi_refs) == 0) {
     return(paste0(
-      "No DOIs found in the specified text.\n",
-      "The references in this section do not contain DOIs, or DOIs are not ",
-      "in standard format (10.XXXX/...).\n",
+      "No DOIs, arXiv IDs, or matchable reference entries found in the specified text.\n",
       "To verify these references, use web search to check each one manually."
     ))
   }
@@ -2148,6 +2165,8 @@ verify_references_impl <- function(file_path = NULL, text = NULL,
 
       doi_url <- if (!is.null(msg$URL)) msg$URL else paste0("https://doi.org/", doi)
 
+      retraction_flag <- check_retraction_impl(doi)
+
       paste0(
         "DOI: ", doi, "\n",
         "Status: FOUND\n",
@@ -2155,7 +2174,8 @@ verify_references_impl <- function(file_path = NULL, text = NULL,
         "CrossRef Authors: ", authors, "\n",
         "CrossRef Year: ", year, "\n",
         "CrossRef Journal: ", journal, "\n",
-        "CrossRef URL: ", doi_url
+        "CrossRef URL: ", doi_url,
+        if (!is.null(retraction_flag)) paste0("\n", retraction_flag) else ""
       )
     }, error = function(e) {
       if (grepl("404", e$message)) {
@@ -2170,15 +2190,55 @@ verify_references_impl <- function(file_path = NULL, text = NULL,
     if (i < length(dois)) Sys.sleep(0.1)
   }
 
+  # arXiv lookups (with published-version check)
+  arxiv_section <- ""
+  if (length(arxiv_ids) > 0) {
+    arxiv_results <- character(0)
+    for (aid in arxiv_ids) {
+      r <- check_arxiv_impl(aid)
+      if (!is.null(r)) arxiv_results <- c(arxiv_results, r)
+      Sys.sleep(0.1)
+    }
+    if (length(arxiv_results) > 0) {
+      arxiv_section <- paste0(
+        "\n\n=== ARXIV PREPRINTS (", length(arxiv_ids), ") ===\n\n",
+        paste(arxiv_results, collapse = "\n\n")
+      )
+    }
+  }
+
+  # Bibliographic matching for DOI-less entries
+  nodoi_section <- ""
+  if (length(nodoi_refs) > 0) {
+    nodoi_results <- character(0)
+    for (ref in nodoi_refs) {
+      flat <- trimws(gsub("\\s+", " ", ref))
+      m <- match_reference_impl(flat)
+      nodoi_results <- c(nodoi_results, paste0(
+        "Reference: ", substr(flat, 1, 140), if (nchar(flat) > 140) "..." else "", "\n",
+        if (!is.null(m)) m else "No plausible Crossref match; verify manually via web search."
+      ))
+      Sys.sleep(0.1)
+    }
+    nodoi_section <- paste0(
+      "\n\n=== ENTRIES WITHOUT DOIs (", length(nodoi_refs), ", bibliographic matching) ===\n\n",
+      paste(nodoi_results, collapse = "\n\n")
+    )
+  }
+
   paste0(
     "=== REFERENCE VERIFICATION REPORT ===\n",
     cap_note,
     "DOIs found: ", n_found, "\n",
     "---\n\n",
     paste(results, collapse = "\n\n---\n\n"),
+    arxiv_section,
+    nodoi_section,
     "\n\n---\n",
     "Compare CrossRef metadata against manuscript claims.\n",
-    "References without DOIs require verification via web search."
+    "Retraction/correction flags come from Crossref update notices.\n",
+    "Bibliographic matches are candidates, not confirmations: verify title and authors before accepting.\n",
+    "Anything still unmatched requires manual web search."
   )
 }
 
@@ -2252,9 +2312,15 @@ data_annotation_prompt <- function() {
 #'   claims: the agent enumerates defensible alternative analysis choices,
 #'   fans the grid out through background jobs, and reports a sensitivity
 #'   table and specification curve.
+#' @param writeback Logical. When TRUE (and the manuscript is a .docx), a
+#'   final step is appended: every flagged claim is written back into the
+#'   manuscript as a native Word comment via [annotate_manuscript()], so
+#'   findings can be accepted or dismissed in Word. The annotated copy is
+#'   written alongside the original, which is never modified.
 #' @return The prompt text (invisibly), printed to the console.
 #' @export
-reviewer_zero_prompt <- function(prereg_path = NULL, robustness = FALSE) {
+reviewer_zero_prompt <- function(prereg_path = NULL, robustness = FALSE,
+                                 writeback = FALSE) {
   prompt_path <- system.file("prompts", "reviewer_zero.md", package = "ClaudeR")
   if (!nzchar(prompt_path) || !file.exists(prompt_path)) {
     stop("Reviewer Zero prompt template not found. Is ClaudeR installed correctly?")
@@ -2274,6 +2340,12 @@ reviewer_zero_prompt <- function(prereg_path = NULL, robustness = FALSE) {
 
   if (isTRUE(robustness)) {
     ext_path <- system.file("prompts", "reviewer_zero_robustness.md", package = "ClaudeR")
+    ext <- paste(readLines(ext_path, warn = FALSE), collapse = "\n")
+    txt <- paste0(txt, "\n", ext)
+  }
+
+  if (isTRUE(writeback)) {
+    ext_path <- system.file("prompts", "reviewer_zero_writeback.md", package = "ClaudeR")
     ext <- paste(readLines(ext_path, warn = FALSE), collapse = "\n")
     txt <- paste0(txt, "\n", ext)
   }

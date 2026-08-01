@@ -1322,6 +1322,131 @@ async def list_tools() -> List[types.Tool]:
                 "openWorldHint": False,
             }
         ),
+        types.Tool(
+            name="generate_codebook",
+            description=(
+                "Generate a codebook / reproducibility README for a project: scans scripts "
+                "for library() calls, data-read sites, and saved outputs; reads each data "
+                "file (.csv/.tsv/.txt/.rds); and writes markdown with a versioned package "
+                "list, script inventory, per-variable codebook (name, class, n, missingness, "
+                "summary), and outputs produced. This is the codebook OSF and many journals "
+                "require alongside shared data."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_dir": {
+                        "type": "string",
+                        "description": "Project root to scan. Default: current working directory."
+                    },
+                    "data_files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional explicit data files to document instead of scanning scripts."
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Output markdown path. Default: <project_dir>/CODEBOOK.md"
+                    }
+                }
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="generate_notebook",
+            description=(
+                "Transform a ClaudeR session log into a Quarto lab notebook (.qmd): each "
+                "executed block becomes a runnable chunk with its timestamp and agent, errored "
+                "blocks are preserved as non-evaluated chunks, and rendering re-runs the code "
+                "so outputs and plots regenerate. The generated file contains "
+                "'<!-- TODO: narration -->' markers: AFTER calling this tool, read the .qmd "
+                "and replace every marker with a short explanation of what was tried and why "
+                "(use read_file + execute_r with writeLines, or your own file tools). Then "
+                "optionally render with quarto to produce the final HTML notebook."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "log_path": {
+                        "type": "string",
+                        "description": "Path to the session log. Omit to use the current session's log."
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Optional output .qmd path. Default: alongside the log with a _notebook.qmd suffix."
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional notebook title."
+                    }
+                }
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="search_citations",
+            description=(
+                "Search the OpenAlex scholarly index for works matching a free-text query "
+                "(title fragments, topic + author, etc.). Returns candidate citations with "
+                "title, authors, year, venue, DOI, and citation count. Use this to find the "
+                "correct reference for a claim instead of writing one from memory, then call "
+                "get_bibtex with the chosen DOI."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Free-text search query (e.g. 'chain of thought prompting Wei 2022')."
+                    },
+                    "max_results": {
+                        "type": "number",
+                        "description": "Maximum candidates to return (default 5)."
+                    }
+                },
+                "required": ["query"]
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            }
+        ),
+        types.Tool(
+            name="get_bibtex",
+            description=(
+                "Fetch the canonical BibTeX entry for a DOI via doi.org content negotiation. "
+                "This returns the registered metadata, not a reconstruction — use it to insert "
+                "citations after finding the right work with search_citations or verify_references."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "doi": {
+                        "type": "string",
+                        "description": "The DOI, with or without the https://doi.org/ prefix."
+                    }
+                },
+                "required": ["doi"]
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            }
+        ),
     ]
 
 @server.call_tool()
@@ -2460,6 +2585,87 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             )]
         result_contents.append(types.TextContent(
             type="text", text=result.get("output", "No checkpoints.")
+        ))
+        return result_contents
+
+    elif name == "generate_codebook":
+        parts = []
+        if arguments.get("project_dir"):
+            parts.append(f'project_dir = "{escape_r_string(arguments["project_dir"])}"')
+        if arguments.get("data_files"):
+            files = ", ".join(f'"{escape_r_string(f)}"' for f in arguments["data_files"])
+            parts.append(f"data_files = c({files})")
+        if arguments.get("output_path"):
+            parts.append(f'output_path = "{escape_r_string(arguments["output_path"])}"')
+        code = f"ClaudeR::generate_codebook({', '.join(parts)})"
+        result = await execute_r_code_via_addin(code)
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error generating codebook: {result.get('error', 'Unknown error')}"
+            )]
+        result_contents.append(types.TextContent(
+            type="text", text=result.get("output", "Codebook generated.")
+        ))
+        return result_contents
+
+    elif name == "generate_notebook":
+        parts = []
+        if arguments.get("log_path"):
+            parts.append(f'log_path = "{escape_r_string(arguments["log_path"])}"')
+        if arguments.get("output_path"):
+            parts.append(f'output_path = "{escape_r_string(arguments["output_path"])}"')
+        if arguments.get("title"):
+            parts.append(f'title = "{escape_r_string(arguments["title"])}"')
+        code = f"ClaudeR::export_log_as_notebook({', '.join(parts)})"
+        result = await execute_r_code_via_addin(code)
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error generating notebook: {result.get('error', 'Unknown error')}"
+            )]
+        result_contents.append(types.TextContent(
+            type="text",
+            text=(result.get("output", "Notebook generated.") +
+                  "\n\nNext: read the .qmd and replace each '<!-- TODO: narration -->' "
+                  "marker with a short explanation of that step, then render with quarto "
+                  "if an HTML notebook is wanted.")
+        ))
+        return result_contents
+
+    elif name == "search_citations":
+        query = arguments.get("query", "").strip()
+        if not query:
+            return [types.TextContent(type="text", text="Error: 'query' parameter is required")]
+        max_results = int(arguments.get("max_results", 5))
+        code = (
+            f'ClaudeR:::search_citations_impl("{escape_r_string(query)}", '
+            f'max_results = {max_results}L)'
+        )
+        result = await execute_r_code_via_addin(code)
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error searching citations: {result.get('error', 'Unknown error')}"
+            )]
+        result_contents.append(types.TextContent(
+            type="text", text=result.get("output", "No results.")
+        ))
+        return result_contents
+
+    elif name == "get_bibtex":
+        doi = arguments.get("doi", "").strip()
+        if not doi:
+            return [types.TextContent(type="text", text="Error: 'doi' parameter is required")]
+        code = f'cat(ClaudeR:::get_bibtex_impl("{escape_r_string(doi)}"))'
+        result = await execute_r_code_via_addin(code)
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error fetching BibTeX: {result.get('error', 'Unknown error')}"
+            )]
+        result_contents.append(types.TextContent(
+            type="text", text=result.get("output", "No BibTeX returned.")
         ))
         return result_contents
 

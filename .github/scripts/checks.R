@@ -16,6 +16,10 @@ for (f in list.files("R", full.names = TRUE, pattern = "[.][rR]$")) {
 env <- new.env()
 sys.source("R/ui.R", envir = env)
 sys.source("R/checkpoints.R", envir = env)
+sys.source("R/notebook.R", envir = env)
+sys.source("R/codebook.R", envir = env)
+sys.source("R/writeback.R", envir = env)
+sys.source("R/citations.R", envir = env)
 
 # --- 2. Lab-mode assembly gates ---
 lab <- tempfile("labtest"); dir.create(lab)
@@ -105,6 +109,86 @@ r <- tryCatch({
   !exists("y", envir = env2) && any(grepl("pre_restore", lst$file))
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("restore backs up current state first") else fail("pre_restore backup:", r)
+
+# --- 6. lab-notebook generator ---
+r <- tryCatch({
+  log <- tempfile(fileext = ".R")
+  writeLines(c(
+    "# --- [2026-08-01 12:01:00] ---", "# Code executed by agent-a:",
+    "x <- 1:10", "mean(x)", "",
+    "# --- [2026-08-01 12:02:00] ---", "# Code executed by agent-a (ERROR):",
+    "stop_here()", "# Error: could not find function", "",
+    "# --- [2026-08-01 12:03:00] ---", "# Code executed by agent-b:",
+    "plot(x)", ""), log)
+  out <- suppressMessages(env$export_log_as_notebook(log, title = "T"))
+  qmd <- readLines(out)
+  sum(grepl("^## Step", qmd)) == 3 &&
+    sum(grepl("```{r}", qmd, fixed = TRUE)) == 3 &&
+    sum(grepl("eval: false", qmd, fixed = TRUE)) == 1 &&
+    sum(grepl("TODO: narration", qmd, fixed = TRUE)) == 5
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("notebook generator") else fail("notebook:", r)
+
+# --- 7. codebook generator ---
+r <- tryCatch({
+  proj <- tempfile("proj"); dir.create(proj)
+  utils::write.csv(data.frame(id = 1:20, v = c(rnorm(18), NA, NA)),
+                   file.path(proj, "d.csv"), row.names = FALSE)
+  writeLines(c("library(jsonlite)",
+               paste0("d <- read.csv(\"", file.path(proj, "d.csv"), "\")"),
+               "saveRDS(d, \"out.rds\")"), file.path(proj, "a.R"))
+  out <- suppressMessages(env$generate_codebook(proj))
+  md <- readLines(out)
+  any(grepl("| v |", md, fixed = TRUE)) &&
+    any(grepl("2 (10.0%)", md, fixed = TRUE)) &&
+    any(grepl("out.rds", md, fixed = TRUE)) &&
+    any(grepl("jsonlite (", md, fixed = TRUE))
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("codebook generator") else fail("codebook:", r)
+
+# --- 8. manuscript write-back (needs xml2 + zip) ---
+if (requireNamespace("xml2", quietly = TRUE) && requireNamespace("zip", quietly = TRUE)) {
+  r <- tryCatch({
+    W <- "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    fx <- tempfile("fixdocx"); dir.create(file.path(fx, "word", "_rels"), recursive = TRUE)
+    dir.create(file.path(fx, "_rels"), recursive = TRUE)
+    writeLines(paste0('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+      '<Default Extension="xml" ContentType="application/xml"/>',
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+      file.path(fx, "[Content_Types].xml"))
+    writeLines(paste0('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+      file.path(fx, "_rels", ".rels"))
+    writeLines(paste0('<?xml version="1.0"?><w:document xmlns:w="', W, '"><w:body>',
+      '<w:p><w:r><w:t>Results: t(38) = 2.12, p = .041, d = 0.34.</w:t></w:r></w:p>',
+      '<w:p><w:r><w:t>We excluded 12 participants.</w:t></w:r></w:p>',
+      '</w:body></w:document>'),
+      file.path(fx, "word", "document.xml"))
+    writeLines(paste0('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>'),
+      file.path(fx, "word", "_rels", "document.xml.rels"))
+    fixture <- tempfile(fileext = ".docx")
+    zip::zip(fixture, files = list.files(fx, recursive = TRUE, all.files = TRUE),
+             root = fx, mode = "mirror")
+
+    res <- suppressMessages(env$annotate_manuscript(
+      fixture,
+      data.frame(anchor = c("t(38) = 2.12", "no such text"),
+                 comment = c("recomputed p = .058", "x"),
+                 stringsAsFactors = FALSE)))
+    td <- tempfile(); dir.create(td); utils::unzip(res$output_path, exdir = td)
+    cm <- xml2::read_xml(file.path(td, "word", "comments.xml"))
+    dx <- xml2::read_xml(file.path(td, "word", "document.xml"))
+    rl <- readLines(file.path(td, "word", "_rels", "document.xml.rels"), warn = FALSE)
+    length(res$matched) == 1 && length(res$unmatched) == 1 &&
+      length(xml2::xml_find_all(cm, "//w:comment", xml2::xml_ns(cm))) == 1 &&
+      length(xml2::xml_find_all(dx, "//w:commentRangeStart", xml2::xml_ns(dx))) == 1 &&
+      any(grepl("relationships/comments", rl))
+  }, error = function(e) conditionMessage(e))
+  if (isTRUE(r)) pass("manuscript write-back") else fail("write-back:", r)
+} else {
+  cat("skip: write-back test (xml2/zip not installed)\n")
+}
 
 if (!ok) quit(status = 1)
 cat("\nAll checks passed.\n")

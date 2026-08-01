@@ -44,6 +44,7 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
+- **Researcher toolkit release (R 0.5.0 / clauder-mcp 0.8.0).** Five additions aimed at getting papers out the door. (1) Reviewer Zero write-back: `reviewer_zero_prompt(writeback = TRUE)` turns every flagged claim into a native Word comment in a copy of the manuscript, via the new `annotate_manuscript()`. (2) Citation upgrades: `verify_references` now flags retracted/corrected papers using Crossref update notices, resolves arXiv IDs (with a cite-the-published-version check), and bibliographically matches DOI-less references; new `search_citations` (OpenAlex) and `get_bibtex` (doi.org) tools mean agents look up citations instead of inventing them. (3) `generate_notebook`: session logs become narrated Quarto lab notebooks that re-run the analysis when rendered. (4) `generate_codebook`: one call produces the variable-level codebook plus package/script/output inventory that OSF and journals require. (5) All wired into CI.
 - **Session checkpoints (R 0.4.0 / clauder-mcp 0.7.0).** Three new MCP tools: `checkpoint_session` snapshots the R global environment to disk, `restore_session` rolls it back (saving the current state first, so restores are undoable), and `list_checkpoints` shows what's available. Agents are briefed to checkpoint before risky operations; users can always recover from the console with `ClaudeR::restore_session()`.
 - **Reviewer Zero: preregistration audits and robustness checks.** `reviewer_zero_prompt(prereg_path = ...)` appends a Pass 5 that audits the executed analysis against the preregistered plan and produces a complete deviation report. `reviewer_zero_prompt(robustness = TRUE)` appends a Pass 6 that runs a specification-curve analysis on the primary claims: defensible alternative specs fan out through background jobs and come back as a sensitivity table plus a specification curve.
 - **Deep-dive audit release (R 0.3.1 / clauder-mcp 0.6.2).** 20+ bug fixes across the addin, bridge, and Lab Mode: reopened addin UIs now share live state with the running server (settings toggles work again after closing/reopening the UI), plot capture is device-aware (`png(); plot(); dev.off()` can no longer resend a stale on-screen figure), `modify_code_section` no longer corrupts replacements containing backslashes, async job results are idempotent and survive bridge timeouts, error responses include everything printed before the error, one agent's long computation no longer tells other agents the addin is down, and Lab Mode's Round-2+ re-verification gate actually fires. Session tokens now come from OS entropy. Logging is on by default. CI (GitHub Actions) now guards every push: R functional checks plus a real MCP stdio handshake against the built bridge.
@@ -122,7 +123,12 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`clean_error_log`**: Clean a session log by removing error blocks and their duplicate predecessors, leaving only working code and the fixes that followed.
 - **`search_project_code`**: Search for a regex pattern across project source files (.R, .Rmd, .qmd). Returns file, line number, and snippet.
 - **`probe_scripts`**: Source R scripts in a clean background session and report what objects are created (names, classes, dimensions) without affecting your main session.
-- **`verify_references`**: Verify academic references by extracting DOIs and checking them against the CrossRef API. Returns metadata (title, authors, year, journal) for comparison. References without DOIs are flagged for manual web search.
+- **`verify_references`**: Verify academic references: DOIs are checked against CrossRef (with retraction/correction flags from Crossref update notices), arXiv IDs are resolved with a published-version check, and DOI-less entries get bibliographic matching with candidate DOIs.
+- **`search_citations`**: Search the OpenAlex scholarly index for the correct reference for a claim (title, authors, year, venue, DOI, citation count) instead of citing from memory.
+- **`get_bibtex`**: Fetch the canonical BibTeX entry for a DOI via doi.org content negotiation.
+- **`generate_notebook`**: Turn a session log into a narrated Quarto lab notebook; rendering re-runs the code so outputs and plots regenerate.
+- **`generate_codebook`**: Scan a project and emit the codebook OSF and journals require: versioned package list, script inventory, per-variable summaries (class, n, missingness), and outputs produced.
+- **`annotate_manuscript()`** (R function, driven by Reviewer Zero's write-back step): inject audit findings into a .docx as native Word comments the author can accept or dismiss.
 - **`checkpoint_session`**: Snapshot the R global environment to disk before risky operations. Checkpoints survive R restarts.
 - **`restore_session`**: Roll the environment back to a checkpoint. The current state is saved first, so a restore is itself undoable. Also callable from the console (`ClaudeR::restore_session()`) when you need to recover from an agent mistake yourself.
 - **`list_checkpoints`**: List saved checkpoints for the current session.
@@ -171,8 +177,12 @@ reviewer_zero_prompt(prereg_path = "prereg.docx")
 # table plus a specification curve.
 reviewer_zero_prompt(robustness = TRUE)
 
-# Both extensions together
-reviewer_zero_prompt(prereg_path = "prereg.docx", robustness = TRUE)
+# Optional write-back: every flagged claim becomes a native Word comment
+# in a copy of the manuscript, so you can accept/dismiss findings in Word.
+reviewer_zero_prompt(writeback = TRUE)
+
+# All extensions together
+reviewer_zero_prompt(prereg_path = "prereg.docx", robustness = TRUE, writeback = TRUE)
 ```
 
 The protocol works with `.docx`, `.pdf`, `.qmd`, `.Rmd`, `.tex`, or plain text manuscripts and supports multi-script R projects.
