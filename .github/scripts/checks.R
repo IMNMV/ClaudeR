@@ -20,6 +20,7 @@ sys.source("R/notebook.R", envir = env)
 sys.source("R/codebook.R", envir = env)
 sys.source("R/writeback.R", envir = env)
 sys.source("R/citations.R", envir = env)
+sys.source("R/reconcile.R", envir = env)
 
 # --- 2. Lab-mode assembly gates ---
 lab <- tempfile("labtest"); dir.create(lab)
@@ -188,6 +189,64 @@ if (requireNamespace("xml2", quietly = TRUE) && requireNamespace("zip", quietly 
   if (isTRUE(r)) pass("manuscript write-back") else fail("write-back:", r)
 } else {
   cat("skip: write-back test (xml2/zip not installed)\n")
+}
+
+# --- 9. value reconciliation: tokenizer, precision matching, end-to-end ---
+tk <- function(line) env$extract_numbers_from_line(line)
+r <- tryCatch({
+  t1 <- tk("N = 1,234.5 and CFI = .967 and p < .001 and 42% and 2.1 × 10^-4")
+  isTRUE(all.equal(sort(t1$value), sort(c(1234.5, 0.967, 0.001, 42, 0.00021)))) &&
+    sum(t1$is_threshold) == 1 && sum(t1$is_percent) == 1
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("number tokenizer: commas, dots, thresholds, %, sci") else fail("tokenizer:", r)
+
+r <- tryCatch({
+  t2 <- tk("[Table 1, row 2] Chi-square | 15169.0 | .967")
+  all(c(15169.0, 0.967) %in% t2$value) && !any(abs(t2$value - 15169.0967) < 1e-4)
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("adjacent table cells never concatenate") else fail("cell concat:", r)
+
+r <- tryCatch({
+  env$value_matches_corpus(5038.5, 0.1, c(5038.46)) &&
+    env$value_matches_corpus(0.967, 0.001, c(0.9668)) &&
+    !env$value_matches_corpus(0.967, 0.001, c(0.9581))
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("displayed-precision matching") else fail("precision match:", r)
+
+r <- tryCatch({
+  doc <- tempfile(fileext = ".txt")
+  writeLines(c("Results (Smith, 2019): chi-square 15,169.0 (p < .001), CFI = .967.",
+               "A planted unmatched value 777.77 appears here."), doc)
+  src <- tempfile(fileext = ".txt")
+  writeLines(c("chisq 15169.03", "cfi 0.96684", "p 0.00021"), src)
+  environment(env$reconcile_values) <- env
+  invisible(capture.output(env$reconcile_values(doc, src)))
+  reg <- get("values_registry", envir = .GlobalEnv)
+  sum(reg$status == "unmatched") == 1 &&
+    reg$raw[reg$status == "unmatched"] == "777.77" &&
+    any(reg$status == "year_skipped") && any(reg$status == "threshold_ok")
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("reconcile_values end-to-end: only planted value unmatched") else fail("reconcile e2e:", r)
+
+# --- 10. docx extractor: tables row-wise, headings marked (needs officer) ---
+if (requireNamespace("officer", quietly = TRUE)) {
+  r <- tryCatch({
+    d <- officer::read_docx()
+    d <- officer::body_add_par(d, "Results", style = "heading 1")
+    d <- officer::body_add_par(d, "Chi-square was 15169.0.")
+    d <- officer::body_add_table(d, data.frame(A = c("15169.0"), B = c(".967")),
+                                 style = "table_template")
+    f <- tempfile(fileext = ".docx")
+    print(d, target = f)
+    lines <- env$extract_manuscript_text(f)
+    any(grepl("^# Results", lines)) &&
+      any(grepl("15169.0 | .967", lines, fixed = TRUE) |
+          grepl("[Table 1, row 2] 15169.0 | .967", lines, fixed = TRUE)) &&
+      !any(grepl("15169.0.967", gsub(" ", "", lines), fixed = TRUE))
+  }, error = function(e) conditionMessage(e))
+  if (isTRUE(r)) pass("docx extractor: headings + cell-separated tables") else fail("extractor:", r)
+} else {
+  cat("skip: docx extractor test (officer not installed)\n")
 }
 
 if (!ok) quit(status = 1)

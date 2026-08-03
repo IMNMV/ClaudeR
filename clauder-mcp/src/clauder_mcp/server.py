@@ -958,7 +958,7 @@ async def list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="read_file",
-            description="Read the contents of a file from disk. Use this to read R scripts, log files, data files (.csv, .txt), or any text file. The file does not need to be open in RStudio. Returns the file contents with line numbers. Supports pagination via start_line/end_line for large files. To modify and save changes back, use execute_r with writeLines().",
+            description="Read the contents of a file from disk. Handles plain text (R scripts, logs, CSVs) and manuscripts: .docx and .pdf are transparently extracted as structured text with headings prefixed by #s and table cells emitted row-wise as '[Table k, row j] cell | cell | cell', so table content is never lost or concatenated. Returns numbered lines; supports pagination via start_line/end_line for large files. To modify and save changes back, use execute_r with writeLines().",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1022,7 +1022,7 @@ async def list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="probe_scripts",
-            description="Source one or more R scripts in a clean background session and report what objects are created (names, classes, dimensions). Does NOT affect the main R session. Useful for understanding what a script produces before sourcing it.",
+            description="Source one or more R scripts in a clean background session and report what objects are created (names, classes, dimensions). Does NOT affect the main R session. With capture_output=true it also returns the statistics the script prints when run — a clean-room evaluation that stale objects in the live session cannot contaminate. Use that mode to build the ground-truth corpus for reconcile_values and for final audit verdicts.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1034,6 +1034,10 @@ async def list_tools() -> List[types.Tool]:
                     "timeout": {
                         "type": "number",
                         "description": "Seconds before timing out per script. Default: 60."
+                    },
+                    "capture_output": {
+                        "type": "boolean",
+                        "description": "Also return the printed output of running each script (capped). Default: false."
                     }
                 },
                 "required": ["script_paths"]
@@ -1317,6 +1321,46 @@ async def list_tools() -> List[types.Tool]:
             },
             annotations={
                 "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="reconcile_values",
+            description=(
+                "Audit backbone: extract EVERY numeric value from a manuscript (.docx/.pdf/"
+                "text; docx tables cell-separated) and reconcile each against the corpus of "
+                "numbers in the given source files (analysis logs, generated tables, script "
+                "outputs, CSVs). Matching respects displayed precision (5038.5 matches "
+                "5038.46; 0.967 matches 0.9668), handles commas, percents (also checked as "
+                "proportions), scientific notation, and thresholds like '< .001'. Assigns a "
+                "per-value 'values_registry' data.frame to the R global environment; every "
+                "'unmatched' row must then be adjudicated (recompute it with execute_r, or "
+                "record why it cannot come from the sources) before an audit may conclude. "
+                "Completeness by construction: do not rely on reading carefully."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document": {
+                        "type": "string",
+                        "description": "Path to the manuscript or supplement (.docx, .pdf, or plain text)."
+                    },
+                    "sources": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Files whose numbers form the ground-truth corpus: session logs, generated table files, script outputs, CSVs."
+                    },
+                    "ignore_years": {
+                        "type": "boolean",
+                        "description": "Skip 4-digit integers 1900-2100 (citation years). Default true."
+                    }
+                },
+                "required": ["document", "sources"]
+            },
+            annotations={
+                "readOnlyHint": False,
                 "destructiveHint": False,
                 "idempotentHint": True,
                 "openWorldHint": False,
@@ -1774,7 +1818,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         import json
         paths_json = json.dumps(script_paths)
         escaped_json = escape_r_string(paths_json)
-        code = f'ClaudeR:::probe_scripts_impl(jsonlite::fromJSON(\'{escaped_json}\'), timeout = {timeout})'
+        capture = "TRUE" if arguments.get("capture_output") else "FALSE"
+        code = f'ClaudeR:::probe_scripts_impl(jsonlite::fromJSON(\'{escaped_json}\'), timeout = {timeout}, capture_output = {capture})'
         result = await execute_r_code_via_addin(code)
         if result.get("success", False):
             output = result.get("output", "No results.")
@@ -2046,7 +2091,12 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             if (!file.exists(fpath)) {{
                 list(success = FALSE, error = paste0("File not found: ", fpath))
             }} else {{
-                lines <- readLines(fpath, warn = FALSE)
+                ext <- tolower(tools::file_ext(fpath))
+                lines <- if (ext %in% c("docx", "pdf")) {{
+                    ClaudeR::extract_manuscript_text(fpath)
+                }} else {{
+                    readLines(fpath, warn = FALSE)
+                }}
                 total <- length(lines)
                 if (total == 0L) {{
                     list(success = TRUE, output = "[File exists but is empty (0 lines)]")
@@ -2585,6 +2635,30 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             )]
         result_contents.append(types.TextContent(
             type="text", text=result.get("output", "No checkpoints.")
+        ))
+        return result_contents
+
+    elif name == "reconcile_values":
+        document = arguments.get("document", "").strip()
+        sources = arguments.get("sources") or []
+        if not document or not sources:
+            return [types.TextContent(
+                type="text",
+                text="Error: 'document' and a non-empty 'sources' array are required"
+            )]
+        src_r = ", ".join(f'"{escape_r_string(s)}"' for s in sources)
+        parts = [f'document = "{escape_r_string(document)}"', f"sources = c({src_r})"]
+        if arguments.get("ignore_years") is False:
+            parts.append("ignore_years = FALSE")
+        code = f"ClaudeR::reconcile_values({', '.join(parts)})"
+        result = await execute_r_code_via_addin(code)
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error reconciling values: {result.get('error', 'Unknown error')}"
+            )]
+        result_contents.append(types.TextContent(
+            type="text", text=result.get("output", "Reconciliation complete.")
         ))
         return result_contents
 

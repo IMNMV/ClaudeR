@@ -4,12 +4,17 @@
 \alias{probe_scripts_impl}
 \title{Probe R scripts in a clean background session}
 \usage{
-probe_scripts_impl(script_paths, timeout = 60)
+probe_scripts_impl(script_paths, timeout = 60, capture_output = FALSE)
 }
 \arguments{
 \item{script_paths}{Character vector of script paths to source}
 
 \item{timeout}{Seconds before timing out (default 60)}
+
+\item{capture_output}{If TRUE, also capture and return the statistics the
+script prints when run (visible top-level expressions included). This
+makes the probe a clean-room evaluator: the output comes from a fresh
+process, so stale objects in the main session can never contaminate it.}
 }
 \value{
 Character string describing objects created by each script

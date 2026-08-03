@@ -13,7 +13,10 @@ extract_manuscript_text(file_path)
 Character vector with one element per line of text
 }
 \description{
-Reads a manuscript file and returns its text as a character vector of lines.
-Supports .docx (via the officer package), .qmd, .Rmd, .tex, .txt, and other
+Reads a manuscript file and returns its text as a character vector of lines
+with structure preserved: headings are prefixed with `#` marks, and table
+cells are emitted row-wise as `[Table k, row j] cell | cell | cell` so
+adjacent numeric cells can never concatenate. Supports .docx (via the
+officer package), .pdf (via pdftools), .qmd, .Rmd, .tex, .txt, and other
 plain text formats.
 }

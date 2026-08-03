@@ -14,6 +14,13 @@ The coverage tracker is a formal proof that every line of the manuscript was
 evaluated. The claim registry stores extracted claims for verification.
 
 ```r
+# 0. Audit-clean console output. Tibble's 3-sig-fig default can hide the
+#    precision a manuscript displays (printing 5038.46 as "5038."), which
+#    manufactures false mismatches during reconciliation. Set this FIRST,
+#    before anything prints or is logged.
+options(pillar.sigfig = 7, tibble.print_max = Inf, tibble.width = Inf,
+        width = 200, digits = 7)
+
 # 1. Coverage tracker: proves every line was evaluated
 # extract_manuscript_text() handles .docx, .pdf, .qmd, .Rmd, .tex, and plain text
 doc_lines <- ClaudeR::extract_manuscript_text("path_to_manuscript")  # Replace with actual file path
@@ -177,6 +184,46 @@ call, the audit skipped Pass 2 and the results should not be trusted.
 
 Now locate and re-execute the code that produced each claim.
 
+### Step 3.0: Value sweep — the backbone (reconcile_values)
+
+Before pairing claims to code, run the deterministic sweep. Reading
+carefully is necessary but not sufficient: you can misread a number while
+reading diligently, and no reading gate catches that. The sweep enumerates
+EVERY numeric value in the manuscript and supplement and reconciles each
+against the corpus of numbers the code actually produced. Completeness by
+construction beats diligence.
+
+1. Assemble the source corpus: the session log(s), any generated table
+   files (.docx/.csv), and clean-room script outputs from
+   `probe_scripts(capture_output = TRUE)`.
+2. Call the `reconcile_values` tool with the manuscript and those sources.
+   Run it again for the supplement if there is one. It assigns
+   `values_registry` to the global environment: one row per numeric value,
+   with status matched / matched_scaled / threshold_ok / unmatched /
+   year_skipped.
+3. Adjudicate every `unmatched` row: either recompute it with `execute_r`
+   (and record the result), or record why it cannot come from the sources
+   (citation fragment, DOI digits, section number, count stated in prose
+   only). For each adjudicated row set:
+
+```r
+values_registry$adjudicated[values_registry$value_id == ID] <- TRUE
+values_registry$note[values_registry$value_id == ID] <- "recomputed: 0.9668, matches at displayed precision"
+```
+
+#### Value-sweep gate
+You CANNOT proceed past Pass 3 until every value is accounted for:
+
+```r
+pending <- subset(values_registry, status == "unmatched" & !adjudicated)
+cat(sprintf("Value sweep: %d values total, %d unmatched pending adjudication\n",
+    nrow(values_registry), nrow(pending)))
+stopifnot(nrow(pending) == 0)
+```
+
+The claim-level work below (3a-3d) provides the *context and labels* for
+the values that carry claims; the sweep proves nothing was skipped.
+
 ### Step 3a: Map claims to code
 - Use `search_project_code` to find where variables, models, or test functions
   appear across the project's R scripts.
@@ -185,6 +232,11 @@ Now locate and re-execute the code that produced each claim.
 - Use `read_file` with pagination to inspect relevant code sections.
 
 ### Step 3b: Execute and compare programmatically
+- Prefer a CLEAN ROOM for final verdicts: `probe_scripts(capture_output = TRUE)`
+  sources each script in a fresh background session and returns its printed
+  statistics, so a stale object in the live environment can never make a
+  check agree spuriously. If you must verify in the live session, checkpoint
+  first and clear the objects the script will recreate.
 - Use `execute_r` to load data and run the specific analysis for each claim.
 - Do NOT manually decide whether values match. Let R determine the status
   using `all.equal()` with an appropriate tolerance.
@@ -334,6 +386,12 @@ After all claims and references are processed, generate a summary:
 cat("\n=== REVIEWER ZERO AUDIT REPORT ===\n")
 cat(sprintf("Coverage: %d / %d lines evaluated\n",
     sum(coverage$status != "unread"), nrow(coverage)))
+cat(sprintf("Value sweep: %d values | matched: %d | threshold_ok: %d | adjudicated: %d | years skipped: %d\n",
+    nrow(values_registry),
+    sum(values_registry$status %in% c("matched", "matched_scaled")),
+    sum(values_registry$status == "threshold_ok"),
+    sum(values_registry$status == "unmatched" & values_registry$adjudicated),
+    sum(values_registry$status == "year_skipped")))
 cat(sprintf("Total claims: %d\n", nrow(claim_registry)))
 cat(sprintf("Matches: %d\n", sum(claim_registry$status == "match")))
 cat(sprintf("Rounding only: %d\n", sum(claim_registry$status == "rounding")))
@@ -384,3 +442,12 @@ Include an internal consistency section listing:
 11. You must read every line of every analysis script by the end of Pass 3.
     Do not flag unreported analyses on different variables -- only flag code
     that produces different results for the same reported outcomes.
+12. Set the audit-clean print options (Setup step 0) before anything prints.
+    Console output that truncates precision fights the audit.
+13. Every row of `values_registry` must end as matched, matched_scaled,
+    threshold_ok, year_skipped, or adjudicated-with-a-note. The value-sweep
+    gate is the completion criterion for numeric fidelity -- reading gates
+    prove diligence, the registry proves completeness.
+14. Final verdicts come from clean-room recomputation
+    (`probe_scripts(capture_output = TRUE)` or a fresh background session),
+    never from a long-lived environment that may hold stale objects.

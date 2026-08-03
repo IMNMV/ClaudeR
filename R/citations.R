@@ -75,15 +75,30 @@ get_bibtex_impl <- function(doi) {
   bib
 }
 
+# GET a Crossref API URL with retry/backoff. Crossref rate-limits bursts
+# (HTTP 429); a failed lookup mid-audit silently truncates the reference
+# check, so wait and retry before giving up.
+crossref_get <- function(url, simplify = FALSE) {
+  waits <- c(0, 1.5, 5)
+  for (k in seq_along(waits)) {
+    if (waits[k] > 0) Sys.sleep(waits[k])
+    res <- tryCatch(jsonlite::fromJSON(url, simplifyVector = simplify),
+                    error = function(e) e)
+    if (!inherits(res, "error")) return(res)
+    # 404 is a real answer (no such DOI/filter result), not rate limiting
+    if (grepl("404", conditionMessage(res))) return(NULL)
+  }
+  NULL
+}
+
 # Check whether anything in Crossref updates this DOI (retractions,
 # expressions of concern, major corrections). Returns NULL when clean,
 # otherwise a short human-readable flag string.
 check_retraction_impl <- function(doi) {
-  res <- tryCatch(jsonlite::fromJSON(
+  res <- crossref_get(
     paste0("https://api.crossref.org/works?filter=updates:",
-           utils::URLencode(doi, reserved = TRUE), "&rows=5"),
-    simplifyVector = FALSE
-  ), error = function(e) NULL)
+           utils::URLencode(doi, reserved = TRUE), "&rows=5")
+  )
   if (is.null(res)) return(NULL)
   items <- res$message$items
   if (length(items) == 0) return(NULL)
@@ -109,11 +124,10 @@ check_retraction_impl <- function(doi) {
 match_reference_impl <- function(ref_text) {
   ref_text <- trimws(gsub("\\s+", " ", ref_text))
   if (nchar(ref_text) < 40) return(NULL)
-  res <- tryCatch(jsonlite::fromJSON(
+  res <- crossref_get(
     paste0("https://api.crossref.org/works?rows=1&query.bibliographic=",
-           utils::URLencode(substr(ref_text, 1, 300), reserved = TRUE)),
-    simplifyVector = FALSE
-  ), error = function(e) NULL)
+           utils::URLencode(substr(ref_text, 1, 300), reserved = TRUE))
+  )
   items <- tryCatch(res$message$items, error = function(e) NULL)
   if (is.null(items) || length(items) == 0) return(NULL)
   it <- items[[1]]

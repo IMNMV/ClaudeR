@@ -2010,8 +2010,12 @@ search_project_code_impl <- function(pattern, extensions = "R,Rmd,qmd",
 #'
 #' @param script_paths Character vector of script paths to source
 #' @param timeout Seconds before timing out (default 60)
+#' @param capture_output If TRUE, also capture and return the statistics the
+#'   script prints when run (visible top-level expressions included). This
+#'   makes the probe a clean-room evaluator: the output comes from a fresh
+#'   process, so stale objects in the main session can never contaminate it.
 #' @return Character string describing objects created by each script
-probe_scripts_impl <- function(script_paths, timeout = 60) {
+probe_scripts_impl <- function(script_paths, timeout = 60, capture_output = FALSE) {
   results <- character(0)
   for (sp in script_paths) {
     sp_expanded <- path.expand(sp)
@@ -2020,29 +2024,53 @@ probe_scripts_impl <- function(script_paths, timeout = 60) {
       next
     }
     probe_result <- tryCatch({
-      callr::r(function(script_path) {
+      callr::r(function(script_path, capture_output) {
+        # Audit-clean printing inside the clean room too
+        options(pillar.sigfig = 7, tibble.print_max = Inf, width = 200, digits = 7)
         env <- new.env(parent = globalenv())
-        tryCatch({
-          source(script_path, local = env)
+        printed <- character(0)
+        summary_txt <- tryCatch({
+          if (capture_output) {
+            printed <- utils::capture.output(
+              source(script_path, local = env, print.eval = TRUE)
+            )
+          } else {
+            source(script_path, local = env)
+          }
           obj_names <- ls(env)
-          if (length(obj_names) == 0) return("No objects created.")
-          info <- vapply(obj_names, function(nm) {
-            obj <- get(nm, envir = env)
-            cl <- paste(class(obj), collapse = "/")
-            dims <- if (is.data.frame(obj) || is.matrix(obj)) {
-              paste0(" [", nrow(obj), " x ", ncol(obj), "]")
-            } else if (is.vector(obj) && !is.list(obj)) {
-              paste0(" [length ", length(obj), "]")
-            } else {
-              ""
-            }
-            paste0(nm, " : ", cl, dims)
-          }, character(1))
-          paste(info, collapse = "\n")
+          if (length(obj_names) == 0) "No objects created."
+          else {
+            info <- vapply(obj_names, function(nm) {
+              obj <- get(nm, envir = env)
+              cl <- paste(class(obj), collapse = "/")
+              dims <- if (is.data.frame(obj) || is.matrix(obj)) {
+                paste0(" [", nrow(obj), " x ", ncol(obj), "]")
+              } else if (is.vector(obj) && !is.list(obj)) {
+                paste0(" [length ", length(obj), "]")
+              } else {
+                ""
+              }
+              paste0(nm, " : ", cl, dims)
+            }, character(1))
+            paste(info, collapse = "\n")
+          }
         }, error = function(e) {
           paste0("Error sourcing: ", e$message)
         })
-      }, args = list(script_path = sp_expanded),
+        if (capture_output && length(printed) > 0) {
+          if (length(printed) > 400) {
+            printed <- c(utils::head(printed, 320),
+                         sprintf("... [%d lines omitted] ...", length(printed) - 400L),
+                         utils::tail(printed, 80))
+          }
+          out_txt <- paste(printed, collapse = "\n")
+          if (nchar(out_txt) > 40000) {
+            out_txt <- paste0(substr(out_txt, 1, 40000), "\n... [output truncated]")
+          }
+          summary_txt <- paste0(summary_txt, "\n--- printed output ---\n", out_txt)
+        }
+        summary_txt
+      }, args = list(script_path = sp_expanded, capture_output = isTRUE(capture_output)),
          user_profile = FALSE, timeout = timeout)
     }, error = function(e) {
       paste0("callr error: ", e$message)
@@ -2136,7 +2164,15 @@ verify_references_impl <- function(file_path = NULL, text = NULL,
     doi <- dois[i]
     results[[i]] <- tryCatch({
       api_url <- paste0("https://api.crossref.org/works/", utils::URLencode(doi, reserved = TRUE))
-      raw <- jsonlite::fromJSON(api_url)
+      # Retry transient failures (429 rate limits, hiccups); a 404 is a real
+      # answer (unregistered DOI) and is surfaced immediately.
+      raw <- NULL
+      for (attempt in 1:3) {
+        raw <- tryCatch(jsonlite::fromJSON(api_url), error = function(e) e)
+        if (!inherits(raw, "error") || grepl("404", conditionMessage(raw))) break
+        Sys.sleep(c(1.5, 5)[min(attempt, 2)])
+      }
+      if (inherits(raw, "error")) stop(raw)
       msg <- raw$message
 
       title <- if (!is.null(msg$title)) paste(msg$title, collapse = " ") else "N/A"
@@ -2187,7 +2223,7 @@ verify_references_impl <- function(file_path = NULL, text = NULL,
     })
 
     # Polite rate limiting
-    if (i < length(dois)) Sys.sleep(0.1)
+    if (i < length(dois)) Sys.sleep(0.25)
   }
 
   # arXiv lookups (with published-version check)
@@ -2197,7 +2233,7 @@ verify_references_impl <- function(file_path = NULL, text = NULL,
     for (aid in arxiv_ids) {
       r <- check_arxiv_impl(aid)
       if (!is.null(r)) arxiv_results <- c(arxiv_results, r)
-      Sys.sleep(0.1)
+      Sys.sleep(0.25)
     }
     if (length(arxiv_results) > 0) {
       arxiv_section <- paste0(
@@ -2218,7 +2254,7 @@ verify_references_impl <- function(file_path = NULL, text = NULL,
         "Reference: ", substr(flat, 1, 140), if (nchar(flat) > 140) "..." else "", "\n",
         if (!is.null(m)) m else "No plausible Crossref match; verify manually via web search."
       ))
-      Sys.sleep(0.1)
+      Sys.sleep(0.25)
     }
     nodoi_section <- paste0(
       "\n\n=== ENTRIES WITHOUT DOIs (", length(nodoi_refs), ", bibliographic matching) ===\n\n",
@@ -2244,8 +2280,11 @@ verify_references_impl <- function(file_path = NULL, text = NULL,
 
 #' Extract text lines from a manuscript file
 #'
-#' Reads a manuscript file and returns its text as a character vector of lines.
-#' Supports .docx (via the officer package), .qmd, .Rmd, .tex, .txt, and other
+#' Reads a manuscript file and returns its text as a character vector of lines
+#' with structure preserved: headings are prefixed with `#` marks, and table
+#' cells are emitted row-wise as `[Table k, row j] cell | cell | cell` so
+#' adjacent numeric cells can never concatenate. Supports .docx (via the
+#' officer package), .pdf (via pdftools), .qmd, .Rmd, .tex, .txt, and other
 #' plain text formats.
 #'
 #' @param file_path Path to the manuscript file
@@ -2263,8 +2302,67 @@ extract_manuscript_text <- function(file_path) {
     }
     doc <- officer::read_docx(file_path)
     content <- officer::docx_summary(doc)
-    paragraphs <- content[content$content_type == "paragraph", "text"]
-    return(paragraphs)
+
+    # Walk the document in order, emitting paragraphs, headings, and table
+    # cells. Table cells get explicit row-wise separators so numbers from
+    # adjacent cells can never concatenate into garbage tokens -- and so the
+    # audit actually sees table content at all (the old implementation kept
+    # only paragraphs and silently dropped every table).
+    out <- character(0)
+    table_counter <- 0L
+    content <- content[order(content$doc_index), , drop = FALSE]
+    is_cell <- content$content_type == "table cell"
+    runs <- rle(is_cell)
+    seg_end <- cumsum(runs$lengths)
+    seg_start <- c(1L, utils::head(seg_end, -1L) + 1L)
+
+    emit_table <- function(cells) {
+      table_counter <<- table_counter + 1L
+      for (r in sort(unique(cells$row_id))) {
+        rcells <- cells[cells$row_id == r, , drop = FALSE]
+        rcells <- rcells[order(rcells$cell_id), , drop = FALSE]
+        vals <- rcells$text
+        vals[is.na(vals)] <- ""
+        is_hdr <- isTRUE(any(rcells$is_header))
+        out <<- c(out, sprintf(
+          "[Table %d, %s] %s",
+          table_counter,
+          if (is_hdr) "header" else paste0("row ", r),
+          paste(vals, collapse = " | ")
+        ))
+      }
+      out <<- c(out, "")
+    }
+
+    for (seg in seq_along(runs$values)) {
+      seg_rows <- content[seg_start[seg]:seg_end[seg], , drop = FALSE]
+      if (!runs$values[seg]) {
+        # Paragraph segment: emit each paragraph, marking headings
+        for (k in seq_len(nrow(seg_rows))) {
+          txt <- seg_rows$text[k]
+          if (is.na(txt)) txt <- ""
+          style <- seg_rows$style_name[k]
+          if (!is.na(style) && grepl("heading", style, ignore.case = TRUE)) {
+            lvl <- suppressWarnings(as.integer(gsub("\\D", "", style)))
+            if (is.na(lvl) || lvl < 1) lvl <- 1L
+            txt <- paste0(strrep("#", min(lvl, 6L)), " ", txt)
+          }
+          out <- c(out, txt)
+        }
+      } else {
+        # Table segment. Adjacent tables with no paragraph between them
+        # arrive as one run; a row_id that resets below its predecessor
+        # marks the boundary.
+        breaks <- which(diff(seg_rows$row_id) < 0 &
+                          seg_rows$cell_id[-1] <= seg_rows$cell_id[-nrow(seg_rows)])
+        starts <- c(1L, breaks + 1L)
+        ends <- c(breaks, nrow(seg_rows))
+        for (t in seq_along(starts)) {
+          emit_table(seg_rows[starts[t]:ends[t], , drop = FALSE])
+        }
+      }
+    }
+    return(out)
   } else if (ext == "pdf") {
     if (!requireNamespace("pdftools", quietly = TRUE)) {
       stop("The 'pdftools' package is required to read .pdf files. Install with: install.packages('pdftools')")
