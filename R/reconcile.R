@@ -58,12 +58,25 @@ extract_numbers_from_line <- function(line) {
   do.call(rbind, out)
 }
 
+# A bibliography line: contains a DOI/arXiv id, or looks like an APA entry
+# (a parenthesized year followed later by a page range). Values on such lines
+# are citation metadata (volumes, issues, pages, DOI fragments), not results.
+is_reference_line <- function(line) {
+  grepl("doi\\.org/|\\barXiv:", line, ignore.case = TRUE) ||
+    grepl("\\((17|18|19|20)\\d\\d[a-z]?\\)\\..*\\d+-\\d+\\.?$", line, perl = TRUE)
+}
+
 # Extract all numbers from a character vector, with line numbers and context.
 extract_numbers_impl <- function(lines, label = "text") {
   res <- lapply(seq_along(lines), function(i) {
-    d <- extract_numbers_from_line(lines[i])
+    # Strip the structured-extractor cell markers ("[Table 2, row 5] ...")
+    # before tokenizing: the table and row indices are our own metadata, not
+    # values the document states.
+    clean <- sub("^\\[Table \\d+, (row \\d+|header)\\] ", "", lines[i])
+    d <- extract_numbers_from_line(clean)
     if (nrow(d) == 0) return(NULL)
     d$line <- i
+    d$is_reference <- is_reference_line(lines[i])
     ctx <- trimws(lines[i])
     if (nchar(ctx) > 160) ctx <- paste0(substr(ctx, 1, 157), "...")
     d$context <- ctx
@@ -74,6 +87,7 @@ extract_numbers_impl <- function(lines, label = "text") {
     return(data.frame(raw = character(0), value = numeric(0), ulp = numeric(0),
                       is_threshold = logical(0), threshold_dir = character(0),
                       is_percent = logical(0), line = integer(0),
+                      is_reference = logical(0),
                       context = character(0), source = character(0),
                       stringsAsFactors = FALSE))
   }
@@ -146,7 +160,11 @@ reconcile_values <- function(document, sources, ignore_years = TRUE,
   for (i in seq_len(nrow(doc_nums))) {
     v <- doc_nums$value[i]
     u <- doc_nums$ulp[i]
-    if (ignore_years && !doc_nums$is_percent[i] && !doc_nums$is_threshold[i] &&
+    if (isTRUE(doc_nums$is_reference[i])) {
+      # Volumes, issues, pages, and DOI fragments on bibliography lines are
+      # citation metadata; verify_references audits those, not the sweep.
+      status[i] <- "reference_meta"
+    } else if (ignore_years && !doc_nums$is_percent[i] && !doc_nums$is_threshold[i] &&
         u == 1 && v >= 1900 && v <= 2100 && v == floor(v)) {
       status[i] <- "year_skipped"
     } else if (doc_nums$is_threshold[i]) {
@@ -179,7 +197,7 @@ reconcile_values <- function(document, sources, ignore_years = TRUE,
   n <- nrow(registry)
   counts <- table(factor(registry$status,
                          levels = c("matched", "matched_scaled", "threshold_ok",
-                                    "unmatched", "year_skipped")))
+                                    "unmatched", "year_skipped", "reference_meta")))
   unmatched <- registry[registry$status == "unmatched", , drop = FALSE]
   shown <- utils::head(unmatched, max_unmatched_shown)
 
@@ -188,9 +206,9 @@ reconcile_values <- function(document, sources, ignore_years = TRUE,
     sprintf("Document: %s (%d numeric values)\n", basename(document), n),
     sprintf("Corpus: %d unique values from %d source file(s)\n",
             length(corpus), length(sources)),
-    sprintf("matched: %d | matched_scaled: %d | threshold_ok: %d | unmatched: %d | year_skipped: %d\n",
+    sprintf("matched: %d | matched_scaled: %d | threshold_ok: %d | unmatched: %d | year_skipped: %d | reference_meta: %d\n",
             counts["matched"], counts["matched_scaled"], counts["threshold_ok"],
-            counts["unmatched"], counts["year_skipped"]),
+            counts["unmatched"], counts["year_skipped"], counts["reference_meta"]),
     "\n'values_registry' has been assigned to the global environment.\n",
     if (nrow(unmatched) == 0) {
       "\nEvery non-year value is accounted for.\n"

@@ -229,6 +229,24 @@ r <- tryCatch({
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("reconcile_values end-to-end: only planted value unmatched") else fail("reconcile e2e:", r)
 
+# --- 9b. reconcile: reference-line quarantine + extractor-marker stripping ---
+r <- tryCatch({
+  doc <- tempfile(fileext = ".txt")
+  writeLines(c(
+    "The effect was significant, d = 0.53.",
+    "[Table 1, row 5] condition | 44.2 | 78.6",
+    "Leroy, S. (2009). Why is it so hard? Journal, 109(2), 168-181. https://doi.org/10.1016/j.obhdp.2009.04.002"
+  ), doc)
+  src <- tempfile(fileext = ".txt")
+  writeLines(c("d 0.5337", "diff 44.1678", "sd 78.6487"), src)
+  invisible(capture.output(env$reconcile_values(doc, src)))
+  reg <- get("values_registry", envir = .GlobalEnv)
+  sum(reg$status == "reference_meta") >= 4 &&        # 109, 2, 168, 181, DOI bits
+    !any(reg$raw == "5" & reg$status == "unmatched") &&  # row marker stripped
+    all(reg$status[reg$value %in% c(0.53, 44.2, 78.6)] == "matched")
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("reconcile: reference lines quarantined, cell markers stripped") else fail("reconcile v2:", r)
+
 # --- 10. docx extractor: tables row-wise, headings marked (needs officer) ---
 if (requireNamespace("officer", quietly = TRUE)) {
   r <- tryCatch({

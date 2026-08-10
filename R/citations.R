@@ -82,11 +82,20 @@ crossref_get <- function(url, simplify = FALSE) {
   waits <- c(0, 1.5, 5)
   for (k in seq_along(waits)) {
     if (waits[k] > 0) Sys.sleep(waits[k])
-    res <- tryCatch(jsonlite::fromJSON(url, simplifyVector = simplify),
-                    error = function(e) e)
+    # base R surfaces the HTTP status in a *warning* ("HTTP status was '404
+    # Not Found'") while the error message only says "cannot open URL", so
+    # both conditions must be sniffed to tell a real 404 from rate limiting.
+    saw_404 <- FALSE
+    res <- withCallingHandlers(
+      tryCatch(jsonlite::fromJSON(url, simplifyVector = simplify),
+               error = function(e) e),
+      warning = function(w) {
+        if (grepl("404", conditionMessage(w))) saw_404 <<- TRUE
+        invokeRestart("muffleWarning")
+      }
+    )
     if (!inherits(res, "error")) return(res)
-    # 404 is a real answer (no such DOI/filter result), not rate limiting
-    if (grepl("404", conditionMessage(res))) return(NULL)
+    if (saw_404 || grepl("404", conditionMessage(res))) return(NULL)
   }
   NULL
 }
@@ -142,12 +151,24 @@ match_reference_impl <- function(ref_text) {
 # published (journal/proceedings) version so preprint citations of published
 # work get flagged. Atom parsed with regex to avoid an xml2 hard dependency.
 check_arxiv_impl <- function(arxiv_id) {
-  res <- tryCatch({
-    con <- url(paste0("https://export.arxiv.org/api/query?id_list=", arxiv_id))
-    on.exit(try(close(con), silent = TRUE), add = TRUE)
-    paste(readLines(con, warn = FALSE), collapse = "\n")
-  }, error = function(e) NULL)
-  if (is.null(res)) return(NULL)
+  # export.arxiv.org is slow enough to trip a 10s timeout on cold requests;
+  # retry with a longer allowance before giving up.
+  res <- NULL
+  for (k in 1:3) {
+    if (k > 1) Sys.sleep(2)
+    old_t <- options(timeout = if (k == 1) 10 else 25)
+    res <- tryCatch({
+      con <- url(paste0("https://export.arxiv.org/api/query?id_list=", arxiv_id))
+      txt <- suppressWarnings(paste(readLines(con, warn = FALSE), collapse = "\n"))
+      try(close(con), silent = TRUE)
+      txt
+    }, error = function(e) NULL)
+    options(old_t)
+    if (!is.null(res) && nzchar(res)) break
+  }
+  if (is.null(res) || !nzchar(res)) {
+    return(sprintf("arXiv:%s -- lookup failed (arXiv API unreachable); verify manually.", arxiv_id))
+  }
 
   title <- regmatches(res, regexpr("<title>[^<]+</title>", res))
   # First <title> is the feed's own; the entry title is the second match
