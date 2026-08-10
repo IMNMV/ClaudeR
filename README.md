@@ -44,6 +44,7 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
+- **Referee Mode v2: configurable reviewers (R 0.8.0).** `referee_prompt()` now takes `lenses` (run any subset), `reviewers_per_lens` (2 = adversarial prosecutor + verifier pairs, 3 adds a backwards reader), `model` (a tier for all subagents, e.g. `"haiku"` for quick passes or `"opus"` for submission-grade, or a named per-lens vector), and `cross_vendor = TRUE` to dispatch logic/methods reviewers to a different model vendor via codex/agy/qwen one-shots. Anti-collapse rules are now mandatory in the protocol: reviewer prompts must be written from scratch per lens and stance, the consistency lens reads back-to-front, and every finding carries a corroboration count across independent reviewers.
 - **Referee Mode (R 0.7.0 / clauder-mcp 0.10.0).** The substantive manuscript review that paid services charge ~$50 a pass for, running free on the subscription you already have, and delivered where it belongs: as Word comments in your manuscript. `reviewer_zero_prompt(referee = TRUE)` (or standalone `referee_prompt()`) runs five content-only review lenses — argument logic, methods, internal consistency, evidence presentation, framing — as parallel subagents where the CLI supports them. Every finding must anchor to a verbatim quote and survive an independent verification pass before it lands in the document, severities are kept honest, and a clean report on a sound paper is a valid outcome. Alongside it, the new `check_cross_references` tool deterministically catches dangling references ("see Table 4" when Table 4 no longer exists) and tables or figures the text never mentions.
 
 - **Value-first auditing (R 0.6.0 / clauder-mcp 0.9.0).** Built from field feedback after a full manuscript+supplement audit. `read_file` now transparently extracts `.docx`/`.pdf` (previously returned raw bytes), and the extractor preserves structure: headings marked, table cells emitted row-wise with separators (they were previously dropped entirely). New `reconcile_values` tool: enumerates every number in a manuscript and reconciles each against the corpus your code produced, respecting displayed precision (5038.5 matches 5038.46), commas, percents, scientific notation, and `< .001` thresholds; the per-value `values_registry` makes numeric completeness a construction, not a diligence hope. Reviewer Zero now sets audit-clean print options (no more tibble 3-sig-fig false alarms), gates on the value sweep, and takes final verdicts from clean-room runs via `probe_scripts(capture_output = TRUE)`. CrossRef lookups retry with backoff instead of silently truncating the reference check on 429s.
@@ -189,6 +190,17 @@ reviewer_zero_prompt(writeback = TRUE)
 
 # All extensions together
 reviewer_zero_prompt(prereg_path = "prereg.docx", robustness = TRUE, writeback = TRUE)
+
+# Referee Mode, configured. Quick-and-dirty pass on a fast model tier:
+referee_prompt(model = "haiku")
+
+# Submission-grade: strongest tier, adversarial reviewer pairs per lens
+# (prosecutor + verifier), and lenses dispatched across model vendors
+# (codex/agy/qwen) so same-model blind spots can't hide the same flaw twice:
+referee_prompt(model = "opus", reviewers_per_lens = 2, cross_vendor = TRUE)
+
+# Mix tiers per lens: deep model where the reasoning is hard, fast elsewhere
+referee_prompt(model = c(logic = "opus", methods = "opus", consistency = "haiku"))
 ```
 
 The protocol works with `.docx`, `.pdf`, `.qmd`, `.Rmd`, `.tex`, or plain text manuscripts and supports multi-script R projects.

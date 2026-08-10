@@ -271,5 +271,21 @@ r <- tryCatch({
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("cross-reference checker: dangling + orphans, ranges resolve") else fail("crossref:", r)
 
+# --- 12. referee mode v2 configuration ---
+r <- tryCatch({
+  assign("system.file", function(..., package = NULL) file.path("inst", ...), envir = env)
+  t1 <- capture.output(env$referee_prompt(lenses = c("logic", "methods"),
+                                          reviewers_per_lens = 2, model = "haiku"))
+  t2 <- capture.output(env$referee_prompt(model = c(logic = "opus"), cross_vendor = TRUE))
+  any(grepl("Lenses: logic, methods", t1, fixed = TRUE)) &&
+    any(grepl('model = "haiku"', t1, fixed = TRUE)) &&
+    any(grepl("PROSECUTOR", t1, fixed = TRUE)) &&
+    any(grepl('logic -> "opus"', t2, fixed = TRUE)) &&
+    any(grepl("codex exec", t2, fixed = TRUE)) &&
+    !any(grepl("{{", c(t1, t2), fixed = TRUE)) &&
+    inherits(tryCatch(env$referee_prompt(lenses = "vibes"), error = function(e) e), "error")
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("referee v2: lenses, models, stances, cross-vendor, validation") else fail("referee v2:", r)
+
 if (!ok) quit(status = 1)
 cat("\nAll checks passed.\n")

@@ -2457,13 +2457,90 @@ reviewer_zero_prompt <- function(prereg_path = NULL, robustness = FALSE,
   }
 
   if (isTRUE(referee)) {
-    ext_path <- system.file("prompts", "reviewer_zero_referee.md", package = "ClaudeR")
-    ext <- paste(readLines(ext_path, warn = FALSE), collapse = "\n")
-    txt <- paste0(txt, "\n", ext)
+    txt <- paste0(txt, "\n", build_referee_text())
   }
 
   cat(txt, "\n")
   invisible(txt)
+}
+
+# Build the Referee Mode protocol text with a concrete run configuration.
+# Shared by referee_prompt() and reviewer_zero_prompt(referee = TRUE).
+build_referee_text <- function(lenses = c("logic", "methods", "consistency",
+                                          "evidence", "framing"),
+                               reviewers_per_lens = 1L,
+                               model = NULL,
+                               cross_vendor = FALSE) {
+  valid <- c("logic", "methods", "consistency", "evidence", "framing")
+  bad <- setdiff(lenses, valid)
+  if (length(bad) > 0) {
+    stop(sprintf("Unknown lens(es): %s. Valid: %s.",
+                 paste(bad, collapse = ", "), paste(valid, collapse = ", ")),
+         call. = FALSE)
+  }
+  if (!is.numeric(reviewers_per_lens) || reviewers_per_lens < 1 ||
+      reviewers_per_lens > 3) {
+    stop("`reviewers_per_lens` must be 1, 2, or 3 (stances: balanced; prosecutor+verifier; +backwards reader).",
+         call. = FALSE)
+  }
+  reviewers_per_lens <- as.integer(reviewers_per_lens)
+
+  model_directive <- if (is.null(model)) {
+    paste0("inherit the session's model for every reviewer subagent. If the ",
+           "user asked for a quick pass, prefer a fast tier (e.g. haiku or ",
+           "sonnet); for a submission-grade review, prefer the strongest ",
+           "tier available (e.g. opus or fable).")
+  } else if (is.null(names(model)) && length(model) == 1) {
+    sprintf(paste0("pass model = \"%s\" when dispatching EVERY reviewer ",
+                   "subagent (the Task tool's model parameter on Claude ",
+                   "Code, or your host's equivalent)."), model)
+  } else {
+    if (is.null(names(model)) || any(!nzchar(names(model)))) {
+      stop("`model` must be a single tier or a fully named vector, e.g. c(logic = \"opus\", consistency = \"haiku\").",
+           call. = FALSE)
+    }
+    bad_names <- setdiff(names(model), valid)
+    if (length(bad_names) > 0) {
+      stop(sprintf("`model` names must be lenses. Unknown: %s.",
+                   paste(bad_names, collapse = ", ")), call. = FALSE)
+    }
+    paste0("per-lens models: ",
+           paste(sprintf("%s -> \"%s\"", names(model), model), collapse = "; "),
+           "; lenses not listed inherit the session's model.")
+  }
+
+  vendor_directive <- if (isTRUE(cross_vendor)) {
+    paste0(
+      "ENABLED. Where another vendor's CLI is installed (check with ",
+      "`which codex agy qwen` from Bash), dispatch at least one reviewer of ",
+      "the logic and methods lenses to a DIFFERENT model vendor as a ",
+      "one-shot subprocess: `codex exec` (pipe the reviewer prompt via ",
+      "stdin; flags: --skip-git-repo-check -c mcp_servers={}), ",
+      "`agy -p \"<prompt>\"`, or `qwen --prompt \"<prompt>\"`. First write ",
+      "the extracted manuscript to a plain-text file ",
+      "(writeLines(doc_lines, \"ms_extract.txt\")) and reference that path ",
+      "in the prompt, along with the lens mandate, stance, and the finding ",
+      "format. Cross-vendor findings enter the same registry and the same ",
+      "adjudication. Agreement across vendors is strong corroboration; ",
+      "vendor-unique findings deserve scrutiny in both directions. If no ",
+      "other vendor CLI is available, record that in the report and proceed ",
+      "single-vendor. Same-model reviewers share blind spots; a second ",
+      "vendor is the strongest decorrelation available."
+    )
+  } else {
+    "disabled for this run: all reviewers run as host-native subagents."
+  }
+
+  prompt_path <- system.file("prompts", "reviewer_zero_referee.md", package = "ClaudeR")
+  if (!nzchar(prompt_path) || !file.exists(prompt_path)) {
+    stop("Referee prompt template not found. Is ClaudeR installed correctly?")
+  }
+  txt <- paste(readLines(prompt_path, warn = FALSE), collapse = "\n")
+  txt <- gsub("{{LENSES}}", paste(lenses, collapse = ", "), txt, fixed = TRUE)
+  txt <- gsub("{{REVIEWERS_PER_LENS}}", as.character(reviewers_per_lens), txt, fixed = TRUE)
+  txt <- gsub("{{MODEL_DIRECTIVE}}", model_directive, txt, fixed = TRUE)
+  txt <- gsub("{{VENDOR_DIRECTIVE}}", vendor_directive, txt, fixed = TRUE)
+  txt
 }
 
 #' Print the Referee Mode prompt (standalone)
@@ -2476,14 +2553,34 @@ reviewer_zero_prompt <- function(prereg_path = NULL, robustness = FALSE,
 #' numeric audit passes; to run it after a full audit, use
 #' `reviewer_zero_prompt(referee = TRUE)`.
 #'
+#' @param lenses Which review lenses to run. Any subset of
+#'   `c("logic", "methods", "consistency", "evidence", "framing")`.
+#' @param reviewers_per_lens 1, 2, or 3 independent reviewers per lens.
+#'   With 2, each lens gets a prosecutor (hunts flaws) and a verifier
+#'   (confirms each step); with 3, a backwards reader is added. Opposed
+#'   stances decorrelate reviewers built on the same model.
+#' @param model Optional model directive for reviewer subagents. A single
+#'   tier applies to all lenses (e.g. `"haiku"` for a quick pass,
+#'   `"opus"` for a submission-grade review); a named vector sets tiers
+#'   per lens, e.g. `c(logic = "opus", consistency = "haiku")`. The
+#'   orchestrating agent passes this to its subagent dispatch (Claude
+#'   Code's Task tool `model` parameter). Default: inherit the session's
+#'   model.
+#' @param cross_vendor If TRUE, the protocol instructs the orchestrator to
+#'   dispatch at least one logic and one methods reviewer to a different
+#'   model vendor (codex/agy/qwen one-shot CLI calls) where installed.
+#'   Cross-vendor agreement is the strongest available guard against
+#'   same-model blind spots.
 #' @return The prompt text (invisibly), printed to the console.
 #' @export
-referee_prompt <- function() {
-  prompt_path <- system.file("prompts", "reviewer_zero_referee.md", package = "ClaudeR")
-  if (!nzchar(prompt_path) || !file.exists(prompt_path)) {
-    stop("Referee prompt template not found. Is ClaudeR installed correctly?")
-  }
-  txt <- paste(readLines(prompt_path, warn = FALSE), collapse = "\n")
+referee_prompt <- function(lenses = c("logic", "methods", "consistency",
+                                      "evidence", "framing"),
+                           reviewers_per_lens = 1L,
+                           model = NULL,
+                           cross_vendor = FALSE) {
+  txt <- build_referee_text(lenses = lenses,
+                            reviewers_per_lens = reviewers_per_lens,
+                            model = model, cross_vendor = cross_vendor)
   cat(txt, "\n")
   invisible(txt)
 }

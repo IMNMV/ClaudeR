@@ -4,7 +4,35 @@
 \alias{referee_prompt}
 \title{Print the Referee Mode prompt (standalone)}
 \usage{
-referee_prompt()
+referee_prompt(
+  lenses = c("logic", "methods", "consistency", "evidence", "framing"),
+  reviewers_per_lens = 1L,
+  model = NULL,
+  cross_vendor = FALSE
+)
+}
+\arguments{
+\item{lenses}{Which review lenses to run. Any subset of
+`c("logic", "methods", "consistency", "evidence", "framing")`.}
+
+\item{reviewers_per_lens}{1, 2, or 3 independent reviewers per lens.
+With 2, each lens gets a prosecutor (hunts flaws) and a verifier
+(confirms each step); with 3, a backwards reader is added. Opposed
+stances decorrelate reviewers built on the same model.}
+
+\item{model}{Optional model directive for reviewer subagents. A single
+tier applies to all lenses (e.g. `"haiku"` for a quick pass,
+`"opus"` for a submission-grade review); a named vector sets tiers
+per lens, e.g. `c(logic = "opus", consistency = "haiku")`. The
+orchestrating agent passes this to its subagent dispatch (Claude
+Code's Task tool `model` parameter). Default: inherit the session's
+model.}
+
+\item{cross_vendor}{If TRUE, the protocol instructs the orchestrator to
+dispatch at least one logic and one methods reviewer to a different
+model vendor (codex/agy/qwen one-shot CLI calls) where installed.
+Cross-vendor agreement is the strongest available guard against
+same-model blind spots.}
 }
 \value{
 The prompt text (invisibly), printed to the console.
