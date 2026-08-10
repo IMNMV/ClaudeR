@@ -7,12 +7,12 @@
     "url": "https://github.com/IMNMV/ClaudeR",
     "source": "github"
   },
-  "version": "0.9.0",
+  "version": "0.10.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "clauder-mcp",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "transport": {
         "type": "stdio"
       }

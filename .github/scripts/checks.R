@@ -21,6 +21,7 @@ sys.source("R/codebook.R", envir = env)
 sys.source("R/writeback.R", envir = env)
 sys.source("R/citations.R", envir = env)
 sys.source("R/reconcile.R", envir = env)
+sys.source("R/refcheck.R", envir = env)
 
 # --- 2. Lab-mode assembly gates ---
 lab <- tempfile("labtest"); dir.create(lab)
@@ -248,6 +249,27 @@ if (requireNamespace("officer", quietly = TRUE)) {
 } else {
   cat("skip: docx extractor test (officer not installed)\n")
 }
+
+# --- 11. cross-reference integrity ---
+r <- tryCatch({
+  environment(env$check_cross_references) <- env
+  doc <- tempfile(fileext = ".txt")
+  writeLines(c(
+    "As shown in Table 1 and Figure 2, effects were strong.",
+    "Tables 1-2 summarize. See Table 4 for details.",
+    "[Table 1, header] a | b", "[Table 1, row 2] 1 | 2",
+    "[Table 2, header] c | d", "[Table 2, row 2] 3 | 4",
+    "[Table 3, header] e | f",
+    "Figure 1. Distribution.", "Figure 2. Estimates."
+  ), doc)
+  invisible(capture.output(env$check_cross_references(doc)))
+  reg <- get("crossref_registry", envir = .GlobalEnv)
+  any(reg$class == "Table" & reg$id == "4" & reg$issue == "dangling") &&
+    any(reg$class == "Table" & reg$id == "3" & reg$issue == "never_referenced") &&
+    any(reg$class == "Figure" & reg$id == "1" & reg$issue == "never_referenced") &&
+    !any(reg$class == "Table" & reg$id %in% c("1", "2") & reg$issue == "dangling")
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("cross-reference checker: dangling + orphans, ranges resolve") else fail("crossref:", r)
 
 if (!ok) quit(status = 1)
 cat("\nAll checks passed.\n")

@@ -2415,10 +2415,18 @@ data_annotation_prompt <- function() {
 #'   manuscript as a native Word comment via [annotate_manuscript()], so
 #'   findings can be accepted or dismissed in Word. The annotated copy is
 #'   written alongside the original, which is never modified.
+#' @param referee Logical. When TRUE, Referee Mode is appended: a
+#'   substantive review of the manuscript's reasoning. Five content-only
+#'   lenses (logic, methods, internal consistency, evidence presentation,
+#'   framing) run as parallel subagents where the host CLI supports them, a
+#'   deterministic cross-reference check runs alongside, every finding is
+#'   anchor-verified against the text, and confirmed findings are written
+#'   into the .docx as Word comments. Also available standalone via
+#'   [referee_prompt()].
 #' @return The prompt text (invisibly), printed to the console.
 #' @export
 reviewer_zero_prompt <- function(prereg_path = NULL, robustness = FALSE,
-                                 writeback = FALSE) {
+                                 writeback = FALSE, referee = FALSE) {
   prompt_path <- system.file("prompts", "reviewer_zero.md", package = "ClaudeR")
   if (!nzchar(prompt_path) || !file.exists(prompt_path)) {
     stop("Reviewer Zero prompt template not found. Is ClaudeR installed correctly?")
@@ -2448,6 +2456,34 @@ reviewer_zero_prompt <- function(prereg_path = NULL, robustness = FALSE,
     txt <- paste0(txt, "\n", ext)
   }
 
+  if (isTRUE(referee)) {
+    ext_path <- system.file("prompts", "reviewer_zero_referee.md", package = "ClaudeR")
+    ext <- paste(readLines(ext_path, warn = FALSE), collapse = "\n")
+    txt <- paste0(txt, "\n", ext)
+  }
+
+  cat(txt, "\n")
+  invisible(txt)
+}
+
+#' Print the Referee Mode prompt (standalone)
+#'
+#' Referee Mode is a substantive review of a manuscript's reasoning:
+#' argument logic, methods, internal consistency, evidence presentation,
+#' and framing, plus a deterministic cross-reference check. Findings are
+#' anchor-verified against the text and delivered as Word comments in the
+#' manuscript itself. This prints the protocol standalone, without the
+#' numeric audit passes; to run it after a full audit, use
+#' `reviewer_zero_prompt(referee = TRUE)`.
+#'
+#' @return The prompt text (invisibly), printed to the console.
+#' @export
+referee_prompt <- function() {
+  prompt_path <- system.file("prompts", "reviewer_zero_referee.md", package = "ClaudeR")
+  if (!nzchar(prompt_path) || !file.exists(prompt_path)) {
+    stop("Referee prompt template not found. Is ClaudeR installed correctly?")
+  }
+  txt <- paste(readLines(prompt_path, warn = FALSE), collapse = "\n")
   cat(txt, "\n")
   invisible(txt)
 }

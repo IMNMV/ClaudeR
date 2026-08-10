@@ -293,6 +293,7 @@ async def get_agent_introduction() -> str:
     lines.append("[Quick Reference]")
     lines.append("Available protocol prompts (run in R to read):")
     lines.append("  ClaudeR::reviewer_zero_prompt()     - Manuscript auditing protocol")
+    lines.append("  ClaudeR::referee_prompt()            - Substantive review (logic, methods, framing) as Word comments")
     lines.append("  ClaudeR::r_best_practices_prompt()   - Statistical analysis protocol")
     lines.append("  ClaudeR::multi_agent_prompt()        - Multi-agent coordination protocol")
     lines.append("")
@@ -1321,6 +1322,35 @@ async def list_tools() -> List[types.Tool]:
             },
             annotations={
                 "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="check_cross_references",
+            description=(
+                "Check a manuscript's internal cross-references: inventories declared "
+                "tables, figures, theorems/lemmas, appendices, and numbered sections, then "
+                "verifies every in-text mention ('see Table 4', 'Figures 2 and 3') against "
+                "that inventory. Flags dangling references (mentioned but nonexistent) and "
+                "tables/figures never referenced in the text. Classes whose numbering does "
+                "not survive Word extraction are reported as unverifiable rather than "
+                "false-flagged. Assigns crossref_registry to the R global environment. "
+                "Part of Referee Mode; also useful standalone after any manuscript revision."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document": {
+                        "type": "string",
+                        "description": "Path to the manuscript (.docx, .pdf, or plain text)."
+                    }
+                },
+                "required": ["document"]
+            },
+            annotations={
+                "readOnlyHint": False,
                 "destructiveHint": False,
                 "idempotentHint": True,
                 "openWorldHint": False,
@@ -2635,6 +2665,22 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             )]
         result_contents.append(types.TextContent(
             type="text", text=result.get("output", "No checkpoints.")
+        ))
+        return result_contents
+
+    elif name == "check_cross_references":
+        document = arguments.get("document", "").strip()
+        if not document:
+            return [types.TextContent(type="text", text="Error: 'document' parameter is required")]
+        code = f'ClaudeR::check_cross_references("{escape_r_string(document)}")'
+        result = await execute_r_code_via_addin(code)
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error checking cross-references: {result.get('error', 'Unknown error')}"
+            )]
+        result_contents.append(types.TextContent(
+            type="text", text=result.get("output", "Cross-reference check complete.")
         ))
         return result_contents
 

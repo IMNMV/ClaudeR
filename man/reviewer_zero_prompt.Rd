@@ -4,7 +4,12 @@
 \alias{reviewer_zero_prompt}
 \title{Print the Reviewer Zero prompt template}
 \usage{
-reviewer_zero_prompt(prereg_path = NULL, robustness = FALSE, writeback = FALSE)
+reviewer_zero_prompt(
+  prereg_path = NULL,
+  robustness = FALSE,
+  writeback = FALSE,
+  referee = FALSE
+)
 }
 \arguments{
 \item{prereg_path}{Optional path to a preregistration file (.docx, .pdf,
@@ -25,6 +30,15 @@ final step is appended: every flagged claim is written back into the
 manuscript as a native Word comment via [annotate_manuscript()], so
 findings can be accepted or dismissed in Word. The annotated copy is
 written alongside the original, which is never modified.}
+
+\item{referee}{Logical. When TRUE, Referee Mode is appended: a
+substantive review of the manuscript's reasoning. Five content-only
+lenses (logic, methods, internal consistency, evidence presentation,
+framing) run as parallel subagents where the host CLI supports them, a
+deterministic cross-reference check runs alongside, every finding is
+anchor-verified against the text, and confirmed findings are written
+into the .docx as Word comments. Also available standalone via
+[referee_prompt()].}
 }
 \value{
 The prompt text (invisibly), printed to the console.
