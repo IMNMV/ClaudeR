@@ -23,6 +23,8 @@
 
 This package, additionally, allows multiple agents to work on one script, or it can make multiple RStudio windows siloed so multiple agents can operate independently on different datasets. It's also compatible with Cursor and any service that support MCP servers.
 
+**Why this instead of the subscription tools?** Most paid "AI for researchers" products are workflow wrappers: a prompt, a free public API, and the same frontier models you already pay for through a CLI subscription. ClaudeR's answer is structural, beyond just price. The work happens in your live R session, where your actual data and models live, with a per-agent audit trail of every line executed, checkpoints that make any step reversible, and findings written back into your actual documents as Word comments. A web wrapper cannot offer any of that.
+
 ## Quick Start
 
 ```r
