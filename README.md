@@ -121,6 +121,7 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`get_session_history`**: View execution history filtered by agent ID.
 - **`read_file`**: Read any file from disk (.R, .qmd, .csv, .log, etc.) without needing it open in RStudio. Manuscripts are handled transparently: `.docx` and `.pdf` are extracted as structured text with headings marked and table cells kept separated. Supports `start_line`/`end_line` pagination for large files.
 - **`check_cross_references`**: Deterministic internal-reference integrity: flags dangling mentions ("see Table 4" with no Table 4) and tables/figures never referenced in the text.
+- **`annotate_manuscript`** (R function, used by the audit protocols): writes findings into a copy of a `.docx` as native, anchored Word comments, so authors can accept/dismiss the audit inside Word.
 - **`reconcile_values`**: The audit backbone. Extracts every numeric value from a manuscript and reconciles each against the numbers your code actually produced (logs, outputs, tables), respecting displayed precision, commas, percents, scientific notation, and `< .001` thresholds. Returns a per-value registry so nothing can be silently skipped.
 - **`get_active_document`**: Get the content of the active document in RStudio.
 - **`get_r_info`**: Get information about the R environment.
@@ -161,11 +162,13 @@ With these tools, you can:
 
 ClaudeR includes a built-in protocol for AI-driven technical review of academic manuscripts. The AI acts as "Reviewer Zero": systematically verifying that every p-value, coefficient, and confidence interval in your paper matches the code that produced it.
 
-**How it works (4-pass protocol):**
-1. **Extract**: The AI reads your manuscript block-by-block using paginated `read_file`, extracting every quantitative and methodological claim into a structured registry (a data.frame visible in your RStudio Environment pane).
+**How it works (core protocol):**
+1. **Extract**: The AI reads your manuscript block-by-block with paginated `read_file` — `.docx` and `.pdf` are extracted with structure preserved, including table cells — pulling every quantitative and methodological claim into a structured registry (a data.frame visible in your RStudio Environment pane). Audit-clean print options are set first, so console output can never truncate the precision being checked.
 2. **Verify**: The AI re-reads the source lines for each claim to confirm it didn't misread values. No code runs until every claim is verified.
-3. **Recompute**: The AI uses `search_project_code` and `probe_scripts` to locate the relevant R scripts, then `execute_r` to rerun the analyses and compare recomputed values against the manuscript. Methodological claims (e.g., "zero variance made testing impossible") are tested directly rather than accepted at face value.
-4. **References**: The AI uses `verify_references` to extract DOIs from the bibliography and check each against the CrossRef API. Metadata mismatches, non-resolving DOIs, and references without DOIs are flagged. In-text citations are cross-checked against the bibliography.
+3. **Reconcile & Recompute**: The backbone is the value sweep — `reconcile_values` enumerates *every* numeric value in the manuscript and supplement and reconciles each against the corpus of numbers your code actually produced, at the document's displayed precision. Every unmatched value must be recomputed or explained before the audit may proceed: completeness by construction, not by diligence. Claim-level recomputation then runs against clean-room script outputs (`probe_scripts` with output capture), so a stale object in your session can never make a check agree spuriously. Methodological claims (e.g., "zero variance made testing impossible") are tested directly rather than accepted at face value.
+4. **References**: `verify_references` checks every DOI against CrossRef and flags metadata mismatches, non-resolving DOIs, and **retracted or corrected papers**; arXiv preprints are resolved and matched against published versions; DOI-less references get bibliographic matching. In-text citations are cross-checked against the bibliography.
+
+**Optional extensions**, composable via arguments (examples below): a preregistration deviation audit (`prereg_path`), a specification-curve robustness check (`robustness`), write-back of every finding as Word comments (`writeback`), and **Referee Mode** (`referee`, or standalone `referee_prompt()`) — a substantive review of the reasoning itself: argument logic, methods, internal consistency, evidence presentation, and framing, run by parallel reviewer subagents with configurable model tiers, adversarial stances, and cross-vendor dispatch, with a deterministic `check_cross_references` pass and delivery as anchored Word comments.
 
 **To get started:**
 ```r
