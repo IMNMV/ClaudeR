@@ -8,7 +8,8 @@ referee_prompt(
   lenses = c("logic", "methods", "consistency", "evidence", "framing"),
   reviewers_per_lens = 1L,
   model = NULL,
-  cross_vendor = FALSE
+  cross_vendor = FALSE,
+  stance = c("balanced", "reviewer2")
 )
 }
 \arguments{
@@ -33,6 +34,13 @@ dispatch at least one logic and one methods reviewer to a different
 model vendor (codex/agy/qwen one-shot CLI calls) where installed.
 Cross-vendor agreement is the strongest available guard against
 same-model blind spots.}
+
+\item{stance}{`"balanced"` (default) or `"reviewer2"`. Reviewer 2 is a
+hostile-but-fair journal reviewer: the run opens with an unprimed read
+(three sentences: the paper's central claim, and would it be accepted
+at a strong venue) recorded before any lens work, findings use a
+fatal / must-fix / minor severity scale, and every finding is tagged
+with the study it concerns.}
 }
 \value{
 The prompt text (invisibly), printed to the console.

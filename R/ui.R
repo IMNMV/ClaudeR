@@ -433,6 +433,9 @@ check_background_job <- function(job_id) {
     if (length(marshaled_summary) > 0) {
       out$marshaled_outputs <- marshaled_summary
     }
+    if (consensus_banner_needed() && !is.null(out$output)) {
+      out$output <- paste0(out$output, "\n\n", CONSENSUS_BANNER)
+    }
     # Keep the result (not the process) so later polls replay it
     .claude_bg_jobs[[job_id]] <- list(final = out, started = job_info$started)
     return(out)
@@ -1305,6 +1308,17 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
     .claude_viewer_env$suppress <- TRUE
     on.exit(.claude_viewer_env$suppress <- FALSE, add = TRUE)
 
+    # Expose the executing agent's identity to coordination functions
+    # (cr_send, confirm_agreement, ...) so attribution needs no arguments.
+    old_agent_env <- Sys.getenv("CLAUDER_AGENT_ID", "")
+    if (!is.null(agent_id) && nzchar(agent_id)) {
+      Sys.setenv(CLAUDER_AGENT_ID = agent_id)
+    }
+    on.exit({
+      if (nzchar(old_agent_env)) Sys.setenv(CLAUDER_AGENT_ID = old_agent_env)
+      else Sys.unsetenv("CLAUDER_AGENT_ID")
+    }, add = TRUE)
+
     # sink() only diverts stdout. Warnings and message() go to stderr, so
     # without this the agent never sees them -- including the ones that matter
     # most (non-convergence, singular fits, NAs introduced by coercion).
@@ -1437,6 +1451,12 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
       output = truncate_output(output)
     )
 
+    # Consensus gate: while a proposed plan lacks the required verbatim
+    # confirmations, every response carries the banner. Deliberately loud.
+    if (consensus_banner_needed()) {
+      response$output <- paste0(response$output, "\n\n", CONSENSUS_BANNER)
+    }
+
     # Include the result value if available
     if (exists("result") && !is.null(result$value)) {
       response$result <- summarize_result_value(result$value)
@@ -1515,6 +1535,12 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
     )
     if (length(partial_output) > 0) {
       response$output <- truncate_output(partial_output)
+    }
+    if (consensus_banner_needed()) {
+      response$output <- paste0(
+        if (is.null(response$output)) "" else paste0(response$output, "\n\n"),
+        CONSENSUS_BANNER
+      )
     }
     return(response)
   }, finally = {
@@ -2470,7 +2496,9 @@ build_referee_text <- function(lenses = c("logic", "methods", "consistency",
                                           "evidence", "framing"),
                                reviewers_per_lens = 1L,
                                model = NULL,
-                               cross_vendor = FALSE) {
+                               cross_vendor = FALSE,
+                               stance = c("balanced", "reviewer2")) {
+  stance <- match.arg(stance)
   valid <- c("logic", "methods", "consistency", "evidence", "framing")
   bad <- setdiff(lenses, valid)
   if (length(bad) > 0) {
@@ -2536,10 +2564,39 @@ build_referee_text <- function(lenses = c("logic", "methods", "consistency",
     stop("Referee prompt template not found. Is ClaudeR installed correctly?")
   }
   txt <- paste(readLines(prompt_path, warn = FALSE), collapse = "\n")
+  stance_block <- if (identical(stance, "reviewer2")) {
+    paste0(
+      "\nStance for this run: HOSTILE BUT FAIR REVIEWER 2.\n\n",
+      "### Step R0: Unprimed read (FIRST, before any lens work)\n\n",
+      "Before applying any lens or reading any registry, give your unprimed\n",
+      "read in exactly three sentences: what is the paper's central claim,\n",
+      "and would you accept it at a strong venue as it stands? Record these\n",
+      "three sentences in the report verbatim, written before any detailed\n",
+      "finding exists, so the gestalt judgment is not contaminated by the\n",
+      "defect hunt that follows.\n\n",
+      "Tone for all comments: direct, skeptical, and unsparing about\n",
+      "weaknesses, while remaining scrupulously fair. Every criticism is\n",
+      "anchored and defensible; no sneering; genuine strengths are\n",
+      "acknowledged where they bear on the accept judgment. Rank the final\n",
+      "findings by severity, and tag each with the study it concerns.\n"
+    )
+  } else ""
+
+  severity_scale <- if (identical(stance, "reviewer2")) {
+    paste0("`fatal` (invalidates a central claim; sinks the paper at a strong\n",
+           "  venue) / `must-fix` (blocks acceptance until addressed) /\n",
+           "  `minor` (substantive but small)")
+  } else {
+    paste0("`major` (undermines a conclusion) / `moderate` (weakens or\n",
+           "  confuses an argument) / `minor` (substantive but small)")
+  }
+
   txt <- gsub("{{LENSES}}", paste(lenses, collapse = ", "), txt, fixed = TRUE)
   txt <- gsub("{{REVIEWERS_PER_LENS}}", as.character(reviewers_per_lens), txt, fixed = TRUE)
   txt <- gsub("{{MODEL_DIRECTIVE}}", model_directive, txt, fixed = TRUE)
   txt <- gsub("{{VENDOR_DIRECTIVE}}", vendor_directive, txt, fixed = TRUE)
+  txt <- gsub("{{STANCE_BLOCK}}", stance_block, txt, fixed = TRUE)
+  txt <- gsub("{{SEVERITY_SCALE}}", severity_scale, txt, fixed = TRUE)
   txt
 }
 
@@ -2571,16 +2628,24 @@ build_referee_text <- function(lenses = c("logic", "methods", "consistency",
 #'   model vendor (codex/agy/qwen one-shot CLI calls) where installed.
 #'   Cross-vendor agreement is the strongest available guard against
 #'   same-model blind spots.
+#' @param stance `"balanced"` (default) or `"reviewer2"`. Reviewer 2 is a
+#'   hostile-but-fair journal reviewer: the run opens with an unprimed read
+#'   (three sentences: the paper's central claim, and would it be accepted
+#'   at a strong venue) recorded before any lens work, findings use a
+#'   fatal / must-fix / minor severity scale, and every finding is tagged
+#'   with the study it concerns.
 #' @return The prompt text (invisibly), printed to the console.
 #' @export
 referee_prompt <- function(lenses = c("logic", "methods", "consistency",
                                       "evidence", "framing"),
                            reviewers_per_lens = 1L,
                            model = NULL,
-                           cross_vendor = FALSE) {
+                           cross_vendor = FALSE,
+                           stance = c("balanced", "reviewer2")) {
   txt <- build_referee_text(lenses = lenses,
                             reviewers_per_lens = reviewers_per_lens,
-                            model = model, cross_vendor = cross_vendor)
+                            model = model, cross_vendor = cross_vendor,
+                            stance = stance)
   cat(txt, "\n")
   invisible(txt)
 }

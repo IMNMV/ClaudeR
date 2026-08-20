@@ -22,6 +22,7 @@ sys.source("R/writeback.R", envir = env)
 sys.source("R/citations.R", envir = env)
 sys.source("R/reconcile.R", envir = env)
 sys.source("R/refcheck.R", envir = env)
+sys.source("R/coordination.R", envir = env)
 
 # --- 2. Lab-mode assembly gates ---
 lab <- tempfile("labtest"); dir.create(lab)
@@ -304,6 +305,58 @@ r <- tryCatch({
     inherits(tryCatch(env$referee_prompt(lenses = "vibes"), error = function(e) e), "error")
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("referee v2: lenses, models, stances, cross-vendor, validation") else fail("referee v2:", r)
+
+# --- 13. coordination v2: log, cursors, claims, consensus gate ---
+r <- tryCatch({
+  tdir <- tempfile("coord")
+  assign("path.expand", function(x) sub("^~", tdir, x), envir = env)
+  cs <- "citest"
+  env$cr_send("hello", agent = "alpha", session = cs)
+  env$cr_send(list(name = "READY"), type = "signal", to = "beta", agent = "alpha", session = cs)
+  inbox <- env$cr_inbox(agent = "beta", session = cs)
+  env$cr_ack(max(inbox$id), agent = "beta", session = cs)
+  ok1 <- nrow(inbox) == 2 && nrow(env$cr_inbox(agent = "beta", session = cs)) == 0
+
+  ok2 <- isTRUE(env$cr_claim("t1", agent = "alpha", session = cs)) &&
+    isFALSE(suppressMessages(env$cr_claim("t1", agent = "beta", session = cs)))
+  env$cr_done("t1", agent = "alpha", session = cs)
+  ok2 <- ok2 && isTRUE(env$cr_claim("t1", agent = "beta", session = cs))
+
+  env$cr_fact("k", "v1", agent = "alpha", session = cs)
+  env$cr_fact("k", "v2", agent = "beta", session = cs)
+  ok3 <- identical(env$cr_facts(session = cs)$k, "v2")
+
+  suppressMessages(env$propose_plan("plan", agent = "alpha", session = cs))
+  armed <- env$consensus_banner_needed(session = cs)
+  bad <- tryCatch({ env$confirm_agreement("sure", agent = "beta", session = cs); FALSE },
+                  error = function(e) TRUE)
+  s <- "I CONFIRM I HAVE READ THEIR SUGGESTION AND WE HAVE BOTH REACHED AN AGREEMENT TO MOVE FORWARD"
+  suppressMessages(env$confirm_agreement(s, agent = "alpha", session = cs))
+  still <- env$consensus_banner_needed(session = cs)
+  suppressMessages(env$confirm_agreement(s, agent = "beta", session = cs))
+  disarmed <- !env$consensus_banner_needed(session = cs)
+
+  n0 <- length(env$coord_events(session = cs))
+  for (i in 1:20) {
+    env$cr_send(paste("a", i), agent = "alpha", session = cs)
+    env$cr_send(paste("b", i), agent = "beta", session = cs)
+  }
+  ok4 <- length(env$coord_events(session = cs)) == n0 + 40
+
+  ok1 && ok2 && ok3 && armed && bad && still && disarmed && ok4
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("coordination v2: typed log, cursors, claims, consensus, no clobber") else fail("coordination:", r)
+
+# --- 14. reviewer2 stance ---
+r <- tryCatch({
+  t1 <- capture.output(env$referee_prompt(stance = "reviewer2"))
+  t2 <- capture.output(env$referee_prompt())
+  any(grepl("Step R0: Unprimed read", t1, fixed = TRUE)) &&
+    any(grepl("fatal", t1)) && any(grepl("must-fix", t1)) &&
+    !any(grepl("Step R0", t2, fixed = TRUE)) &&
+    !any(grepl("{{", c(t1, t2), fixed = TRUE))
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("reviewer2 stance: unprimed read + fatal/must-fix scale") else fail("reviewer2:", r)
 
 if (!ok) quit(status = 1)
 cat("\nAll checks passed.\n")

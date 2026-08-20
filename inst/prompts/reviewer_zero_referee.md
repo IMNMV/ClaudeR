@@ -8,6 +8,7 @@ the code. Now you referee the *reasoning*, like an excellent, adversarial-
 but-fair colleague reading the paper before submission. Content only:
 arguments, methods, internal consistency, evidence. No copyediting, no
 grammar, no style preferences, no praise padding.
+{{STANCE_BLOCK}}
 
 If you are running Referee Mode standalone (not after a full Reviewer Zero
 audit), do this setup first:
@@ -91,8 +92,9 @@ Every finding uses this exact structure:
 
 - `lens`: which lens produced it
 - `reviewer`: which reviewer (e.g. "logic/prosecutor", "logic/verifier")
-- `severity`: `major` (undermines a conclusion) / `moderate` (weakens or
-  confuses an argument) / `minor` (substantive but small)
+- `severity`: {{SEVERITY_SCALE}}
+- `study`: which study the finding concerns (Study 1, Study 2, ..., or
+  General for paper-wide issues)
 - `anchor`: a VERBATIM quote of 10-30 characters from the manuscript at the
   location of the issue (copy-paste; it will be existence-checked)
 - `comment`: the referee comment, written to the author: specific, concrete,
@@ -130,8 +132,8 @@ verdict:
    that misread the text or are stylistic despite the rules. Record the
    reason.
 4. Sanity-check severity: downgrade anything a careful author would
-   shrug at. `major` must be reserved for issues that change what a
-   reader should believe. A finding with `n_independent >= 2` (and
+   shrug at. The top severity is reserved for issues that change what a
+   reader should believe about the paper's claims. A finding with `n_independent >= 2` (and
    especially one surfaced across model vendors) warrants extra care
    before dropping; a single-reviewer finding warrants extra care before
    confirming as major.

@@ -308,6 +308,114 @@ async def get_agent_introduction() -> str:
     lines.append("[End ClaudeR Agent Context]")
     return "\n".join(lines)
 
+# --- Coordination v2: shared JSONL event log ---
+# The R package and this bridge read/write the same append-only file, so
+# coordination works even while the R session is busy executing code, and
+# wait_for_message can long-poll without a single R roundtrip.
+
+def _coord_dir() -> str:
+    get_r_addin_url()  # latch a session if not bound yet
+    session = _target_session or "default"
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", session)
+    d = os.path.join(os.path.expanduser("~"), ".clauder_coord", safe)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    return d
+
+
+def _coord_log_path() -> str:
+    return os.path.join(_coord_dir(), "events.jsonl")
+
+
+def _coord_append(ev_type: str, body: Any, to: str = "all",
+                  reply_to: Optional[int] = None) -> None:
+    ev = {
+        "ts": datetime.now().strftime("%Y-%m-%dT%H:%M:%S.") +
+              f"{datetime.now().microsecond // 1000:03d}",
+        "from": _agent_id,
+        "type": ev_type,
+        "to": to,
+        "body": body,
+    }
+    if reply_to is not None:
+        ev["reply_to"] = int(reply_to)
+    line = json.dumps(ev, ensure_ascii=False)
+    if len(line) > 4000:
+        raise ValueError("Coordination event too large (> 4000 chars).")
+    with open(_coord_log_path(), "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
+def _coord_events() -> List[Dict[str, Any]]:
+    path = _coord_log_path()
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path, encoding="utf-8") as f:
+        for i, raw in enumerate(f, start=1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                ev = json.loads(raw)
+                ev["id"] = i
+                out.append(ev)
+            except json.JSONDecodeError:
+                continue
+    return out
+
+
+def _coord_cursor_path() -> str:
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", _agent_id or "unknown")
+    return os.path.join(_coord_dir(), f"cursor_{safe}.txt")
+
+
+def _coord_cursor() -> int:
+    try:
+        with open(_coord_cursor_path()) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def _coord_set_cursor(through_id: int) -> None:
+    with open(_coord_cursor_path(), "w") as f:
+        f.write(str(int(through_id)))
+
+
+def _coord_unread(from_agent: Optional[str] = None,
+                  ev_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    cur = _coord_cursor()
+    me = _agent_id
+    out = []
+    for ev in _coord_events():
+        if ev["id"] <= cur or ev.get("from") == me:
+            continue
+        if ev.get("to") not in ("all", me):
+            continue
+        if ev.get("type") == "heartbeat":
+            continue
+        if from_agent and ev.get("from") != from_agent:
+            continue
+        if ev_type and ev.get("type") != ev_type:
+            continue
+        out.append(ev)
+    return out
+
+
+def _coord_format(events: List[Dict[str, Any]]) -> str:
+    lines = []
+    for ev in events:
+        body = ev.get("body")
+        if isinstance(body, dict) and set(body.keys()) == {"text"}:
+            body_txt = body["text"]
+        else:
+            body_txt = json.dumps(body, ensure_ascii=False)
+        reply = f" (reply to #{ev['reply_to']})" if ev.get("reply_to") else ""
+        lines.append(f"[#{ev['id']} {ev.get('ts','')} {ev.get('from','?')} "
+                     f"-> {ev.get('to','all')} | {ev.get('type','message')}{reply}] {body_txt}")
+    return "\n".join(lines)
+
+
 # --- Annotation job helpers (subprocess-per-row batch mode) ---
 
 def _find_cli_path(tool: str) -> Optional[str]:
@@ -1328,6 +1436,100 @@ async def list_tools() -> List[types.Tool]:
             }
         ),
         types.Tool(
+            name="send_message",
+            description=(
+                "Send a typed message to other agents on this session's coordination log. "
+                "Prefer typed signals over prose for anything machine-checkable: "
+                "type='signal' with body={'name': 'KIT_READY', 'tile': '3094,3493'} beats "
+                "hoping the other agent greps your prose. Works even while the R session "
+                "is busy (the log is a shared file, not R state), and survives restarts."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "body": {
+                        "description": "Message payload: a string, or an object for typed signals.",
+                        "anyOf": [{"type": "string"}, {"type": "object"}]
+                    },
+                    "to": {"type": "string", "description": "Recipient agent id, or 'all' (default)."},
+                    "type": {"type": "string", "description": "Event type: message (default), signal, status, handoff, question."},
+                    "reply_to": {"type": "number", "description": "Event id this replies to (threading)."}
+                },
+                "required": ["body"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="check_messages",
+            description=(
+                "Read unread coordination events addressed to you (or to all), then advance "
+                "your read cursor. Each agent has its own cursor; reading never mutates "
+                "shared state, so agents cannot clobber each other."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ack": {"type": "boolean", "description": "Advance the cursor past returned events (default true)."}
+                }
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="wait_for_message",
+            description=(
+                "Block until a matching coordination event arrives, or the timeout passes. "
+                "Use this instead of repeated polling: it returns the instant another agent "
+                "writes, which removes coordination latency, crossed messages, and the need "
+                "for a human to schedule polls. Does not touch the R session, so the other "
+                "agent can keep executing code while you wait. Filter by sender and/or type "
+                "for rendezvous ('wait until beta sends signal HANDOFF_READY')."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "timeout_s": {"type": "number", "description": "Max seconds to wait (default 300, cap 1800)."},
+                    "from_agent": {"type": "string", "description": "Only return events from this agent."},
+                    "type": {"type": "string", "description": "Only return events of this type."}
+                }
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="coordination_roster",
+            description=(
+                "List agents seen on this session's coordination log with last-seen times "
+                "and staleness. Presence is stamped by every write, so liveness does not "
+                "depend on manual heartbeats."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "stale_after_s": {"type": "number", "description": "Seconds after which an agent is flagged stale (default 900)."}
+                }
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
             name="check_cross_references",
             description=(
                 "Check a manuscript's internal cross-references: inventories declared "
@@ -1529,7 +1731,9 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
     global _target_session, _agent_introduced
 
     # These tools check Python-side state only — skip addin check
-    _skip_addin_check = {"list_sessions", "connect_session", "load_annotation_data", "annotate", "run_annotation_job", "get_annotation_job_status", "cancel_annotation_job"}
+    _skip_addin_check = {"list_sessions", "connect_session", "load_annotation_data", "annotate", "run_annotation_job", "get_annotation_job_status", "cancel_annotation_job",
+                         # File-based coordination must work while R is busy or down
+                         "send_message", "check_messages", "wait_for_message", "coordination_roster"}
     if name not in _skip_addin_check:
         # Check if the R addin is running
         if not await check_addin_status():
@@ -2665,6 +2869,86 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             )]
         result_contents.append(types.TextContent(
             type="text", text=result.get("output", "No checkpoints.")
+        ))
+        return result_contents
+
+    elif name == "send_message":
+        body = arguments.get("body")
+        if body is None or (isinstance(body, str) and not body.strip()):
+            return [types.TextContent(type="text", text="Error: 'body' is required")]
+        if isinstance(body, str):
+            body = {"text": body}
+        try:
+            _coord_append(arguments.get("type", "message"), body,
+                          to=arguments.get("to", "all"),
+                          reply_to=arguments.get("reply_to"))
+        except ValueError as e:
+            return [types.TextContent(type="text", text=f"Error: {e}")]
+        result_contents.append(types.TextContent(
+            type="text", text="Message sent to the coordination log."
+        ))
+        return result_contents
+
+    elif name == "check_messages":
+        unread = _coord_unread()
+        if not unread:
+            result_contents.append(types.TextContent(
+                type="text", text="No unread coordination events."
+            ))
+            return result_contents
+        if arguments.get("ack", True):
+            _coord_set_cursor(max(ev["id"] for ev in unread))
+        result_contents.append(types.TextContent(
+            type="text",
+            text=f"{len(unread)} unread event(s):\n" + _coord_format(unread)
+        ))
+        return result_contents
+
+    elif name == "wait_for_message":
+        timeout_s = min(float(arguments.get("timeout_s", 300)), 1800.0)
+        from_agent = arguments.get("from_agent")
+        ev_type = arguments.get("type")
+        waited = 0.0
+        while waited < timeout_s:
+            unread = _coord_unread(from_agent=from_agent, ev_type=ev_type)
+            if unread:
+                _coord_set_cursor(max(ev["id"] for ev in unread))
+                result_contents.append(types.TextContent(
+                    type="text",
+                    text=(f"Event arrived after {round(waited)}s:\n" +
+                          _coord_format(unread))
+                ))
+                return result_contents
+            await asyncio.sleep(2)
+            waited += 2
+        result_contents.append(types.TextContent(
+            type="text",
+            text=(f"No matching event within {round(timeout_s)}s. The other "
+                  f"agent may be busy or offline; use coordination_roster to "
+                  f"check presence, or wait again.")
+        ))
+        return result_contents
+
+    elif name == "coordination_roster":
+        stale_after = float(arguments.get("stale_after_s", 900))
+        events = _coord_events()
+        if not events:
+            return [types.TextContent(type="text", text="No coordination activity yet on this session.")]
+        last: Dict[str, str] = {}
+        for ev in events:
+            last[ev.get("from", "?")] = ev.get("ts", "")
+        lines = []
+        now = datetime.now()
+        for agent_name, ts in sorted(last.items()):
+            try:
+                seen = datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")
+                ago = (now - seen).total_seconds()
+                flag = " [STALE]" if ago > stale_after else ""
+                lines.append(f"  {agent_name}: last seen {round(ago)}s ago{flag}")
+            except ValueError:
+                lines.append(f"  {agent_name}: last seen {ts}")
+        result_contents.append(types.TextContent(
+            type="text", text="Coordination roster:\n" + "\n".join(lines)
         ))
         return result_contents
 
