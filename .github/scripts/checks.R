@@ -23,6 +23,9 @@ sys.source("R/citations.R", envir = env)
 sys.source("R/reconcile.R", envir = env)
 sys.source("R/refcheck.R", envir = env)
 sys.source("R/coordination.R", envir = env)
+sys.source("R/screening.R", envir = env)
+sys.source("R/grantpanel.R", envir = env)
+sys.source("R/response.R", envir = env)
 
 # --- 2. Lab-mode assembly gates ---
 lab <- tempfile("labtest"); dir.create(lab)
@@ -357,6 +360,57 @@ r <- tryCatch({
     !any(grepl("{{", c(t1, t2), fixed = TRUE))
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("reviewer2 stance: unprimed read + fatal/must-fix scale") else fail("reviewer2:", r)
+
+# --- 15. screening: kappa exactness + dual-pass report ---
+r <- tryCatch({
+  a <- c(rep("include", 45), rep("include", 5), rep("exclude", 10), rep("exclude", 40))
+  b <- c(rep("include", 45), rep("exclude", 5), rep("include", 10), rep("exclude", 40))
+  k_ok <- isTRUE(all.equal(env$cohens_kappa(a, b), 0.7))
+
+  d0 <- data.frame(title = paste("Paper", 1:10),
+                   include = c(rep("include", 4), rep("exclude", 5), "maybe"),
+                   reason = c(rep("", 4), rep("wrong_design", 3), "no_outcome", "no_outcome", ""))
+  f1 <- tempfile(fileext = ".csv"); write.csv(d0, f1, row.names = FALSE)
+  d1 <- d0; d1$include[c(2, 9)] <- c("exclude", "include")
+  f2 <- tempfile(fileext = ".csv"); write.csv(d1, f2, row.names = FALSE)
+  invisible(capture.output(res <- env$screening_report(f1, f2)))
+  conf <- get("screening_conflicts", envir = .GlobalEnv)
+  k_ok && nrow(conf) == 2 && all(conf$row == c(2, 9)) && "title" %in% names(conf) &&
+    isTRUE(all.equal(res$percent_agreement, 80))
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("screening: kappa exact, conflicts isolated, PRISMA counts") else fail("screening:", r)
+
+# --- 16. grant panel + reviewer response prompts assemble ---
+r <- tryCatch({
+  t1 <- capture.output(env$grant_panel_prompt("nih"))
+  t2 <- capture.output(env$grant_panel_prompt("nsf", model = "opus"))
+  t3 <- capture.output(env$reviewer_response_prompt())
+  any(grepl("1 to 9 scale", t1, fixed = TRUE)) &&
+    any(grepl("Intellectual Merit", t2, fixed = TRUE)) &&
+    any(grepl('model = "opus"', t2, fixed = TRUE)) &&
+    any(grepl("response_registry", t3, fixed = TRUE)) &&
+    !any(grepl("{{", c(t1, t2), fixed = TRUE))
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("grant panel + reviewer response prompts") else fail("panel/response prompts:", r)
+
+# --- 17. response letter export ---
+r <- tryCatch({
+  reg <- data.frame(point_id = c("R1.1", "R2.1"), reviewer = c("Reviewer 1", "Reviewer 2"),
+                    verbatim = c("Please justify the sample size.", "Figure 2 is unclear."),
+                    response = c("We added a power analysis (Section 2.1).",
+                                 "We redrew Figure 2 with larger labels."),
+                    stringsAsFactors = FALSE)
+  f <- tempfile(fileext = ".md")
+  suppressMessages(env$export_response_letter(reg, f))
+  txt <- readLines(f)
+  bad <- data.frame(point_id = "R1.2", reviewer = "Reviewer 1",
+                    verbatim = "x", response = "", stringsAsFactors = FALSE)
+  gate <- inherits(tryCatch(suppressMessages(env$export_response_letter(bad, tempfile())),
+                            error = function(e) e), "error")
+  any(grepl("## Reviewer 1", txt, fixed = TRUE)) &&
+    any(grepl("**R2.1.**", txt, fixed = TRUE)) && gate
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("response letter export + undrafted gate") else fail("response letter:", r)
 
 if (!ok) quit(status = 1)
 cat("\nAll checks passed.\n")

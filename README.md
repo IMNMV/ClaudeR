@@ -19,6 +19,10 @@
 
 ---
 
+> **Heads up: a name change is coming.** Another R package already uses the name claudeR, so this package will be renamed in the next couple of weeks. Only the name will change. The tools, the installers, and your workflows stay exactly the same. Install instructions here will be updated the day it happens.
+
+---
+
 **ClaudeR** is an R package that forges a direct link between RStudio and MCP configured LLM agents like Claude Code or Codex. This allows interactive coding sessions where the agent can execute code in your active RStudio environment so it can see the executed code and any generated plots in real-time. If you need help editing a script, a quick analysis done, or an LLM to audit your statistical claims against any manuscript before submission: ClaudeR has got your back.
 
 This package, additionally, allows multiple agents to work on one script, or it can make multiple RStudio windows siloed so multiple agents can operate independently on different datasets. It's also compatible with Cursor and any service that support MCP servers.
@@ -46,18 +50,20 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
-- **Coordination v2 + consensus gate (R 0.9.0 / clauder-mcp 0.11.0).** The multi-agent board is now a typed, append-only event log on disk, designed from field reports of real multi-hour multi-agent sessions: typed signals instead of prose-grepping, per-agent read cursors (the shared-dataframe race is structurally impossible), reply threading, lease-based task claims, a fact store for shared state, auto-stamped presence, and a `wait_for_message` tool that blocks until a partner's event arrives, without touching the busy R session. New consensus gate: after `propose_plan()`, every execution response carries an agreement banner until all agents run `confirm_agreement()` with the required sentence verbatim; only then is the plan marked approved. Plus `referee_prompt(stance = "reviewer2")`: a hostile-but-fair Reviewer 2 that opens with an unprimed three-sentence read (central claim; would a strong venue accept it?) and ranks findings fatal / must-fix / minor, each tagged to the study it concerns.
+- **Researcher workflow release (R 0.10.0 / clauder-mcp 0.12.0).** Three workflows that paid tools charge for, built on machinery ClaudeR already had. (1) Systematic review screening: two independent AI screeners from different model families judge every abstract against your criteria, and the new `screening_report` tool computes agreement, Cohen's kappa, PRISMA flow counts, and the conflict set, so the human reads only the disagreements. (2) Grant Panel Mode: `grant_panel_prompt(rubric = "nih")` convenes a mock study section, one reviewer per criterion, anchored weaknesses, and a ranked list of revisions that would move the score. (3) Response to Reviewers: `reviewer_response_prompt()` parses a decision letter into a point-by-point registry, reruns analyses so answers carry real computed numbers, gates until every point is answered, and exports the response letter with `export_response_letter()` plus Word comments in the manuscript.
+
+- **Coordination v2 + consensus gate (R 0.9.0 / clauder-mcp 0.11.0).** The multi-agent board is now a typed, append-only event log on disk, designed from field reports of real multi-hour multi-agent sessions: typed signals instead of prose-grepping, per-agent read cursors (the shared-dataframe race is structurally impossible), reply threading, lease-based task claims, a fact store for shared state, auto-stamped presence, and a `wait_for_message` tool that blocks until a partner's event arrives, without touching the busy R session. New consensus gate: after `propose_plan()`, every execution response carries an agreement banner until all agents run `confirm_agreement()` with the required sentence verbatim. Only then is the plan marked approved. Plus `referee_prompt(stance = "reviewer2")`: a hostile-but-fair Reviewer 2 that opens with an unprimed three-sentence read (central claim, and would a strong venue accept it?) and ranks findings fatal / must-fix / minor, each tagged to the study it concerns.
 
 - **Referee Mode v2: configurable reviewers (R 0.8.0).** `referee_prompt()` now takes `lenses` (run any subset), `reviewers_per_lens` (2 = adversarial prosecutor + verifier pairs, 3 adds a backwards reader), `model` (a tier for all subagents, e.g. `"haiku"` for quick passes or `"opus"` for submission-grade, or a named per-lens vector), and `cross_vendor = TRUE` to dispatch logic/methods reviewers to a different model vendor via codex/agy/qwen one-shots. Anti-collapse rules are now mandatory in the protocol: reviewer prompts must be written from scratch per lens and stance, the consistency lens reads back-to-front, and every finding carries a corroboration count across independent reviewers.
 - **Referee Mode (R 0.7.0 / clauder-mcp 0.10.0).** The substantive manuscript review that paid services charge ~$50 a pass for, running free on the subscription you already have, and delivered where it belongs: as Word comments in your manuscript. `reviewer_zero_prompt(referee = TRUE)` (or standalone `referee_prompt()`) runs five content-only review lenses (argument logic, methods, internal consistency, evidence presentation, framing) as parallel subagents where the CLI supports them. Every finding must anchor to a verbatim quote and survive an independent verification pass before it lands in the document, severities are kept honest, and a clean report on a sound paper is a valid outcome. Alongside it, the new `check_cross_references` tool deterministically catches dangling references ("see Table 4" when Table 4 no longer exists) and tables or figures the text never mentions.
 
-- **Value-first auditing (R 0.6.0 / clauder-mcp 0.9.0).** Built from field feedback after a full manuscript+supplement audit. `read_file` now transparently extracts `.docx`/`.pdf` (previously returned raw bytes), and the extractor preserves structure: headings marked, table cells emitted row-wise with separators (they were previously dropped entirely). New `reconcile_values` tool: enumerates every number in a manuscript and reconciles each against the corpus your code produced, respecting displayed precision (5038.5 matches 5038.46), commas, percents, scientific notation, and `< .001` thresholds; the per-value `values_registry` makes numeric completeness a construction, not a diligence hope. Reviewer Zero now sets audit-clean print options (no more tibble 3-sig-fig false alarms), gates on the value sweep, and takes final verdicts from clean-room runs via `probe_scripts(capture_output = TRUE)`. CrossRef lookups retry with backoff instead of silently truncating the reference check on 429s.
+- **Value-first auditing (R 0.6.0 / clauder-mcp 0.9.0).** Built from field feedback after a full manuscript+supplement audit. `read_file` now transparently extracts `.docx`/`.pdf` (previously returned raw bytes), and the extractor preserves structure: headings marked, table cells emitted row-wise with separators (they were previously dropped entirely). New `reconcile_values` tool: enumerates every number in a manuscript and reconciles each against the corpus your code produced, respecting displayed precision (5038.5 matches 5038.46), commas, percents, scientific notation, and `< .001` thresholds. The per-value `values_registry` makes numeric completeness a construction, not a diligence hope. Reviewer Zero now sets audit-clean print options (no more tibble 3-sig-fig false alarms), gates on the value sweep, and takes final verdicts from clean-room runs via `probe_scripts(capture_output = TRUE)`. CrossRef lookups retry with backoff instead of silently truncating the reference check on 429s.
 
-- **Researcher toolkit release (R 0.5.0 / clauder-mcp 0.8.0).** Five additions aimed at getting papers out the door. (1) Reviewer Zero write-back: `reviewer_zero_prompt(writeback = TRUE)` turns every flagged claim into a native Word comment in a copy of the manuscript, via the new `annotate_manuscript()`. (2) Citation upgrades: `verify_references` now flags retracted/corrected papers using Crossref update notices, resolves arXiv IDs (with a cite-the-published-version check), and bibliographically matches DOI-less references; new `search_citations` (OpenAlex) and `get_bibtex` (doi.org) tools mean agents look up citations instead of inventing them. (3) `generate_notebook`: session logs become narrated Quarto lab notebooks that re-run the analysis when rendered. (4) `generate_codebook`: one call produces the variable-level codebook plus package/script/output inventory that OSF and journals require. (5) All wired into CI.
-- **Session checkpoints (R 0.4.0 / clauder-mcp 0.7.0).** Three new MCP tools: `checkpoint_session` snapshots the R global environment to disk, `restore_session` rolls it back (saving the current state first, so restores are undoable), and `list_checkpoints` shows what's available. Agents are briefed to checkpoint before risky operations; users can always recover from the console with `ClaudeR::restore_session()`.
+- **Researcher toolkit release (R 0.5.0 / clauder-mcp 0.8.0).** Five additions aimed at getting papers out the door. (1) Reviewer Zero write-back: `reviewer_zero_prompt(writeback = TRUE)` turns every flagged claim into a native Word comment in a copy of the manuscript, via the new `annotate_manuscript()`. (2) Citation upgrades: `verify_references` now flags retracted/corrected papers using Crossref update notices, resolves arXiv IDs (with a cite-the-published-version check), and bibliographically matches DOI-less references. New `search_citations` (OpenAlex) and `get_bibtex` (doi.org) tools mean agents look up citations instead of inventing them. (3) `generate_notebook`: session logs become narrated Quarto lab notebooks that re-run the analysis when rendered. (4) `generate_codebook`: one call produces the variable-level codebook plus package/script/output inventory that OSF and journals require. (5) All wired into CI.
+- **Session checkpoints (R 0.4.0 / clauder-mcp 0.7.0).** Three new MCP tools: `checkpoint_session` snapshots the R global environment to disk, `restore_session` rolls it back (saving the current state first, so restores are undoable), and `list_checkpoints` shows what's available. Agents are briefed to checkpoint before risky operations. Users can always recover from the console with `ClaudeR::restore_session()`.
 - **Reviewer Zero: preregistration audits and robustness checks.** `reviewer_zero_prompt(prereg_path = ...)` appends a Pass 5 that audits the executed analysis against the preregistered plan and produces a complete deviation report. `reviewer_zero_prompt(robustness = TRUE)` appends a Pass 6 that runs a specification-curve analysis on the primary claims: defensible alternative specs fan out through background jobs and come back as a sensitivity table plus a specification curve.
 - **Deep-dive audit release (R 0.3.1 / clauder-mcp 0.6.2).** 20+ bug fixes across the addin, bridge, and Lab Mode: reopened addin UIs now share live state with the running server (settings toggles work again after closing/reopening the UI), plot capture is device-aware (`png(); plot(); dev.off()` can no longer resend a stale on-screen figure), `modify_code_section` no longer corrupts replacements containing backslashes, async job results are idempotent and survive bridge timeouts, error responses include everything printed before the error, one agent's long computation no longer tells other agents the addin is down, and Lab Mode's Round-2+ re-verification gate actually fires. Session tokens now come from OS entropy. Logging is on by default. CI (GitHub Actions) now guards every push: R functional checks plus a real MCP stdio handshake against the built bridge.
-- **mcp SDK pinned to 1.x.** The MCP 2026-07-28 spec release shipped `mcp` 2.0.0 to PyPI, which removes the server API the bridge is built on. `clauder-mcp` >= 0.6.1 pins `mcp<2`; if your bridge broke, run `uvx --refresh clauder-mcp`. SDK 2.0 migration (and the new Tasks extension for async tools) is planned.
+- **mcp SDK pinned to 1.x.** The MCP 2026-07-28 spec release shipped `mcp` 2.0.0 to PyPI, which removes the server API the bridge is built on. `clauder-mcp` >= 0.6.1 pins `mcp<2`. If your bridge broke, run `uvx --refresh clauder-mcp`. SDK 2.0 migration (and the new Tasks extension for async tools) is planned.
 - **AI-Driven Data Annotation.** Two new MCP tools (`load_annotation_data`, `annotate`) let an agent label a CSV dataset row by row without writing any code. Define annotation fields in a `_schema` column, call `data_annotation_prompt()` to get the protocol, and the agent handles the rest. The original file is never modified and sessions resume automatically if interrupted.
 - **Multi-Agent Coordination Protocol.** Built-in protocol for multiple agents sharing one RStudio session. Agents negotiate through a shared message board in the R environment, agree on a task plan, claim tasks before working, and cross-check each other's output. Load it with `multi_agent_prompt()`.
 - **`verify_references` tool.** Extracts DOIs from a manuscript's bibliography, queries the CrossRef API for each, and returns metadata (title, authors, year, journal) for comparison against manuscript claims. Non-resolving DOIs, metadata mismatches, and references without DOIs are flagged. Works standalone ("check my references") or as Pass 4 of Reviewer Zero.
@@ -100,6 +106,9 @@ claudeAddin()
 - [R Best Practices Protocol](#r-best-practices-protocol)
 - [Multi-Agent Coordination Protocol](#multi-agent-coordination-protocol)
 - [AI-Driven Data Annotation](#ai-driven-data-annotation)
+- [Systematic Review Screening](#systematic-review-screening)
+- [Grant Panel Mode](#grant-panel-mode)
+- [Response to Reviewers](#response-to-reviewers)
 - [CLI Integration](#cli-integration)
 - [Security Model](#security-model)
 - [Installation](#installation)
@@ -138,9 +147,10 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`verify_references`**: Verify academic references: DOIs are checked against CrossRef (with retraction/correction flags from Crossref update notices), arXiv IDs are resolved with a published-version check, and DOI-less entries get bibliographic matching with candidate DOIs.
 - **`search_citations`**: Search the OpenAlex scholarly index for the correct reference for a claim (title, authors, year, venue, DOI, citation count) instead of citing from memory.
 - **`get_bibtex`**: Fetch the canonical BibTeX entry for a DOI via doi.org content negotiation.
-- **`generate_notebook`**: Turn a session log into a narrated Quarto lab notebook; rendering re-runs the code so outputs and plots regenerate.
+- **`generate_notebook`**: Turn a session log into a narrated Quarto lab notebook. Rendering re-runs the code so outputs and plots regenerate.
 - **`generate_codebook`**: Scan a project and emit the codebook OSF and journals require: versioned package list, script inventory, per-variable summaries (class, n, missingness), and outputs produced.
 - **`annotate_manuscript()`** (R function, driven by Reviewer Zero's write-back step): inject audit findings into a .docx as native Word comments the author can accept or dismiss.
+- **`screening_report`**: Summarize systematic-review screening passes. Computes agreement and Cohen's kappa between two model screeners, the PRISMA flow counts, and the conflict set a human must adjudicate.
 - **`send_message` / `check_messages` / `wait_for_message` / `coordination_roster`**: Typed multi-agent messaging on an append-only shared log. `wait_for_message` blocks until a matching event arrives (rendezvous without polling), and everything works even while the R session is busy executing another agent's code.
 - **`checkpoint_session`**: Snapshot the R global environment to disk before risky operations. Checkpoints survive R restarts.
 - **`restore_session`**: Roll the environment back to a checkpoint. The current state is saved first, so a restore is itself undoable. Also callable from the console (`ClaudeR::restore_session()`) when you need to recover from an agent mistake yourself.
@@ -171,7 +181,7 @@ ClaudeR includes a built-in protocol for AI-driven technical review of academic 
 1. **Extract**: The AI reads your manuscript block-by-block with paginated `read_file` (`.docx` and `.pdf` are extracted with structure preserved, including table cells), pulling every quantitative and methodological claim into a structured registry (a data.frame visible in your RStudio Environment pane). Audit-clean print options are set first, so console output can never truncate the precision being checked.
 2. **Verify**: The AI re-reads the source lines for each claim to confirm it didn't misread values. No code runs until every claim is verified.
 3. **Reconcile & Recompute**: The backbone is the value sweep: `reconcile_values` enumerates *every* numeric value in the manuscript and supplement and reconciles each against the corpus of numbers your code actually produced, at the document's displayed precision. Every unmatched value must be recomputed or explained before the audit may proceed: completeness by construction, not by diligence. Claim-level recomputation then runs against clean-room script outputs (`probe_scripts` with output capture), so a stale object in your session can never make a check agree spuriously. Methodological claims (e.g., "zero variance made testing impossible") are tested directly rather than accepted at face value.
-4. **References**: `verify_references` checks every DOI against CrossRef and flags metadata mismatches, non-resolving DOIs, and **retracted or corrected papers**; arXiv preprints are resolved and matched against published versions; DOI-less references get bibliographic matching. In-text citations are cross-checked against the bibliography.
+4. **References**: `verify_references` checks every DOI against CrossRef and flags metadata mismatches, non-resolving DOIs, and **retracted or corrected papers**. arXiv preprints are resolved and matched against published versions. DOI-less references get bibliographic matching. In-text citations are cross-checked against the bibliography.
 
 **Optional extensions**, composable via arguments (examples below): a preregistration deviation audit (`prereg_path`), a specification-curve robustness check (`robustness`), write-back of every finding as Word comments (`writeback`), and **Referee Mode** (`referee`, or standalone `referee_prompt()`), a substantive review of the reasoning itself: argument logic, methods, internal consistency, evidence presentation, and framing, run by parallel reviewer subagents with configurable model tiers, adversarial stances, and cross-vendor dispatch, with a deterministic `check_cross_references` pass and delivery as anchored Word comments.
 
@@ -260,6 +270,37 @@ data_annotation_prompt()
 
 Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row. The original file is never modified, and sessions are automatically resumable if interrupted.
 
+## Systematic Review Screening
+
+Title and abstract screening is the slowest part of a systematic review. Two humans normally read every record. ClaudeR replaces the bulk reading with two independent AI screeners and leaves the human only the disagreements.
+
+The workflow: export your deduplicated database search to a CSV, add your inclusion and exclusion criteria as a `_schema` column, and run `run_annotation_job` twice with two different model families (for example Claude and a free local ollama model). Then:
+
+```r
+# Agreement, Cohen's kappa, PRISMA counts, and the conflict set
+screening_report("pass_claude_annotating.csv", "pass_qwen_annotating.csv")
+```
+
+The report gives you percent agreement, Cohen's kappa between the screeners, the PRISMA flow numbers, and a `screening_conflicts` data frame holding only the records the two models disagreed on. You adjudicate those, typically a small fraction of the total. Every decision carries a reason, so the audit trail answers "why was this record excluded" with one filter. Print the full protocol with `screening_prompt()`.
+
+## Grant Panel Mode
+
+A mock study section for your grant before the real one meets. One reviewer subagent per criterion, honest scores, and every weakness anchored to a quote from your proposal.
+
+```r
+grant_panel_prompt(rubric = "nih")   # Significance, Investigators, Innovation,
+                                     # Approach, Environment, scored 1 to 9
+grant_panel_prompt(rubric = "nsf")   # Intellectual Merit and Broader Impacts
+```
+
+The chair synthesis ends with the part that matters: a ranked list of concrete revisions that would move your score, each phrased as something you can do this week. Findings can be written into a copy of the proposal as Word comments.
+
+## Response to Reviewers
+
+The revise-and-resubmit workflow, compressed. Give the agent the decision letter and your manuscript, and run `reviewer_response_prompt()`. The agent parses the letter into individual reviewer points, locates each point in your manuscript, and drafts a point-by-point response. Where a reviewer asks a data question, the agent reruns the analysis in your live session, so the answer contains real computed numbers rather than recalled ones. A gate blocks completion until every point has a drafted response.
+
+The deliverables: a formatted response letter via `export_response_letter()` (markdown, plus .docx when pandoc is installed), and your manuscript annotated with a Word comment at each spot that needs an edit, tagged with the reviewer point it answers.
+
 ## How It Works
 
 ClaudeR uses the **Model Context Protocol (MCP)** to create a bidirectional connection between an AI assistant and your RStudio environment. MCP is an open protocol from Anthropic that allows the AI to safely interact with local tools and data.
@@ -274,7 +315,7 @@ This architecture ensures that the AI can only perform approved operations throu
 
 ## CLI Integration
 
-ClaudeR supports command-line interface (CLI) agents: the **Claude Code CLI**, the **OpenAI Codex CLI**, the **Qwen Code CLI**, the **Google Antigravity CLI** (`agy`), and the legacy **Google Gemini CLI** (which shuts down June 18, 2026; `agy` is its replacement). This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
+ClaudeR supports command-line interface (CLI) agents: the **Claude Code CLI**, the **OpenAI Codex CLI**, the **Qwen Code CLI**, the **Google Antigravity CLI** (`agy`), and the legacy **Google Gemini CLI** (which shuts down June 18, 2026, with `agy` as its replacement). This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
 
 ## Security Model
 
@@ -373,7 +414,7 @@ install_cli(tools = "qwen")
 # For Google Antigravity CLI (agy, Gemini CLI's replacement)
 install_cli(tools = "agy")
 
-# For Google Gemini CLI (legacy; shuts down June 18, 2026)
+# For Google Gemini CLI (legacy, shuts down June 18, 2026)
 install_cli(tools = "gemini")
 ```
 
@@ -470,7 +511,7 @@ If you can do it with R, your AI assistant can too.
 ## Limitations
 
 - Each R session can connect to one Claude Desktop/Cursor app at a time. However, multiple CLI agents (Claude Code, Codex, Qwen, agy) can share the same session alongside a Desktop app. To isolate agents, run separate RStudio windows with different session names and ports.
-- You can close the Shiny UI (Stop button in the console) to work alongside the AI. The server keeps running in the background and agents stay connected; re-run `claudeAddin()` to bring the UI back, or click **Stop Server** in the UI to fully stop it.
+- You can close the Shiny UI (Stop button in the console) to work alongside the AI. The server keeps running in the background and agents stay connected. Re-run `claudeAddin()` to bring the UI back, or click **Stop Server** in the UI to fully stop it.
 - R is single-threaded, but async jobs run in a separate process via `callr` so the main session stays responsive. The background process does not share the main session's environment, so async code must be self-contained.
 
 ## License

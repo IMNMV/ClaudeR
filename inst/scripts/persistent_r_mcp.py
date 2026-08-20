@@ -294,6 +294,9 @@ async def get_agent_introduction() -> str:
     lines.append("Available protocol prompts (run in R to read):")
     lines.append("  ClaudeR::reviewer_zero_prompt()     - Manuscript auditing protocol")
     lines.append("  ClaudeR::referee_prompt()            - Substantive review (logic, methods, framing) as Word comments")
+    lines.append("  ClaudeR::grant_panel_prompt()        - Mock study section for a grant proposal (nih or nsf rubric)")
+    lines.append("  ClaudeR::screening_prompt()          - Systematic-review screening with dual-model agreement")
+    lines.append("  ClaudeR::reviewer_response_prompt()  - Point-by-point response to a revise-and-resubmit")
     lines.append("  ClaudeR::r_best_practices_prompt()   - Statistical analysis protocol")
     lines.append("  ClaudeR::multi_agent_prompt()        - Multi-agent coordination protocol")
     lines.append("")
@@ -1430,6 +1433,45 @@ async def list_tools() -> List[types.Tool]:
             },
             annotations={
                 "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="screening_report",
+            description=(
+                "Summarize systematic-review screening passes produced by run_annotation_job: "
+                "decision counts, exclusion reasons, and PRISMA flow numbers. With two passes "
+                "from DIFFERENT model families, also computes percent agreement and Cohen's "
+                "kappa between the screeners and assigns the conflict set to "
+                "'screening_conflicts' in the R session, so the human only adjudicates "
+                "disagreements. Run ClaudeR::screening_prompt() first for the full protocol."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pass_a": {
+                        "type": "string",
+                        "description": "Path to the first screened CSV (the _annotating.csv output)."
+                    },
+                    "pass_b": {
+                        "type": "string",
+                        "description": "Optional second screened CSV from a different model family."
+                    },
+                    "include_field": {
+                        "type": "string",
+                        "description": "Decision column name. Default 'include'."
+                    },
+                    "reason_field": {
+                        "type": "string",
+                        "description": "Exclusion reason column name. Default 'reason'."
+                    }
+                },
+                "required": ["pass_a"]
+            },
+            annotations={
+                "readOnlyHint": False,
                 "destructiveHint": False,
                 "idempotentHint": True,
                 "openWorldHint": False,
@@ -2869,6 +2911,29 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             )]
         result_contents.append(types.TextContent(
             type="text", text=result.get("output", "No checkpoints.")
+        ))
+        return result_contents
+
+    elif name == "screening_report":
+        pass_a = arguments.get("pass_a", "").strip()
+        if not pass_a:
+            return [types.TextContent(type="text", text="Error: 'pass_a' is required")]
+        parts = [f'pass_a = "{escape_r_string(pass_a)}"']
+        if arguments.get("pass_b"):
+            parts.append(f'pass_b = "{escape_r_string(arguments["pass_b"])}"')
+        if arguments.get("include_field"):
+            parts.append(f'include_field = "{escape_r_string(arguments["include_field"])}"')
+        if arguments.get("reason_field"):
+            parts.append(f'reason_field = "{escape_r_string(arguments["reason_field"])}"')
+        code = f"ClaudeR::screening_report({', '.join(parts)})"
+        result = await execute_r_code_via_addin(code)
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error building screening report: {result.get('error', 'Unknown error')}"
+            )]
+        result_contents.append(types.TextContent(
+            type="text", text=result.get("output", "Screening report complete.")
         ))
         return result_contents
 
