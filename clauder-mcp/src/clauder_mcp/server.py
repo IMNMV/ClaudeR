@@ -300,6 +300,10 @@ async def get_agent_introduction() -> str:
     lines.append("  ClaudeR::r_best_practices_prompt()   - Statistical analysis protocol")
     lines.append("  ClaudeR::multi_agent_prompt()        - Multi-agent coordination protocol")
     lines.append("")
+    lines.append("Multi-agent identity: call set_agent_name with your working name (e.g.")
+    lines.append("'Claude-Stasis') BEFORE other work, so history and messages carry a name")
+    lines.append("your partners recognize instead of the random id above.")
+    lines.append("")
     lines.append("Safety: call checkpoint_session before risky changes (overwrites, removals,")
     lines.append("destructive transformations); restore_session rolls the environment back.")
     lines.append("")
@@ -1228,6 +1232,10 @@ async def list_tools() -> List[types.Tool]:
                     "last_n": {
                         "type": "number",
                         "description": "Number of recent entries to return (default 20)"
+                    },
+                    "include_past": {
+                        "type": "boolean",
+                        "description": "Also parse prior session log files on disk, so the audit trail survives R restarts. Entries from past logs are tagged {logfile}. Default false."
                     }
                 }
             },
@@ -1469,6 +1477,36 @@ async def list_tools() -> List[types.Tool]:
                     }
                 },
                 "required": ["pass_a"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="set_agent_name",
+            description=(
+                "Set this agent's working identity for the rest of the session. Call this "
+                "FIRST in any multi-agent work, before executing code or sending messages, "
+                "so execution history, message attribution, presence, and your read cursor "
+                "all carry your working name (e.g. 'Claude-Stasis') instead of a random "
+                "per-connection id. Critical when several agents or personas share one MCP "
+                "connection (subagents), where the default id cannot tell them apart. Pick "
+                "a short name unique to you and reuse it across sessions. For a permanent "
+                "name, set the CLAUDER_AGENT_ID environment variable in the MCP server "
+                "registration instead."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The identity to use: 1-40 chars, letters, digits, dash, underscore; must start with a letter or digit."
+                    }
+                },
+                "required": ["name"]
             },
             annotations={
                 "readOnlyHint": False,
@@ -1770,7 +1808,7 @@ async def list_tools() -> List[types.Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextContent | types.ImageContent]:
     """Handle R tool calls."""
-    global _target_session, _agent_introduced
+    global _target_session, _agent_introduced, _agent_id
 
     # These tools check Python-side state only — skip addin check
     _skip_addin_check = {"list_sessions", "connect_session", "load_annotation_data", "annotate", "run_annotation_job", "get_annotation_job_status", "cancel_annotation_job",
@@ -2338,7 +2376,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         else:
             filter_value = escape_r_string(agent_filter)
 
-        r_code = f'ClaudeR:::query_agent_history("{filter_value}", "{escape_r_string(_agent_id or "unknown")}", {last_n})'
+        include_past = "TRUE" if arguments.get("include_past") else "FALSE"
+        r_code = f'ClaudeR:::query_agent_history("{filter_value}", "{escape_r_string(_agent_id or "unknown")}", {last_n}, include_past = {include_past})'
         result = await execute_r_code_via_addin(r_code)
 
         if not result.get("success", False):
@@ -2936,6 +2975,25 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             type="text", text=result.get("output", "Screening report complete.")
         ))
         return result_contents
+
+    elif name == "set_agent_name":
+        new_name = (arguments.get("name") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}", new_name):
+            return [types.TextContent(
+                type="text",
+                text="Error: invalid name. Use 1-40 characters: letters, digits, dash, underscore; start with a letter or digit."
+            )]
+        old_name = _agent_id
+        _agent_id = new_name
+        return [types.TextContent(
+            type="text",
+            text=(
+                f"Agent identity set: {old_name} -> {new_name}. Execution history, "
+                f"coordination messages, presence, and your read cursor now use this name. "
+                f"If you had already sent messages as {old_name}, mention the rename to "
+                f"your partners so they can map the two."
+            )
+        )]
 
     elif name == "send_message":
         body = arguments.get("body")

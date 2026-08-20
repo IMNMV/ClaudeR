@@ -412,5 +412,30 @@ r <- tryCatch({
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("response letter export + undrafted gate") else fail("response letter:", r)
 
+# --- 13. cross-restart history from past session logs ---
+r <- tryCatch({
+  logdir <- tempfile("logs"); dir.create(logdir)
+  writeLines(c(
+    "# --- [2026-08-10 12:01:00] ---",
+    "# Code executed by Claude-Stasis:",
+    "x <- rnorm(10)",
+    "",
+    "# --- [2026-08-10 12:02:00] ---",
+    "# Code executed by Claude-Gatherers (ERROR):",
+    "lm(y ~ broken)",
+    "# Error: object not found",
+    ""
+  ), file.path(logdir, "clauder_t_8787_20260810_120000.R"))
+  live <- file.path(logdir, "clauder_t_8787_20260811_090000.R")
+  writeLines("# live", live)
+  assign("load_claude_settings",
+         function() list(log_to_file = TRUE, log_file_path = live), envir = env)
+  o1 <- env$query_agent_history("all", "t", 20, include_past = TRUE)
+  o2 <- env$query_agent_history("Claude-Stasis", "t", 20, include_past = TRUE)
+  grepl("Claude-Gatherers \\(ERR\\)", o1) && grepl("\\{clauder_t_8787_20260810", o1) &&
+    grepl("Claude-Stasis", o2) && !grepl("Gatherers", o2)
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("cross-restart history: past logs parsed, agent filter works") else fail("past history:", r)
+
 if (!ok) quit(status = 1)
 cat("\nAll checks passed.\n")

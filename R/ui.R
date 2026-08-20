@@ -1564,18 +1564,71 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
   })
 }
 
+# Parse execution entries out of past session log files on disk. The
+# in-memory history dies with the R session; the timestamped logs do not,
+# so they are the cross-restart audit trail of who ran what.
+past_history_entries <- function(max_files = 5L) {
+  settings <- load_claude_settings()
+  if (is.null(settings$log_file_path) || !nzchar(settings$log_file_path)) {
+    return(list())
+  }
+  log_dir <- dirname(settings$log_file_path)
+  if (!dir.exists(log_dir)) return(list())
+  files <- list.files(log_dir, pattern = "^clauder_.*\\.R$", full.names = TRUE)
+  files <- setdiff(files, normalizePath(settings$log_file_path, mustWork = FALSE))
+  if (length(files) == 0) return(list())
+  files <- files[order(file.info(files)$mtime, decreasing = TRUE)]
+  files <- utils::head(files, max_files)
+
+  entries <- list()
+  for (f in files) {
+    lines <- tryCatch(readLines(f, warn = FALSE), error = function(e) character(0))
+    starts <- grep("^# --- \\[", lines)
+    if (length(starts) == 0) next
+    ends <- c(starts[-1] - 1L, length(lines))
+    for (k in seq_along(starts)) {
+      block <- lines[starts[k]:ends[k]]
+      ts <- sub("^# --- \\[(.*)\\] ---$", "\\1", block[1])
+      agent_line <- if (length(block) >= 2) block[2] else ""
+      agent <- sub("^# Code executed by ([^ ]+).*$", "\\1", agent_line)
+      agent <- sub(":$", "", agent)
+      code_lines <- block[!grepl("^# --- \\[|^# Code executed by |^# Error: ", block)]
+      code_lines <- code_lines[nzchar(trimws(code_lines))]
+      entries[[length(entries) + 1L]] <- list(
+        timestamp = suppressWarnings(as.POSIXct(ts)),
+        agent_id = agent,
+        code = paste(code_lines, collapse = "\n"),
+        success = !grepl("(ERROR)", agent_line, fixed = TRUE),
+        has_plot = FALSE,
+        source_log = basename(f)
+      )
+    }
+  }
+  entries
+}
+
 #' Query agent execution history
 #'
 #' @param agent_filter "all", or a specific agent ID to filter by
 #' @param requesting_agent The agent making the request (for context)
 #' @param last_n Number of entries to return
+#' @param include_past Also parse prior session log files on disk, so the
+#'   audit trail survives R restarts
 #' @return Character string with formatted history
-
-query_agent_history <- function(agent_filter = "all", requesting_agent = NULL, last_n = 20) {
+query_agent_history <- function(agent_filter = "all", requesting_agent = NULL,
+                                last_n = 20, include_past = FALSE) {
   entries <- .claude_history_env$entries
 
+  if (isTRUE(include_past)) {
+    entries <- c(past_history_entries(), entries)
+  }
+
   if (length(entries) == 0) {
-    return("No execution history recorded yet.")
+    return(if (isTRUE(include_past)) {
+      "No execution history in memory and no past session logs found."
+    } else {
+      "No execution history recorded yet. Pass include_past = TRUE to search prior session logs on disk."
+    })
   }
 
   # Filter by agent if requested
@@ -1584,7 +1637,11 @@ query_agent_history <- function(agent_filter = "all", requesting_agent = NULL, l
   }
 
   if (length(entries) == 0) {
-    return(sprintf("No history found for agent '%s'.", agent_filter))
+    return(sprintf(
+      "No history found for agent '%s'.%s", agent_filter,
+      if (isTRUE(include_past)) "" else
+        " Pass include_past = TRUE to also search prior session logs."
+    ))
   }
 
   # Take last N
@@ -1596,9 +1653,12 @@ query_agent_history <- function(agent_filter = "all", requesting_agent = NULL, l
   lines <- vapply(entries, function(e) {
     status <- if (e$success) "OK" else "ERR"
     plot_flag <- if (e$has_plot) " [plot]" else ""
+    src <- if (!is.null(e$source_log)) paste0(" {", e$source_log, "}") else ""
     code_preview <- substr(gsub("\n", " ", e$code), 1, 80)
-    sprintf("[%s] %s (%s%s): %s",
-            format(e$timestamp, "%H:%M:%S"), e$agent_id, status, plot_flag, code_preview)
+    ts_txt <- tryCatch(format(e$timestamp, "%Y-%m-%d %H:%M:%S"),
+                       error = function(err) as.character(e$timestamp))
+    sprintf("[%s] %s (%s%s)%s: %s",
+            ts_txt, e$agent_id, status, plot_flag, src, code_preview)
   }, character(1))
 
   paste(lines, collapse = "\n")

@@ -4,7 +4,12 @@
 \alias{query_agent_history}
 \title{Query agent execution history}
 \usage{
-query_agent_history(agent_filter = "all", requesting_agent = NULL, last_n = 20)
+query_agent_history(
+  agent_filter = "all",
+  requesting_agent = NULL,
+  last_n = 20,
+  include_past = FALSE
+)
 }
 \arguments{
 \item{agent_filter}{"all", or a specific agent ID to filter by}
@@ -12,6 +17,9 @@ query_agent_history(agent_filter = "all", requesting_agent = NULL, last_n = 20)
 \item{requesting_agent}{The agent making the request (for context)}
 
 \item{last_n}{Number of entries to return}
+
+\item{include_past}{Also parse prior session log files on disk, so the
+audit trail survives R restarts}
 }
 \value{
 Character string with formatted history

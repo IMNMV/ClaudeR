@@ -19,9 +19,16 @@ Two ways to use it, same log underneath:
 
 ## Phase 0: Check in
 
-1. `coordination_roster` -- who is here, who is stale.
-2. `check_messages` -- read everything unread addressed to you or to all.
-3. `consensus_status()` (via execute_r) -- is there a plan already, and is
+1. `set_agent_name` -- set your working identity FIRST (e.g. "Claude-Stasis").
+   Do this before any code execution or message. It names your execution
+   history, message attribution, presence, and read cursor. Without it,
+   agents that share one MCP connection (subagents, personas) collapse into
+   one random id and cannot be told apart afterward. Reuse the same name
+   every session; for a permanent name, set the CLAUDER_AGENT_ID environment
+   variable in your MCP registration.
+2. `coordination_roster` -- who is here, who is stale.
+3. `check_messages` -- read everything unread addressed to you or to all.
+4. `consensus_status()` (via execute_r) -- is there a plan already, and is
    it approved?
 
 If a plan exists and is approved, skip negotiation: claim an open task and
