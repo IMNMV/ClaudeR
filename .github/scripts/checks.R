@@ -437,5 +437,17 @@ r <- tryCatch({
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("cross-restart history: past logs parsed, agent filter works") else fail("past history:", r)
 
+# --- 14. DOI extraction: parenthesized DOIs, trailing junk, prose parens ---
+r <- tryCatch({
+  d <- env$extract_dois(paste(
+    "Monsell, S. (2003). Task switching. TiCS. https://doi.org/10.1016/S1364-6613(03)00028-7",
+    "Also see (doi: 10.1037/a0019842) and https://doi.org/10.1126/science.1201068.",
+    sep = "\n"
+  ))
+  all(c("10.1016/S1364-6613(03)00028-7", "10.1037/a0019842",
+        "10.1126/science.1201068") %in% d) && length(d) == 3
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("extract_dois: parens kept, prose parens and trailing dots stripped") else fail("extract_dois:", r)
+
 if (!ok) quit(status = 1)
 cat("\nAll checks passed.\n")

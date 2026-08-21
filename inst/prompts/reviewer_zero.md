@@ -257,6 +257,11 @@ claim_registry$status[i] <- if (is_match) "match" else if (is_rounding) "roundin
 
 R sets the status. You do not. This prevents eyeballing "close enough" values.
 
+Integer counts are exempt from tolerance: sample sizes, degrees of freedom,
+cell counts, and exclusion tallies must match EXACTLY. A count that differs
+by one is a discrepancy, never rounding. Apply `all.equal` tolerance only to
+continuous statistics.
+
 For claims with multiple values (e.g., "t(38) = 2.12, p = .041, d = 0.34"),
 test each value separately. If any single value is a discrepancy, the whole
 claim is a discrepancy.

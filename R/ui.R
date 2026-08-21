@@ -2179,13 +2179,15 @@ verify_references_impl <- function(file_path = NULL, text = NULL,
     return("Error: jsonlite package is required. Install with install.packages('jsonlite')")
   }
 
-  # Get text from file or direct input
+  # Get text from file or direct input. Manuscripts (.docx/.pdf) route
+  # through the structured extractor; a raw readLines() on a .docx returns
+  # zip bytes, which is how the Pass 4 line-range mode broke in the field.
   if (!is.null(file_path)) {
     file_path <- path.expand(file_path)
     if (!file.exists(file_path)) {
       return(paste0("Error: File not found: ", file_path))
     }
-    lines <- readLines(file_path, warn = FALSE)
+    lines <- read_as_text_lines(file_path)
     if (!is.null(start_line)) {
       end_l <- if (!is.null(end_line)) min(end_line, length(lines)) else length(lines)
       lines <- lines[max(1, start_line):end_l]
@@ -2195,11 +2197,9 @@ verify_references_impl <- function(file_path = NULL, text = NULL,
     return("Error: Either file_path or text must be provided")
   }
 
-  # Extract DOIs using regex
-  doi_pattern <- "10\\.\\d{4,9}/[^\\s,;\\]\\)>\"']+"
-  dois <- regmatches(text, gregexpr(doi_pattern, text, perl = TRUE))[[1]]
-  dois <- unique(trimws(dois))
-  dois <- sub("[\\.,;]+$", "", dois)
+  # Extract DOIs
+  dois <- extract_dois(text)
+  doi_pattern <- "10\\.\\d{4,9}/[-._;()/:a-zA-Z0-9]+"
 
   # Cap per call: each lookup blocks the R session, and the MCP bridge times
   # out at 120s. Large bibliographies should be paged via start_line/end_line.
@@ -2546,7 +2546,7 @@ reviewer_zero_prompt <- function(prereg_path = NULL, robustness = FALSE,
     txt <- paste0(txt, "\n", build_referee_text())
   }
 
-  cat(txt, "\n")
+  cat_protocol(txt)
   invisible(txt)
 }
 
@@ -2706,8 +2706,23 @@ referee_prompt <- function(lenses = c("logic", "methods", "consistency",
                             reviewers_per_lens = reviewers_per_lens,
                             model = model, cross_vendor = cross_vendor,
                             stance = stance)
-  cat(txt, "\n")
+  cat_protocol(txt)
   invisible(txt)
+}
+
+# Print a protocol, but write the composed text to a file first and announce
+# the path. Long protocols exceed the console-output cap (agents saw "262
+# lines elided" mid-protocol in the field); the file makes the full text one
+# read_file call away.
+cat_protocol <- function(txt) {
+  proto_file <- tempfile(pattern = "clauder_protocol_", fileext = ".md")
+  ok <- tryCatch({ writeLines(txt, proto_file); TRUE }, error = function(e) FALSE)
+  if (ok) {
+    cat("[Full protocol saved to:", proto_file,
+        "-- if this printout is truncated, read that file completely before starting.]\n\n")
+  }
+  cat(txt, "\n")
+  invisible(NULL)
 }
 
 #' Print the R Best Practices prompt template

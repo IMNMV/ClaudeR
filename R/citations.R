@@ -75,6 +75,33 @@ get_bibtex_impl <- function(doi) {
   bib
 }
 
+# Extract DOIs from text using the Crossref-recommended character class,
+# which allows parentheses: legacy Elsevier DOIs like
+# 10.1016/S1364-6613(03)00028-7 are common in psychology bibliographies and
+# were truncated at the paren by the old pattern, producing false 404s.
+# Trailing punctuation and unbalanced closing brackets (from prose like
+# "(doi: 10.1037/a0019842)") are stripped after matching.
+extract_dois <- function(text) {
+  pattern <- "10\\.\\d{4,9}/[-._;()/:a-zA-Z0-9]+"
+  dois <- regmatches(text, gregexpr(pattern, text, perl = TRUE))[[1]]
+  dois <- unique(trimws(dois))
+  dois <- sub("[.,;:]+$", "", dois)
+  strip_unbalanced <- function(d) {
+    repeat {
+      last <- substr(d, nchar(d), nchar(d))
+      if (!last %in% c(")", "]")) break
+      opener <- if (last == ")") "(" else "["
+      n_open <- lengths(regmatches(d, gregexpr(opener, d, fixed = TRUE)))
+      n_close <- lengths(regmatches(d, gregexpr(last, d, fixed = TRUE)))
+      if (n_close > n_open) {
+        d <- sub("[.,;:]+$", "", substr(d, 1, nchar(d) - 1))
+      } else break
+    }
+    d
+  }
+  unique(vapply(dois, strip_unbalanced, character(1), USE.NAMES = FALSE))
+}
+
 # GET a Crossref API URL with retry/backoff. Crossref rate-limits bursts
 # (HTTP 429); a failed lookup mid-audit silently truncates the reference
 # check, so wait and retry before giving up.
