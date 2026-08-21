@@ -1535,7 +1535,9 @@ async def list_tools() -> List[types.Tool]:
                 "connection (subagents), where the default id cannot tell them apart. Pick "
                 "a short name unique to you and reuse it across sessions. For a permanent "
                 "name, set the CLAUDER_AGENT_ID environment variable in the MCP server "
-                "registration instead."
+                "registration instead. A second rename to a different name is refused "
+                "unless force is true, because that pattern usually means personas "
+                "sharing one connection, who should pass as_agent per call instead."
             ),
             inputSchema={
                 "type": "object",
@@ -1543,6 +1545,10 @@ async def list_tools() -> List[types.Tool]:
                     "name": {
                         "type": "string",
                         "description": "The identity to use: 1-40 chars, letters, digits, dash, underscore; must start with a letter or digit."
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Rename a connection that an earlier set_agent_name call already named. Only use this when you are certain you are the only agent on this connection."
                     }
                 },
                 "required": ["name"]
@@ -1855,7 +1861,9 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
     # These tools check Python-side state only — skip addin check
     _skip_addin_check = {"list_sessions", "connect_session", "load_annotation_data", "annotate", "run_annotation_job", "get_annotation_job_status", "cancel_annotation_job",
                          # File-based coordination must work while R is busy or down
-                         "send_message", "check_messages", "wait_for_message", "coordination_roster"}
+                         "send_message", "check_messages", "wait_for_message", "coordination_roster",
+                         # Identity is Python-side state, settable while R is down
+                         "set_agent_name"}
     if name not in _skip_addin_check:
         # Check if the R addin is running
         if not await check_addin_status():
@@ -3025,6 +3033,22 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
                 type="text",
                 text="Error: invalid name. Use 1-40 characters: letters, digits, dash, underscore; start with a letter or digit."
             )]
+        if (_agent_id_source == "set_agent_name" and new_name != _agent_id
+                and not arguments.get("force")):
+            return [types.TextContent(
+                type="text",
+                text=(
+                    f"REFUSED: an earlier set_agent_name call already named this "
+                    f"connection '{_agent_id}'. A second, different name usually means "
+                    f"several personas share this MCP connection, and renaming it would "
+                    f"change every persona's identity at once (the name tug-of-war bug). "
+                    f"If you share this connection, do not rename it. Pass "
+                    f"as_agent = \"{new_name}\" on every send_message, check_messages, "
+                    f"and wait_for_message call instead; each name keeps its own read "
+                    f"cursor. If you are the only agent on this connection and the "
+                    f"rename is deliberate, call set_agent_name again with force = true."
+                )
+            )]
         old_name = _agent_id
         _agent_id = new_name
         globals()["_agent_id_source"] = "set_agent_name"
@@ -3057,7 +3081,12 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
                           as_agent=arguments.get("as_agent"))
         except ValueError as e:
             return [types.TextContent(type="text", text=f"Error: {e}")]
-        reply = "Message sent to the coordination log."
+        sender = arguments.get("as_agent") or _agent_id
+        reply = f"Message sent to the coordination log as '{sender}'."
+        if not arguments.get("as_agent") and _agent_id_source in (
+                "set_agent_name", "randomly assigned for this connection"):
+            reply += (" If that name is not you, this connection is shared: pass "
+                      "as_agent = \"YourName\" on every coordination call.")
         if note:
             reply = note + "\n" + reply
         result_contents.append(types.TextContent(type="text", text=reply))

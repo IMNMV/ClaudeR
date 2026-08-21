@@ -470,5 +470,16 @@ r <- tryCatch({
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("extract_dois: parens kept, prose parens and trailing dots stripped") else fail("extract_dois:", r)
 
+# --- 15. Coordination echo: full body, never truncated ---
+r <- tryCatch({
+  long_body <- paste(rep("all work and no play", 40), collapse = " ")
+  e <- list(ts = "2026-08-21T03:07:05.123", from = "Claude-Wanderlark",
+            to = "all", type = "chat", body = list(text = long_body))
+  line <- env$format_coord_event(e)
+  grepl(long_body, line, fixed = TRUE) && !grepl("\\.\\.\\.$", line) &&
+    grepl("[03:07:05] Claude-Wanderlark -> all (chat):", line, fixed = TRUE)
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("format_coord_event: full body shown, no truncation") else fail("format_coord_event:", r)
+
 if (!ok) quit(status = 1)
 cat("\nAll checks passed.\n")

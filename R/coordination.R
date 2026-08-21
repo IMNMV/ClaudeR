@@ -423,13 +423,15 @@ consensus_banner_needed <- function(session = NULL) {
 # messaging. The cost is that the human sees nothing in the console or the
 # addin. These helpers let the addin's refresh loop surface the traffic.
 
-# One-line rendering of a coordination event for console and log display.
+# Rendering of a coordination event for console and log display. Full body,
+# never truncated: the human watching the console is the audience of record,
+# and a cut-off message is worse than a long one (bodies are capped at 4000
+# chars at write time anyway).
 format_coord_event <- function(e) {
   body_txt <- tryCatch({
     if (is.list(e$body) && !is.null(e$body$text)) as.character(e$body$text)
     else as.character(jsonlite::toJSON(e$body, auto_unbox = TRUE))
   }, error = function(err) "")
-  if (nchar(body_txt) > 160) body_txt <- paste0(substr(body_txt, 1, 157), "...")
   sprintf("[%s] %s -> %s (%s): %s",
           substr(e$ts, 12, 19), e$from, e$to, e$type, body_txt)
 }

@@ -202,3 +202,49 @@ class TestCoordTarget:
         note, err = _srv._coord_target()
         assert note is None
         assert err is None
+
+
+# --- set_agent_name tug-of-war guard -------------------------------------
+
+import asyncio
+
+
+class TestSetAgentNameGuard:
+    """A second, different rename on an already-named connection is the
+    signature of personas sharing one connection. Refuse it (field bug)."""
+
+    def test_second_rename_refused_without_force(self, monkeypatch):
+        monkeypatch.setattr(_srv, "_agent_introduced", True)
+        monkeypatch.setattr(_srv, "_agent_id", "Claude-Stasis")
+        monkeypatch.setattr(_srv, "_agent_id_source", "set_agent_name")
+        out = asyncio.run(_srv.call_tool(
+            "set_agent_name", {"name": "Claude-Wanderlark"}))
+        text = out[0].text
+        assert "REFUSED" in text and "as_agent" in text
+        assert _srv._agent_id == "Claude-Stasis"
+
+    def test_force_rename_allowed(self, monkeypatch):
+        monkeypatch.setattr(_srv, "_agent_introduced", True)
+        monkeypatch.setattr(_srv, "_agent_id", "Claude-Stasis")
+        monkeypatch.setattr(_srv, "_agent_id_source", "set_agent_name")
+        asyncio.run(_srv.call_tool(
+            "set_agent_name", {"name": "Claude-Wanderlark", "force": True}))
+        assert _srv._agent_id == "Claude-Wanderlark"
+
+    def test_same_name_reaffirm_ok(self, monkeypatch):
+        monkeypatch.setattr(_srv, "_agent_introduced", True)
+        monkeypatch.setattr(_srv, "_agent_id", "Claude-Stasis")
+        monkeypatch.setattr(_srv, "_agent_id_source", "set_agent_name")
+        out = asyncio.run(_srv.call_tool(
+            "set_agent_name", {"name": "Claude-Stasis"}))
+        assert "REFUSED" not in out[0].text
+        assert _srv._agent_id == "Claude-Stasis"
+
+    def test_first_rename_from_random_id_allowed(self, monkeypatch):
+        monkeypatch.setattr(_srv, "_agent_introduced", True)
+        monkeypatch.setattr(_srv, "_agent_id", "agent-071254d2")
+        monkeypatch.setattr(_srv, "_agent_id_source",
+                            "randomly assigned for this connection")
+        asyncio.run(_srv.call_tool(
+            "set_agent_name", {"name": "Claude-Gatherers"}))
+        assert _srv._agent_id == "Claude-Gatherers"

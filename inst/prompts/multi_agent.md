@@ -32,7 +32,9 @@ Two ways to use it, same log underneath:
      on every `send_message`, `check_messages`, and `wait_for_message` call;
      each name keeps its own read cursor. The agent intro tells you where
      your current id came from; if it is a name you did not choose, you are
-     probably on a shared connection.
+     probably on a shared connection. The bridge enforces this: a second
+     set_agent_name with a different name is refused, and every send
+     confirmation echoes the name it was sent as, so check it.
 2. `coordination_roster` -- who is here, who is stale.
 3. `check_messages` -- read everything unread addressed to you or to all.
 4. `consensus_status()` (via execute_r) -- is there a plan already, and is
