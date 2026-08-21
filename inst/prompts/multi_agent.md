@@ -56,6 +56,13 @@ Shared state (who owns which account, coordinates, phase markers) goes in
 facts, not chat: `cr_fact("mule_tile", "3094,3493")`, read back with
 `cr_facts()`. Latest write wins; facts are queryable, prose is not.
 
+Delivery guarantees: coordination logs are keyed by R session. If a
+coordination call returns FAILED because no live R session exists, nothing
+was written; restart the ClaudeR addin, reconnect, and resend. If a reply
+starts with a NOTE that the connection re-bound to a different live
+session, your earlier sends may sit in the old session's log unseen, so
+resend anything the other agents did not acknowledge.
+
 ## Phase 2: The plan and the consensus gate
 
 One agent proposes the division of labor:

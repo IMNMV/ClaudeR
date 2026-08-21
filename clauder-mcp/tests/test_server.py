@@ -163,3 +163,42 @@ class TestValidateAnnotation:
     def test_text_accepts_anything(self):
         ok, _ = _validate_annotation({**GOOD, "note": "free text, with, commas"}, SCHEMA)
         assert ok
+
+
+# --- _coord_target (stale-session guard) --------------------------------
+
+from clauder_mcp import server as _srv
+
+
+class TestCoordTarget:
+    """A bridge bound to a dead session must not silently write to a log
+    no live agent reads (field bug, 0.14.1)."""
+
+    def test_dead_session_fails_loudly(self, monkeypatch):
+        monkeypatch.setattr(_srv, "discover_sessions", lambda: [])
+        monkeypatch.setattr(_srv, "_target_session", "runescape")
+        monkeypatch.setattr(_srv, "_coord_bound", None)
+        note, err = _srv._coord_target()
+        assert note is None
+        assert err is not None
+        assert "FAILED" in err and "runescape" in err
+
+    def test_rebind_to_live_session_produces_note(self, monkeypatch):
+        live = [{"session_name": "live", "port": 8790, "token": "t", "pid": 1}]
+        monkeypatch.setattr(_srv, "discover_sessions", lambda: live)
+        monkeypatch.setattr(_srv, "_target_session", None)
+        monkeypatch.setattr(_srv, "_coord_bound", "runescape")
+        note, err = _srv._coord_target()
+        assert err is None
+        assert note is not None
+        assert "runescape" in note and "live" in note
+        assert _srv._coord_bound == "live"
+
+    def test_stable_binding_is_quiet(self, monkeypatch):
+        live = [{"session_name": "live", "port": 8790, "token": "t", "pid": 1}]
+        monkeypatch.setattr(_srv, "discover_sessions", lambda: live)
+        monkeypatch.setattr(_srv, "_target_session", "live")
+        monkeypatch.setattr(_srv, "_coord_bound", "live")
+        note, err = _srv._coord_target()
+        assert note is None
+        assert err is None

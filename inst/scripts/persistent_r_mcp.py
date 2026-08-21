@@ -430,6 +430,38 @@ def _coord_format(events: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+_coord_bound: Optional[str] = None  # session whose log the last coordination call used
+
+
+def _coord_target() -> tuple:
+    """Resolve which session's log a coordination call will touch.
+
+    Returns (note, error), at most one non-None. Coordination logs are keyed
+    by session name on disk, so a bridge still bound to a dead session would
+    write to a log no live agent reads while reporting success (field bug:
+    get_r_addin_url keeps the stale name when zero sessions are alive). Fail
+    loudly in that case, and say so when the binding moves to a different
+    live session, because earlier traffic sits in the old log unseen."""
+    global _coord_bound
+    get_r_addin_url()  # re-binds _target_session to a live session if any exists
+    if not discover_sessions():
+        stale = _target_session or _coord_bound or "default"
+        return (None,
+                "FAILED: no live R session is running, so this call would use a "
+                f"stale coordination log (session '{stale}') that no live agent "
+                "reads. Nothing was written or read. Start the ClaudeR addin in "
+                "RStudio, confirm with list_sessions, then retry.")
+    session = _target_session or "default"
+    note = None
+    if _coord_bound is not None and _coord_bound != session:
+        note = (f"NOTE: this connection re-bound from session '{_coord_bound}' "
+                f"(gone) to live session '{session}' and now uses that session's "
+                "coordination log. Earlier sends may sit in the old log unseen. "
+                "Resend anything the other agents did not acknowledge.")
+    _coord_bound = session
+    return (note, None)
+
+
 # --- Annotation job helpers (subprocess-per-row batch mode) ---
 
 def _find_cli_path(tool: str) -> Optional[str]:
@@ -3015,6 +3047,9 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             return [types.TextContent(type="text", text="Error: 'body' is required")]
         if isinstance(body, str):
             body = {"text": body}
+        note, coord_err = _coord_target()
+        if coord_err:
+            return [types.TextContent(type="text", text=coord_err)]
         try:
             _coord_append(arguments.get("type", "message"), body,
                           to=arguments.get("to", "all"),
@@ -3022,25 +3057,30 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
                           as_agent=arguments.get("as_agent"))
         except ValueError as e:
             return [types.TextContent(type="text", text=f"Error: {e}")]
-        result_contents.append(types.TextContent(
-            type="text", text="Message sent to the coordination log."
-        ))
+        reply = "Message sent to the coordination log."
+        if note:
+            reply = note + "\n" + reply
+        result_contents.append(types.TextContent(type="text", text=reply))
         return result_contents
 
     elif name == "check_messages":
         persona = arguments.get("as_agent")
+        note, coord_err = _coord_target()
+        if coord_err:
+            return [types.TextContent(type="text", text=coord_err)]
         unread = _coord_unread(as_agent=persona)
         if not unread:
-            result_contents.append(types.TextContent(
-                type="text", text="No unread coordination events."
-            ))
+            reply = "No unread coordination events."
+            if note:
+                reply = note + "\n" + reply
+            result_contents.append(types.TextContent(type="text", text=reply))
             return result_contents
         if arguments.get("ack", True):
             _coord_set_cursor(max(ev["id"] for ev in unread), as_agent=persona)
-        result_contents.append(types.TextContent(
-            type="text",
-            text=f"{len(unread)} unread event(s):\n" + _coord_format(unread)
-        ))
+        reply = f"{len(unread)} unread event(s):\n" + _coord_format(unread)
+        if note:
+            reply = note + "\n" + reply
+        result_contents.append(types.TextContent(type="text", text=reply))
         return result_contents
 
     elif name == "wait_for_message":
@@ -3048,20 +3088,30 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
         from_agent = arguments.get("from_agent")
         ev_type = arguments.get("type")
         persona = arguments.get("as_agent")
+        note, coord_err = _coord_target()
+        if coord_err:
+            return [types.TextContent(type="text", text=coord_err)]
         waited = 0.0
         while waited < timeout_s:
             unread = _coord_unread(from_agent=from_agent, ev_type=ev_type,
                                    as_agent=persona)
             if unread:
                 _coord_set_cursor(max(ev["id"] for ev in unread), as_agent=persona)
-                result_contents.append(types.TextContent(
-                    type="text",
-                    text=(f"Event arrived after {round(waited)}s:\n" +
-                          _coord_format(unread))
-                ))
+                reply = (f"Event arrived after {round(waited)}s:\n" +
+                         _coord_format(unread))
+                if note:
+                    reply = note + "\n" + reply
+                result_contents.append(types.TextContent(type="text", text=reply))
                 return result_contents
             await asyncio.sleep(2)
             waited += 2
+            late_note, coord_err = _coord_target()
+            if coord_err:
+                return [types.TextContent(
+                    type="text",
+                    text=f"Aborted after {round(waited)}s of waiting. " + coord_err
+                )]
+            note = note or late_note
         result_contents.append(types.TextContent(
             type="text",
             text=(f"No matching event within {round(timeout_s)}s. The other "
@@ -3072,9 +3122,15 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
 
     elif name == "coordination_roster":
         stale_after = float(arguments.get("stale_after_s", 900))
+        note, coord_err = _coord_target()
+        if coord_err:
+            return [types.TextContent(type="text", text=coord_err)]
         events = _coord_events()
         if not events:
-            return [types.TextContent(type="text", text="No coordination activity yet on this session.")]
+            reply = "No coordination activity yet on this session."
+            if note:
+                reply = note + "\n" + reply
+            return [types.TextContent(type="text", text=reply)]
         last: Dict[str, str] = {}
         for ev in events:
             last[ev.get("from", "?")] = ev.get("ts", "")
@@ -3088,9 +3144,10 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
                 lines.append(f"  {agent_name}: last seen {round(ago)}s ago{flag}")
             except ValueError:
                 lines.append(f"  {agent_name}: last seen {ts}")
-        result_contents.append(types.TextContent(
-            type="text", text="Coordination roster:\n" + "\n".join(lines)
-        ))
+        reply = "Coordination roster:\n" + "\n".join(lines)
+        if note:
+            reply = note + "\n" + reply
+        result_contents.append(types.TextContent(type="text", text=reply))
         return result_contents
 
     elif name == "check_cross_references":
