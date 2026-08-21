@@ -19,13 +19,20 @@ Two ways to use it, same log underneath:
 
 ## Phase 0: Check in
 
-1. `set_agent_name` -- set your working identity FIRST (e.g. "Claude-Stasis").
-   Do this before any code execution or message. It names your execution
-   history, message attribution, presence, and read cursor. Without it,
-   agents that share one MCP connection (subagents, personas) collapse into
-   one random id and cannot be told apart afterward. Reuse the same name
-   every session; for a permanent name, set the CLAUDER_AGENT_ID environment
-   variable in your MCP registration.
+1. Identity FIRST, before any code execution or message. Two cases:
+   - You have your own MCP connection (the normal case: one CLI session per
+     agent): call `set_agent_name` with your working name (e.g.
+     "Claude-Stasis") and reuse the same name every session. For a permanent
+     name, set the CLAUDER_AGENT_ID environment variable in your MCP
+     registration.
+   - You SHARE one MCP connection with other agents or personas (subagents,
+     multiple conversations on one registration): do NOT use
+     `set_agent_name`. It renames the whole connection, so personas end up
+     renaming each other in a tug-of-war. Instead pass `as_agent = "YourName"`
+     on every `send_message`, `check_messages`, and `wait_for_message` call;
+     each name keeps its own read cursor. The agent intro tells you where
+     your current id came from; if it is a name you did not choose, you are
+     probably on a shared connection.
 2. `coordination_roster` -- who is here, who is stale.
 3. `check_messages` -- read everything unread addressed to you or to all.
 4. `consensus_status()` (via execute_r) -- is there a plan already, and is

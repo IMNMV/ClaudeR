@@ -852,11 +852,23 @@ claudeAddin <- function() {
       n_agents <- length(agent_ids)
       n_exec <- length(entries)
 
-      if (n_agents == 0) {
-        "No agents connected yet"
+      exec_txt <- if (n_agents == 0) {
+        "No code executed by agents yet"
       } else {
-        agents_str <- paste(agent_ids, collapse = ", ")
-        sprintf("Connected: %s\nExecutions: %d", agents_str, n_exec)
+        sprintf("Executed code: %s\nExecutions: %d",
+                paste(agent_ids, collapse = ", "), n_exec)
+      }
+
+      # Coordination happens on disk without touching R, so agents that only
+      # message each other never appear in the execution history. Surface
+      # them from the event log so the human can see who is actually around.
+      roster <- if (isTRUE(.claude_server_env$running)) {
+        coord_roster_text(.claude_server_env$session_name)
+      } else NULL
+      if (!is.null(roster)) {
+        paste0(exec_txt, "\nCoordinating: ", roster)
+      } else {
+        exec_txt
       }
     })
 
@@ -998,6 +1010,7 @@ claudeAddin <- function() {
           session_name <- trimws(input$session_name)
           if (session_name == "") session_name <- paste0("session_", input$port)
           .claude_server_env$session_name <- session_name
+          .claude_server_env$coord_seen <- NULL  # re-baseline coordination echo
           write_discovery_file(session_name, input$port, .claude_server_env$token)
 
           # Create log file with session name in the filename
@@ -1150,6 +1163,40 @@ claudeAddin <- function() {
     observe({
       state$execution_count <- .claude_server_env$execution_count
       invalidateLater(2000)
+    })
+
+    # Echo coordination traffic to the console and session log. Coordination
+    # bypasses the R server by design (a busy session cannot block it), so
+    # without this the human sees none of it.
+    observe({
+      invalidateLater(2000)
+      if (!isTRUE(.claude_server_env$running)) return(invisible(NULL))
+      evs <- tryCatch(coord_events(.claude_server_env$session_name),
+                      error = function(e) list())
+      if (length(evs) == 0) return(invisible(NULL))
+      max_id <- max(vapply(evs, function(e) e$id, integer(1)))
+      seen <- .claude_server_env$coord_seen
+      if (is.null(seen)) {
+        # First look at this log: do not replay history into the console
+        .claude_server_env$coord_seen <- max_id
+        return(invisible(NULL))
+      }
+      new_evs <- Filter(function(e) e$id > seen, evs)
+      if (length(new_evs) == 0) return(invisible(NULL))
+      s <- .claude_server_env$settings
+      for (e in new_evs) {
+        line <- tryCatch(format_coord_event(e), error = function(err) NULL)
+        if (is.null(line)) next
+        if (isTRUE(s$print_to_console)) {
+          cat("### coordination ###", line, "\n")
+        }
+        if (isTRUE(s$log_to_file) && !is.null(s$log_file_path) &&
+            nzchar(s$log_file_path)) {
+          try(cat(sprintf("# [coordination] %s\n", line),
+                  file = s$log_file_path, append = TRUE), silent = TRUE)
+        }
+      }
+      .claude_server_env$coord_seen <- max_id
     })
 
     # Close handler -- just close the UI, keep the server running

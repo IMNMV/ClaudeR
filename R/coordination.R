@@ -417,3 +417,35 @@ consensus_banner_needed <- function(session = NULL) {
   .claude_consensus_cache$needed <- needed
   needed
 }
+
+# --- Human observability -----------------------------------------------
+# Coordination deliberately bypasses R so a busy session cannot block
+# messaging. The cost is that the human sees nothing in the console or the
+# addin. These helpers let the addin's refresh loop surface the traffic.
+
+# One-line rendering of a coordination event for console and log display.
+format_coord_event <- function(e) {
+  body_txt <- tryCatch({
+    if (is.list(e$body) && !is.null(e$body$text)) as.character(e$body$text)
+    else as.character(jsonlite::toJSON(e$body, auto_unbox = TRUE))
+  }, error = function(err) "")
+  if (nchar(body_txt) > 160) body_txt <- paste0(substr(body_txt, 1, 157), "...")
+  sprintf("[%s] %s -> %s (%s): %s",
+          substr(e$ts, 12, 19), e$from, e$to, e$type, body_txt)
+}
+
+# Compact presence summary from the event log: who has written, how long ago.
+coord_roster_text <- function(session = NULL, stale_after = 900) {
+  evs <- tryCatch(coord_events(session), error = function(err) list())
+  if (length(evs) == 0) return(NULL)
+  last <- list()
+  for (e in evs) if (!is.null(e$from)) last[[e$from]] <- e$ts
+  now <- Sys.time()
+  parts <- vapply(names(last), function(nm) {
+    ts <- suppressWarnings(as.POSIXct(last[[nm]], format = "%Y-%m-%dT%H:%M:%OS"))
+    if (is.na(ts)) return(sprintf("%s (?)", nm))
+    ago <- round(as.numeric(difftime(now, ts, units = "secs")))
+    sprintf("%s (%ss ago%s)", nm, ago, if (ago > stale_after) ", STALE" else "")
+  }, character(1))
+  paste(parts, collapse = ", ")
+}

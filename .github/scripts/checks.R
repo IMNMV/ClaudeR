@@ -437,6 +437,27 @@ r <- tryCatch({
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("cross-restart history: past logs parsed, agent filter works") else fail("past history:", r)
 
+# --- 13b. crossref: S-prefixed supplement numbering, marker orphan exemption ---
+r <- tryCatch({
+  doc <- tempfile(fileext = ".txt")
+  writeLines(c(
+    "Supplemental materials. Table S1 reports response times.",
+    "[Table 1, header] a | b",
+    "[Table 1, row 2] 1 | 2",
+    "Table S1. RT descriptives.",
+    "[Table 2, header] c | d",
+    "[Table 2, row 2] 3 | 4",
+    "Table S2. Exploratory correlations."
+  ), doc)
+  invisible(capture.output(env$check_cross_references(doc)))
+  reg <- get("crossref_registry", envir = .GlobalEnv)
+  no_dangling_s1 <- !any(reg$issue == "dangling" & reg$id == "S1")
+  no_marker_orphans <- !any(reg$issue == "never_referenced" & reg$id %in% c("1", "2"))
+  s2_orphan <- any(reg$issue == "never_referenced" & reg$id == "S2")
+  no_dangling_s1 && no_marker_orphans && s2_orphan
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("crossref: S-prefix resolves, marker orphans exempt, S2 orphan real") else fail("crossref S-prefix:", r)
+
 # --- 14. DOI extraction: parenthesized DOIs, trailing junk, prose parens ---
 r <- tryCatch({
   d <- env$extract_dois(paste(

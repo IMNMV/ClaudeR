@@ -38,6 +38,7 @@ if sys.platform == "win32":
 else:
     SESSIONS_DIR = os.path.expanduser("~/.claude_r_sessions")
 _agent_id: Optional[str] = None       # Set in main()
+_agent_id_source: str = "unset"       # Where the identity came from (for the intro)
 _target_session: Optional[str] = None  # Set by connect_session tool
 _target_token: Optional[str] = None    # Per-session auth token from the discovery file
 _agent_introduced: bool = False        # First-call introduction flag
@@ -266,7 +267,11 @@ async def get_agent_introduction() -> str:
 
     lines = [
         f"[ClaudeR Agent Context]",
-        f"Your agent ID: {_agent_id}",
+        f"Your agent ID: {_agent_id} ({_agent_id_source})",
+        "If other agents or personas share this connection, do NOT rename the "
+        "shared identity with set_agent_name; pass as_agent on each "
+        "coordination call instead, so every persona keeps its own name and "
+        "read cursor.",
         f"This ID uniquely identifies you in this R session. All code you execute is attributed to this ID.",
     ]
 
@@ -334,11 +339,12 @@ def _coord_log_path() -> str:
 
 
 def _coord_append(ev_type: str, body: Any, to: str = "all",
-                  reply_to: Optional[int] = None) -> None:
+                  reply_to: Optional[int] = None,
+                  as_agent: Optional[str] = None) -> None:
     ev = {
         "ts": datetime.now().strftime("%Y-%m-%dT%H:%M:%S.") +
               f"{datetime.now().microsecond // 1000:03d}",
-        "from": _agent_id,
+        "from": as_agent or _agent_id,
         "type": ev_type,
         "to": to,
         "body": body,
@@ -371,28 +377,29 @@ def _coord_events() -> List[Dict[str, Any]]:
     return out
 
 
-def _coord_cursor_path() -> str:
-    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", _agent_id or "unknown")
+def _coord_cursor_path(as_agent: Optional[str] = None) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", (as_agent or _agent_id) or "unknown")
     return os.path.join(_coord_dir(), f"cursor_{safe}.txt")
 
 
-def _coord_cursor() -> int:
+def _coord_cursor(as_agent: Optional[str] = None) -> int:
     try:
-        with open(_coord_cursor_path()) as f:
+        with open(_coord_cursor_path(as_agent)) as f:
             return int(f.read().strip())
     except (OSError, ValueError):
         return 0
 
 
-def _coord_set_cursor(through_id: int) -> None:
-    with open(_coord_cursor_path(), "w") as f:
+def _coord_set_cursor(through_id: int, as_agent: Optional[str] = None) -> None:
+    with open(_coord_cursor_path(as_agent), "w") as f:
         f.write(str(int(through_id)))
 
 
 def _coord_unread(from_agent: Optional[str] = None,
-                  ev_type: Optional[str] = None) -> List[Dict[str, Any]]:
-    cur = _coord_cursor()
-    me = _agent_id
+                  ev_type: Optional[str] = None,
+                  as_agent: Optional[str] = None) -> List[Dict[str, Any]]:
+    cur = _coord_cursor(as_agent)
+    me = as_agent or _agent_id
     out = []
     for ev in _coord_events():
         if ev["id"] <= cur or ev.get("from") == me:
@@ -1533,7 +1540,8 @@ async def list_tools() -> List[types.Tool]:
                     },
                     "to": {"type": "string", "description": "Recipient agent id, or 'all' (default)."},
                     "type": {"type": "string", "description": "Event type: message (default), signal, status, handoff, question."},
-                    "reply_to": {"type": "number", "description": "Event id this replies to (threading)."}
+                    "reply_to": {"type": "number", "description": "Event id this replies to (threading)."},
+                    "as_agent": {"type": "string", "description": "Send as this identity, for this call only. Use when several agents or personas share one MCP connection: each passes its own name per call instead of fighting over set_agent_name."}
                 },
                 "required": ["body"]
             },
@@ -1554,7 +1562,8 @@ async def list_tools() -> List[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "ack": {"type": "boolean", "description": "Advance the cursor past returned events (default true)."}
+                    "ack": {"type": "boolean", "description": "Advance the cursor past returned events (default true)."},
+                    "as_agent": {"type": "string", "description": "Read as this identity, using its own separate cursor. For personas sharing one MCP connection."}
                 }
             },
             annotations={
@@ -1579,7 +1588,8 @@ async def list_tools() -> List[types.Tool]:
                 "properties": {
                     "timeout_s": {"type": "number", "description": "Max seconds to wait (default 300, cap 1800)."},
                     "from_agent": {"type": "string", "description": "Only return events from this agent."},
-                    "type": {"type": "string", "description": "Only return events of this type."}
+                    "type": {"type": "string", "description": "Only return events of this type."},
+                    "as_agent": {"type": "string", "description": "Wait as this identity, using its own cursor. For personas sharing one MCP connection."}
                 }
             },
             annotations={
@@ -2985,13 +2995,17 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
             )]
         old_name = _agent_id
         _agent_id = new_name
+        globals()["_agent_id_source"] = "set_agent_name"
         return [types.TextContent(
             type="text",
             text=(
                 f"Agent identity set: {old_name} -> {new_name}. Execution history, "
                 f"coordination messages, presence, and your read cursor now use this name. "
                 f"If you had already sent messages as {old_name}, mention the rename to "
-                f"your partners so they can map the two."
+                f"your partners so they can map the two. CAUTION: this renames the whole "
+                f"connection. If another agent or persona shares this connection, its "
+                f"identity just changed too; personas sharing a connection should pass "
+                f"as_agent per coordination call instead of renaming."
             )
         )]
 
@@ -3004,7 +3018,8 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
         try:
             _coord_append(arguments.get("type", "message"), body,
                           to=arguments.get("to", "all"),
-                          reply_to=arguments.get("reply_to"))
+                          reply_to=arguments.get("reply_to"),
+                          as_agent=arguments.get("as_agent"))
         except ValueError as e:
             return [types.TextContent(type="text", text=f"Error: {e}")]
         result_contents.append(types.TextContent(
@@ -3013,14 +3028,15 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
         return result_contents
 
     elif name == "check_messages":
-        unread = _coord_unread()
+        persona = arguments.get("as_agent")
+        unread = _coord_unread(as_agent=persona)
         if not unread:
             result_contents.append(types.TextContent(
                 type="text", text="No unread coordination events."
             ))
             return result_contents
         if arguments.get("ack", True):
-            _coord_set_cursor(max(ev["id"] for ev in unread))
+            _coord_set_cursor(max(ev["id"] for ev in unread), as_agent=persona)
         result_contents.append(types.TextContent(
             type="text",
             text=f"{len(unread)} unread event(s):\n" + _coord_format(unread)
@@ -3031,11 +3047,13 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
         timeout_s = min(float(arguments.get("timeout_s", 300)), 1800.0)
         from_agent = arguments.get("from_agent")
         ev_type = arguments.get("type")
+        persona = arguments.get("as_agent")
         waited = 0.0
         while waited < timeout_s:
-            unread = _coord_unread(from_agent=from_agent, ev_type=ev_type)
+            unread = _coord_unread(from_agent=from_agent, ev_type=ev_type,
+                                   as_agent=persona)
             if unread:
-                _coord_set_cursor(max(ev["id"] for ev in unread))
+                _coord_set_cursor(max(ev["id"] for ev in unread), as_agent=persona)
                 result_contents.append(types.TextContent(
                     type="text",
                     text=(f"Event arrived after {round(waited)}s:\n" +
@@ -3206,6 +3224,13 @@ async def main():
     global _agent_id
 
     args = parse_args()
+    global _agent_id_source
+    if os.environ.get("CLAUDER_AGENT_ID"):
+        _agent_id_source = "CLAUDER_AGENT_ID environment variable"
+    elif args.agent_id:
+        _agent_id_source = "--agent-id argument"
+    else:
+        _agent_id_source = "randomly assigned for this connection"
     _agent_id = args.agent_id or f"agent-{uuid.uuid4().hex[:8]}"
 
     # Discover sessions

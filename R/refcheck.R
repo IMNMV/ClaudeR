@@ -39,22 +39,27 @@ expand_ref_numbers <- function(tail_text) {
 # tables/figures/theorems, single letters for appendices. Mixing them lets
 # "Table 1 and Figure 2" wrongly swallow the F of "Figure".
 scan_ref_class <- function(lines, class_name, declare_patterns, mention_labels,
-                           id_pattern = "\\d+(?:\\.\\d+)*") {
-  declared <- character(0)
-  decl_lines <- integer(0)
-  for (pat in declare_patterns) {
-    mm <- regexec(pat, lines, perl = TRUE)
-    for (i in seq_along(mm)) {
-      if (mm[[i]][1] == -1) next
-      grp <- regmatches(lines[i], mm[i])[[1]]
-      if (length(grp) >= 2 && nzchar(grp[2])) {
-        declared <- c(declared, grp[2])
-        decl_lines <- c(decl_lines, i)
+                           id_pattern = "\\d+(?:\\.\\d+)*",
+                           marker_patterns = character(0)) {
+  scan_decl <- function(pats) {
+    ids <- character(0); at <- integer(0)
+    for (pat in pats) {
+      mm <- regexec(pat, lines, perl = TRUE)
+      for (i in seq_along(mm)) {
+        if (mm[[i]][1] == -1) next
+        grp <- regmatches(lines[i], mm[i])[[1]]
+        if (length(grp) >= 2 && nzchar(grp[2])) {
+          ids <- c(ids, grp[2]); at <- c(at, i)
+        }
       }
     }
+    list(ids = unique(ids), lines = unique(at))
   }
-  declared <- unique(declared)
-  decl_lines <- unique(decl_lines)
+  cap <- scan_decl(declare_patterns)
+  mark <- scan_decl(marker_patterns)
+  declared <- unique(c(cap$ids, mark$ids))
+  declared_caption <- cap$ids
+  decl_lines <- unique(c(cap$lines, mark$lines))
 
   labels_alt <- paste(mention_labels, collapse = "|")
   mention_pat <- paste0("(?i)\\b(", labels_alt, ")\\.?\\s+(", id_pattern,
@@ -75,7 +80,8 @@ scan_ref_class <- function(lines, class_name, declare_patterns, mention_labels,
       }
     }
   }
-  list(class = class_name, declared = declared, mentions = mentions)
+  list(class = class_name, declared = declared,
+       declared_caption = declared_caption, mentions = mentions)
 }
 
 #' Check a manuscript's internal cross-references
@@ -101,11 +107,14 @@ check_cross_references <- function(document) {
 
   classes <- list(
     scan_ref_class(lines, "Table",
-      c("^\\[Table (\\d+),", "^Table (\\d+)[.:]"),
-      c("Table", "Tables", "Tab")),
+      c("^Table (S?\\d+)[.:]"),
+      c("Table", "Tables", "Tab"),
+      id_pattern = "S?\\d+(?:\\.\\d+)*",
+      marker_patterns = c("^\\[Table (\\d+),")),
     scan_ref_class(lines, "Figure",
-      c("^Figure (\\d+)[.:]", "^Fig\\.? (\\d+)[.:]"),
-      c("Figure", "Figures", "Fig", "Figs")),
+      c("^Figure (S?\\d+)[.:]", "^Fig\\.? (S?\\d+)[.:]"),
+      c("Figure", "Figures", "Fig", "Figs"),
+      id_pattern = "S?\\d+(?:\\.\\d+)*"),
     scan_ref_class(lines, "Equation",
       c("^Equation (\\d+)[.:]", "^\\((\\d+)\\)\\s*$"),
       c("Equation", "Equations", "Eq", "Eqs")),
@@ -138,8 +147,13 @@ check_cross_references <- function(document) {
     }
 
     dangling <- cl$mentions[!(cl$mentions$id %in% cl$declared), , drop = FALSE]
+    # Orphan reporting uses the author-facing numbering. When caption-style
+    # declarations exist (e.g. "Table S1."), the extractor's own [Table k]
+    # markers carry a parallel numbering that the prose never cites, and
+    # flagging those as never-referenced is noise, not signal.
+    orphan_base <- if (length(cl$declared_caption) > 0) cl$declared_caption else cl$declared
     orphans <- if (cl$class %in% c("Table", "Figure")) {
-      setdiff(cl$declared, unique(cl$mentions$id))
+      setdiff(orphan_base, unique(cl$mentions$id))
     } else character(0)
 
     report_parts <- c(report_parts, sprintf(

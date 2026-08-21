@@ -262,6 +262,10 @@ cell counts, and exclusion tallies must match EXACTLY. A count that differs
 by one is a discrepancy, never rounding. Apply `all.equal` tolerance only to
 continuous statistics.
 
+Strip names before comparing: components extracted from test objects carry
+names (`t.test(...)$statistic` is named "t"), and `all.equal` reports a
+names mismatch as inequality. Wrap extractions in `unname()`.
+
 For claims with multiple values (e.g., "t(38) = 2.12, p = .041, d = 0.34"),
 test each value separately. If any single value is a discrepancy, the whole
 claim is a discrepancy.
@@ -379,6 +383,9 @@ After verifying statistical claims, check that the bibliography is real.
 ### Step 4c: In-text citation cross-check
 - Confirm every in-text citation (Author, Year) appears in the bibliography.
 - Confirm every bibliography entry is cited at least once in the text.
+- Match on author AND year together, never surname alone: the same author
+  can appear in multiple entries (and as a co-author in others), so
+  surname-only matching produces false matches in both directions.
 - Flag orphaned citations and uncited references.
 
 ---
