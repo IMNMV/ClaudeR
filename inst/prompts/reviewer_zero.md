@@ -414,7 +414,7 @@ reasoning_registry <- data.frame(
   check = c("instrument_attribution", "test_computability",
             "figure_claim_match", "magnitude_wording",
             "convergence_consistency", "causal_generality_framing",
-            "data_existence"),
+            "data_existence", "supplement_integration"),
   status = "unrun",           # unrun -> clear | defect
   finding = "",               # verbatim claim + what is wrong
   stringsAsFactors = FALSE)
@@ -457,6 +457,11 @@ Pass 3 discrepancy.
    reliability claim (demographics, Cronbach's alpha, "measures collected"),
    does the supporting data exist anywhere in the project? A claim resting on
    data absent from the corpus must be flagged as unverifiable.
+8. **Supplement and appendix integration.** Is every supplementary file, table,
+   or appendix cited somewhere in the manuscript body? Conversely, does any body
+   claim depend on evidence that appears only in an uncited supplement or
+   appendix? A load-bearing argument whose support lives in a supplement the
+   text never points to is a defect, not a formatting lapse.
 
 ### Reasoning-pass gate
 
