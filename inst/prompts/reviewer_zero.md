@@ -390,6 +390,91 @@ After verifying statistical claims, check that the bibliography is real.
 
 ---
 
+## Pass 5: Content reasoning (the defects no tool can surface)
+
+Passes 1-4 and their tools (`reconcile_values`, `verify_references`,
+`check_cross_references`, `probe_scripts`) find numeric, reference,
+cross-reference, and code defects. They do not reason about meaning. A
+manuscript can clear every gate above and still contain serious defects that
+only a close, skeptical read finds, and those are the defects that separate a
+real audit from a checklist.
+
+This pass is mandatory and carries equal weight with the tool passes. Do not
+treat it as optional, and do not let the tool output stand in for it: the
+tools have already told you everything they can. Read the manuscript prose
+again, slowly, with the tool output in hand, and bring outside domain
+knowledge the tools do not have. A claim can be false when every number in it
+reconciles.
+
+Build a reasoning registry so the checks are tracked and gated like every
+other pass:
+
+```r
+reasoning_registry <- data.frame(
+  check = c("instrument_attribution", "test_computability",
+            "figure_claim_match", "magnitude_wording",
+            "convergence_consistency", "causal_generality_framing",
+            "data_existence"),
+  status = "unrun",           # unrun -> clear | defect
+  finding = "",               # verbatim claim + what is wrong
+  stringsAsFactors = FALSE)
+```
+
+Run every check. For each, quote the verbatim claim, state the finding, and
+set `status` to `clear` or `defect`. A defect here is reported exactly like a
+Pass 3 discrepancy.
+
+1. **Instrument and source attribution.** For every named scale, task, or
+   measure with a citation, does the cited source match the instrument as
+   described (item count, version, authorship)? Example defect: a "22-item"
+   scale attributed to the paper that introduced the 10-item version. This
+   needs knowledge of the instrument, not a value check.
+2. **Test computability.** For every reported test or statistic, can it
+   actually be computed from the variables that exist in the data? Inspect the
+   data columns with `execute_r`. A reported p-value or group comparison for
+   which no supporting variable exists is a defect, not a number to reconcile
+   (e.g. "accuracy did not differ across conditions" when only one accuracy
+   value per participant exists).
+3. **Figure and table content versus claim.** For every figure or table cited
+   in support of a claim, does it actually contain the evidence claimed? A
+   figure cited for a relationship it does not plot (a speed-only boxplot
+   cited for a speed-accuracy trade-off) is a defect even though the
+   cross-reference resolves.
+4. **Magnitude wording.** For every qualitative magnitude word ("roughly
+   twice", "comparable", "doubled", "small"), recompute the actual
+   ratio or difference and check the word fits. "Roughly twice" for a computed
+   2.8x is a defect.
+5. **Convergence and consistency of argument.** Does any claim that results
+   "converge", "replicate", or "hold across both studies" survive when a
+   measure was collected in only one study, or a construct was operationalized
+   differently across them? Cross-check what each study actually measured.
+6. **Causal and generality framing.** Does any causal-mechanism claim rest on
+   a manipulated cause with only a measured (correlational) mediator, with no
+   mediation test? Does any generality claim ("generalize across populations
+   and contexts") exceed a single sample and a stylized task, especially where
+   the paper's own limitations contradict it?
+7. **Data existence for descriptive claims.** For every descriptive or
+   reliability claim (demographics, Cronbach's alpha, "measures collected"),
+   does the supporting data exist anywhere in the project? A claim resting on
+   data absent from the corpus must be flagged as unverifiable.
+
+### Reasoning-pass gate
+
+You cannot proceed to the Final Report until every check has been run:
+
+```r
+unrun_checks <- sum(reasoning_registry$status == "unrun")
+cat(sprintf("Reasoning pass: %d / %d checks run (%d defects, %d unrun)\n",
+    sum(reasoning_registry$status != "unrun"), nrow(reasoning_registry),
+    sum(reasoning_registry$status == "defect"), unrun_checks))
+stopifnot(unrun_checks == 0)
+```
+
+A clean result (all checks `clear`) on a sound paper is a valid outcome. Do
+not invent a reasoning defect to fill the pass.
+
+---
+
 ## Final Report
 
 After all claims and references are processed, generate a summary:
@@ -410,6 +495,9 @@ cat(sprintf("Rounding only: %d\n", sum(claim_registry$status == "rounding")))
 cat(sprintf("Discrepancies: %d\n", sum(claim_registry$status == "discrepancy")))
 cat(sprintf("Not found in code: %d\n", sum(claim_registry$status == "not_found")))
 cat(sprintf("Errors: %d\n", sum(claim_registry$status == "error")))
+cat(sprintf("Reasoning checks: %d run | %d defects\n",
+    sum(reasoning_registry$status != "unrun"),
+    sum(reasoning_registry$status == "defect")))
 ```
 
 Then print the full registry and highlight every discrepancy with:
@@ -429,6 +517,12 @@ Include an internal consistency section listing:
 - Any cases where the same reported outcome was computed differently
   elsewhere in the code, with both results shown
 - If no inconsistencies were found, state that explicitly
+
+Include a content-reasoning section (Pass 5) listing:
+- Each reasoning check and its result (clear or defect)
+- For each defect, the verbatim claim and why it fails, treated with the
+  same weight as a numeric discrepancy
+- If all checks were clear, state that explicitly
 
 ---
 
@@ -463,3 +557,9 @@ Include an internal consistency section listing:
 14. Final verdicts come from clean-room recomputation
     (`probe_scripts(capture_output = TRUE)` or a fresh background session),
     never from a long-lived environment that may hold stale objects.
+15. The tools do not reason. Pass 5 is not optional and is not covered by any
+    tool: a manuscript can pass every numeric, reference, and cross-reference
+    gate and still misattribute an instrument, cite a figure for evidence it
+    does not contain, report a test its data cannot support, or overstate a
+    magnitude or a causal claim. Run every reasoning check and weight its
+    findings equally with the numeric ones.
