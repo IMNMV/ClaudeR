@@ -481,5 +481,25 @@ r <- tryCatch({
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("format_coord_event: full body shown, no truncation") else fail("format_coord_event:", r)
 
+# --- 16. Editor tools: save-to-disk, line-count change, focus guard ---
+r <- tryCatch({
+  f <- file.path(tempdir(), "clauder_edit_ci.R")
+  writeLines(c("a <- 1", "b <- 2", "c <- 3"), f)
+  content <- readLines(f, warn = FALSE)
+  # bounded replacement that CHANGES the line count (old code rejected this)
+  ls_ <- 2; le_ <- 2
+  sub_txt <- paste(content[ls_:le_], collapse = "\n")
+  mod <- gsub("b <- 2", "b <- 2\nb2 <- 22", sub_txt, perl = TRUE)
+  new_lines <- strsplit(mod, "\n", fixed = TRUE)[[1]]
+  before <- if (ls_ > 1) content[1:(ls_ - 1)] else character(0)
+  after <- if (le_ < length(content)) content[(le_ + 1):length(content)] else character(0)
+  spliced <- c(before, new_lines, after)
+  writeLines(spliced, f)                      # stands in for setDocumentContents + documentSave
+  disk <- readLines(f, warn = FALSE)
+  unlink(f)
+  length(disk) == 4 && any(grepl("b2 <- 22", disk, fixed = TRUE))
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("editor: line-count-changing splice persists to disk") else fail("editor splice:", r)
+
 if (!ok) quit(status = 1)
 cat("\nAll checks passed.\n")

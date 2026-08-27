@@ -840,10 +840,20 @@ async def list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="get_active_document",
-            description="Get the content of the active document in RStudio",
+            description=(
+                "Read the focused RStudio editor BUFFER (not the file on disk). Returns the content, "
+                "the document path, and 'unsaved_changes' telling you whether the buffer differs from disk. "
+                "Use this as the source of truth while editing; read_file reports the DISK state, which "
+                "will be stale until the edit is saved. Errors loudly if no document is open or focused."
+            ),
             inputSchema={
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Optional: absolute path of the file to read. If it is not the focused document, ClaudeR tries to open and focus it first."
+                    }
+                }
             },
             annotations={
                 "readOnlyHint": True,
@@ -854,7 +864,12 @@ async def list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="modify_code_section",
-            description="Modify a specific section of code in the active document",
+            description=(
+                "Regex find-and-replace in an RStudio editor document. Saves to disk by default "
+                "(save=false stages the edit in the buffer only). Pass 'path' to target a specific file "
+                "instead of whatever happens to be focused. The replacement may change the number of lines. "
+                "Returns 'saved_to_disk' so you know whether read_file will reflect the change."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -873,6 +888,14 @@ async def list_tools() -> List[types.Tool]:
                     "line_end": {
                         "type": "number",
                         "description": "Optional: End line number for the search (1-based indexing)"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional: absolute path of the file to edit. ClaudeR opens/focuses it and refuses to edit a different document."
+                    },
+                    "save": {
+                        "type": "boolean",
+                        "description": "Save the document to disk after the edit (default true). Set false to leave the change unsaved in the buffer."
                     }
                 },
                 "required": ["search_pattern", "replacement"]
@@ -886,7 +909,11 @@ async def list_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="insert_text",
-            description="Insert text at the current cursor position in the active RStudio document, or at a specific line and column.",
+            description=(
+                "Insert text into an RStudio editor document at the cursor, or at a given line/column. "
+                "Saves to disk by default (save=false leaves it unsaved in the buffer). Pass 'path' to "
+                "target a specific file rather than whatever is focused."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -901,9 +928,51 @@ async def list_tools() -> List[types.Tool]:
                     "column": {
                         "type": "number",
                         "description": "Optional: Column number to insert at (1-based). Defaults to 1 if line is specified but column is omitted."
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional: absolute path of the file to insert into. ClaudeR opens/focuses it and refuses to write to a different document."
+                    },
+                    "save": {
+                        "type": "boolean",
+                        "description": "Save the document to disk after inserting (default true)."
                     }
                 },
                 "required": ["text"]
+            },
+            annotations={
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
+            name="suggest_edit",
+            description=(
+                "Propose an edit for the user to APPROVE before it is applied, instead of writing it "
+                "directly. Uses rstudioapi::showEditSuggestion() when the RStudio build provides it; "
+                "otherwise stages the change in the editor buffer and deliberately does NOT save, so the "
+                "user accepts by saving or rejects with Undo. Use this when the user asked to review "
+                "changes first. After calling it, STOP and wait for the user's decision."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "search_pattern": {
+                        "type": "string",
+                        "description": "Regex pattern identifying the code to change"
+                    },
+                    "replacement": {
+                        "type": "string",
+                        "description": "Replacement text"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional: absolute path of the file to edit"
+                    }
+                },
+                "required": ["search_pattern", "replacement"]
             },
             annotations={
                 "readOnlyHint": False,
@@ -2015,31 +2084,141 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         )]
     
     elif name == "get_active_document":
-        # Get active document content
-        result = await execute_r_code_via_addin("""
-        if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
-            context <- rstudioapi::getActiveDocumentContext()
-            list(
-                content = paste(context$contents, collapse = "\n"),
-                path = context$path,
-                line_count = length(context$contents)
-            )
-        } else {
+        target = escape_r_string(arguments.get("path", "") or "")
+        result = await execute_r_code_via_addin(f"""
+        if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {{
+            want <- "{target}"
+            ctx <- tryCatch(rstudioapi::getSourceEditorContext(), error = function(e) NULL)
+            if (is.null(ctx) || is.null(ctx$id) || !nzchar(ctx$id)) {{
+                list(error = paste("No source document is open or focused in RStudio.",
+                                   "Open the target file in the Source pane first, then retry."))
+            }} else {{
+                p <- ctx$path; if (is.null(p)) p <- ""
+                if (nzchar(want)) {{
+                    a <- normalizePath(want, mustWork = FALSE)
+                    b <- if (nzchar(p)) normalizePath(p, mustWork = FALSE) else ""
+                    if (!identical(a, b)) {{
+                        tryCatch({{ rstudioapi::documentOpen(want); Sys.sleep(0.3)
+                                   ctx <- rstudioapi::getSourceEditorContext()
+                                   p <- ctx$path; if (is.null(p)) p <- "" }},
+                                 error = function(e) NULL)
+                    }}
+                }}
+                buf <- paste(ctx$contents, collapse = "\n")
+                disk <- if (nzchar(p) && file.exists(p)) paste(readLines(p, warn = FALSE), collapse = "\n") else NA_character_
+                dirty <- if (is.na(disk)) NA else !identical(buf, disk)
+                list(
+                    content = buf,
+                    path = if (nzchar(p)) p else "(unsaved / untitled buffer)",
+                    document_id = ctx$id,
+                    line_count = length(ctx$contents),
+                    unsaved_changes = dirty,
+                    source_of_truth = if (isTRUE(dirty))
+                        "EDITOR BUFFER differs from the file on disk (unsaved edits). read_file would return the OLDER disk version."
+                      else if (isFALSE(dirty)) "Buffer matches the file on disk."
+                      else "Buffer has never been saved to disk."
+                )
+            }}
+        }} else {{
             list(error = "RStudio API not available")
-        }
+        }}
         """)
-        
+
         if not result.get("success", False):
             return [types.TextContent(
                 type="text",
                 text=f"Error retrieving active document: {result.get('error', 'Unknown error')}"
             )]
-        
+
         return [types.TextContent(
             type="text",
             text=result.get("output", "No document content retrieved")
         )]
-   
+
+    elif name == "suggest_edit":
+        if not all(k in arguments for k in ["search_pattern", "replacement"]):
+            return [types.TextContent(
+                type="text",
+                text="Error: Both 'search_pattern' and 'replacement' parameters are required"
+            )]
+        search_pattern = escape_r_string(arguments["search_pattern"])
+        replacement = escape_r_string(arguments["replacement"].replace("\\", "\\\\"))
+        target = escape_r_string(arguments.get("path", "") or "")
+
+        suggest_code = f"""
+        if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {{
+            want <- "{target}"
+            ctx <- tryCatch(rstudioapi::getSourceEditorContext(), error = function(e) NULL)
+            if (is.null(ctx) || is.null(ctx$id) || !nzchar(ctx$id)) {{
+                list(success = FALSE,
+                     error = "No source document is open or focused in RStudio. Open the target file first.")
+            }} else {{
+                p <- ctx$path; if (is.null(p)) p <- ""
+                if (nzchar(want)) {{
+                    a <- normalizePath(want, mustWork = FALSE)
+                    b <- if (nzchar(p)) normalizePath(p, mustWork = FALSE) else ""
+                    if (!identical(a, b)) {{
+                        tryCatch({{ rstudioapi::documentOpen(want); Sys.sleep(0.3)
+                                   ctx <- rstudioapi::getSourceEditorContext()
+                                   p <- ctx$path; if (is.null(p)) p <- "" }},
+                                 error = function(e) NULL)
+                    }}
+                }}
+                content <- ctx$contents
+                full_text <- paste(content, collapse = "\n")
+                proposed <- gsub("{search_pattern}", "{replacement}", full_text, perl = TRUE)
+                if (identical(proposed, full_text)) {{
+                    list(success = FALSE, error = "Pattern not found; nothing to suggest.")
+                }} else {{
+                    has_api <- exists("showEditSuggestion",
+                                      where = asNamespace("rstudioapi"), inherits = FALSE)
+                    if (has_api) {{
+                        fn <- get("showEditSuggestion", envir = asNamespace("rstudioapi"))
+                        rng <- rstudioapi::document_range(
+                            rstudioapi::document_position(1, 1),
+                            rstudioapi::document_position(length(content) + 1, 1))
+                        ok <- tryCatch(isTRUE(fn(rng, proposed, id = ctx$id)) ||
+                                       is.null(fn(rng, proposed, id = ctx$id)),
+                                       error = function(e) FALSE)
+                        if (ok) {{
+                            list(success = TRUE, mode = "showEditSuggestion",
+                                 path = if (nzchar(p)) p else "(untitled buffer)",
+                                 message = "Edit suggestion shown in RStudio. WAIT for the user to accept or reject it before continuing.")
+                        }} else {{
+                            list(success = FALSE, error = "showEditSuggestion() exists but failed.")
+                        }}
+                    }} else {{
+                        # Fallback: stage the change in the buffer WITHOUT saving, so the
+                        # user reviews it in the editor and accepts (save) or rejects (undo).
+                        rstudioapi::setDocumentContents(proposed, id = ctx$id)
+                        old_n <- length(content)
+                        new_n <- length(strsplit(proposed, "\n", fixed = TRUE)[[1]])
+                        list(success = TRUE, mode = "staged-unsaved",
+                             path = if (nzchar(p)) p else "(untitled buffer)",
+                             lines = paste0(old_n, " -> ", new_n),
+                             message = paste("rstudioapi::showEditSuggestion() is not available in this RStudio/rstudioapi build,",
+                                             "so the change was STAGED IN THE EDITOR BUFFER and deliberately NOT saved.",
+                                             "The user reviews it in RStudio and accepts by saving (Cmd/Ctrl-S) or rejects with Undo (Cmd/Ctrl-Z).",
+                                             "Do NOT save it yourself and do NOT continue until the user confirms."))
+                    }}
+                }}
+            }}
+        }} else {{
+            list(success = FALSE, error = "RStudio API not available")
+        }}
+        """
+
+        result = await execute_r_code_via_addin(suggest_code)
+        if not result.get("success", False):
+            return [types.TextContent(
+                type="text",
+                text=f"Error suggesting edit: {result.get('error', 'Unknown error')}"
+            )]
+        return [types.TextContent(
+            type="text",
+            text=result.get("output", "Edit suggestion submitted")
+        )]
+
     elif name == "create_task_list":
         if "tasks" not in arguments:
             return [types.TextContent(
@@ -2527,99 +2706,113 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                 type="text",
                 text="Error: Both 'search_pattern' and 'replacement' parameters are required"
             )]
-        
+
         # search_pattern is a regex by design: escape for the R string
         # literal only, so the user's regex reaches gsub() intact.
         search_pattern = escape_r_string(arguments["search_pattern"])
         # replacement is literal text, but gsub() treats backslash as a
-        # metacharacter (backrefs \1..\9). Escape once for gsub semantics,
-        # then once more for the R string literal — otherwise replacements
-        # containing paths or escaped strings get silently corrupted.
+        # metacharacter (backrefs \\1..\\9). Escape once for gsub semantics,
+        # then once more for the R string literal.
         replacement = escape_r_string(arguments["replacement"].replace("\\", "\\\\"))
-        
-        # Get line constraints if provided
+
         line_start = arguments.get("line_start", "NULL")
         line_end = arguments.get("line_end", "NULL")
-        
+        target = escape_r_string(arguments.get("path", "") or "")
+        do_save = "TRUE" if arguments.get("save", True) else "FALSE"
+
         modify_code = f"""
         if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {{
-            context <- rstudioapi::getActiveDocumentContext()
-            content <- context$contents
-            
-            # Convert to a single string for pattern matching
-            full_text <- paste(content, collapse = "\\n")
-            
-            # Apply line constraints if provided
-            line_start <- {line_start}
-            line_end <- {line_end}
-            
-            if (!is.null(line_start) && !is.null(line_end)) {{
-                # Work with a subset of lines
-                if (line_start > 0 && line_end <= length(content) && line_start <= line_end) {{
-                    subset_lines <- content[line_start:line_end]
-                    subset_text <- paste(subset_lines, collapse = "\\n")
-                    
-                    # Apply replacement in the subset
-                    search_pattern <- "{search_pattern}"
-                    modified_subset <- gsub(search_pattern, "{replacement}", subset_text, perl = TRUE)
-                    
-                    # Split back into lines
-                    modified_lines <- strsplit(modified_subset, "\\n")[[1]]
-                    
-                    # Update the content
-                    if (length(modified_lines) == length(subset_lines)) {{
-                        content[line_start:line_end] <- modified_lines
-                        rstudioapi::setDocumentContents(paste(content, collapse = "\\n"), id = context$id)
-                        list(
-                            success = TRUE, 
-                            message = paste0("Modified code between lines ", line_start, " and ", line_end)
-                        )
-                    }} else {{
-                        list(
-                            success = FALSE,
-                            error = "Replacement resulted in different number of lines"
-                        )
-                    }}
-                }} else {{
-                    list(
-                        success = FALSE,
-                        error = paste0("Invalid line range: ", line_start, "-", line_end, 
-                                      ". Document has ", length(content), " lines.")
-                    )
-                }}
+            want <- "{target}"
+            do_save <- {do_save}
+            ctx <- tryCatch(rstudioapi::getSourceEditorContext(), error = function(e) NULL)
+            if (is.null(ctx) || is.null(ctx$id) || !nzchar(ctx$id)) {{
+                list(success = FALSE,
+                     error = paste("No source document is open or focused in RStudio.",
+                                   "Open the target file in the Source pane (or pass 'path'), then retry."))
             }} else {{
-                # Apply replacement to entire document
-                modified_text <- gsub("{search_pattern}", "{replacement}", full_text, perl = TRUE)
-                
-                if (modified_text != full_text) {{
-                    rstudioapi::setDocumentContents(modified_text, id = context$id)
-                    list(
-                        success = TRUE,
-                        message = "Modified code in the document"
-                    )
+                p <- ctx$path; if (is.null(p)) p <- ""
+                if (nzchar(want)) {{
+                    a <- normalizePath(want, mustWork = FALSE)
+                    b <- if (nzchar(p)) normalizePath(p, mustWork = FALSE) else ""
+                    if (!identical(a, b)) {{
+                        tryCatch({{ rstudioapi::documentOpen(want); Sys.sleep(0.3)
+                                   ctx <- rstudioapi::getSourceEditorContext()
+                                   p <- ctx$path; if (is.null(p)) p <- "" }},
+                                 error = function(e) NULL)
+                    }}
+                }}
+                b2 <- if (nzchar(p)) normalizePath(p, mustWork = FALSE) else ""
+                if (nzchar(want) && !identical(normalizePath(want, mustWork = FALSE), b2)) {{
+                    list(success = FALSE,
+                         error = paste0("Refusing to edit: you targeted '", want,
+                                        "' but the focused document is '",
+                                        if (nzchar(p)) p else "(untitled)",
+                                        "'. Open the target file and retry."))
                 }} else {{
-                    list(
-                        success = FALSE,
-                        error = "Pattern not found in document"
-                    )
+                    content <- ctx$contents
+                    ls_ <- {line_start}; le_ <- {line_end}
+                    sp <- "{search_pattern}"; rp <- "{replacement}"
+                    res <- NULL
+                    if (!is.null(ls_) && !is.null(le_)) {{
+                        if (ls_ > 0 && le_ <= length(content) && ls_ <= le_) {{
+                            sub_txt <- paste(content[ls_:le_], collapse = "\n")
+                            mod <- gsub(sp, rp, sub_txt, perl = TRUE)
+                            if (identical(mod, sub_txt)) {{
+                                res <- list(success = FALSE,
+                                            error = paste0("Pattern not found within lines ", ls_, "-", le_))
+                            }} else {{
+                                # line count may change: splice, do not require equality
+                                new_lines <- strsplit(mod, "\n", fixed = TRUE)[[1]]
+                                before <- if (ls_ > 1) content[1:(ls_ - 1)] else character(0)
+                                after <- if (le_ < length(content)) content[(le_ + 1):length(content)] else character(0)
+                                new_content <- c(before, new_lines, after)
+                                rstudioapi::setDocumentContents(paste(new_content, collapse = "\n"), id = ctx$id)
+                                res <- list(success = TRUE,
+                                            message = paste0("Modified lines ", ls_, "-", le_,
+                                                             " (", length(content), " -> ", length(new_content), " lines)"))
+                            }}
+                        }} else {{
+                            res <- list(success = FALSE,
+                                        error = paste0("Invalid line range: ", ls_, "-", le_,
+                                                       ". Document has ", length(content), " lines."))
+                        }}
+                    }} else {{
+                        full_text <- paste(content, collapse = "\n")
+                        mod <- gsub(sp, rp, full_text, perl = TRUE)
+                        if (identical(mod, full_text)) {{
+                            res <- list(success = FALSE, error = "Pattern not found in document")
+                        }} else {{
+                            rstudioapi::setDocumentContents(mod, id = ctx$id)
+                            res <- list(success = TRUE, message = "Modified code in the document")
+                        }}
+                    }}
+                    if (isTRUE(res$success)) {{
+                        saved <- FALSE
+                        if (do_save && nzchar(p)) {{
+                            saved <- tryCatch({{ rstudioapi::documentSave(id = ctx$id); TRUE }},
+                                              error = function(e) FALSE)
+                        }}
+                        res$path <- if (nzchar(p)) p else "(untitled buffer)"
+                        res$saved_to_disk <- saved
+                        res$note <- if (saved) "Edit applied and file SAVED to disk; read_file now reflects it."
+                                    else "Edit applied to the EDITOR BUFFER ONLY. The file on disk is unchanged, so read_file will still show the old content until it is saved."
+                    }}
+                    res
                 }}
             }}
         }} else {{
-            list(
-                success = FALSE,
-                error = "RStudio API not available"
-            )
+            list(success = FALSE, error = "RStudio API not available")
         }}
         """
-        
+
         result = await execute_r_code_via_addin(modify_code)
-        
+
         if not result.get("success", False):
             return [types.TextContent(
                 type="text",
                 text=f"Error modifying code: {result.get('error', 'Unknown error')}"
             )]
-        
+
         return [types.TextContent(
             type="text",
             text=result.get("output", "No result returned from code modification")
@@ -2632,27 +2825,64 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         text = escape_r_string(arguments["text"])
         line = arguments.get("line")
         column = arguments.get("column")
-
+        target = escape_r_string(arguments.get("path", "") or "")
+        do_save = "TRUE" if arguments.get("save", True) else "FALSE"
         if line is not None:
             col = int(column) if column is not None else 1
-            insert_code = f'''
-if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {{
-    pos <- rstudioapi::document_position({int(line)}, {col})
-    rstudioapi::insertText(location = pos, text = "{text}")
-    paste0("Inserted text at line ", {int(line)}, ", column ", {col})
-}} else {{
-    stop("RStudio API not available")
-}}
-'''
+            loc = f"rstudioapi::document_position({int(line)}, {col})"
+            where = f'paste0("line ", {int(line)}, ", column ", {col})'
         else:
-            insert_code = f'''
-if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {{
-    rstudioapi::insertText(text = "{text}")
-    "Inserted text at current cursor position"
-}} else {{
-    stop("RStudio API not available")
-}}
-'''
+            loc = "NULL"
+            where = '"the cursor position"'
+
+        insert_code = f"""
+        if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {{
+            want <- "{target}"
+            do_save <- {do_save}
+            ctx <- tryCatch(rstudioapi::getSourceEditorContext(), error = function(e) NULL)
+            if (is.null(ctx) || is.null(ctx$id) || !nzchar(ctx$id)) {{
+                list(success = FALSE,
+                     error = paste("No source document is open or focused in RStudio.",
+                                   "Open the target file in the Source pane (or pass 'path'), then retry."))
+            }} else {{
+                p <- ctx$path; if (is.null(p)) p <- ""
+                if (nzchar(want)) {{
+                    a <- normalizePath(want, mustWork = FALSE)
+                    b <- if (nzchar(p)) normalizePath(p, mustWork = FALSE) else ""
+                    if (!identical(a, b)) {{
+                        tryCatch({{ rstudioapi::documentOpen(want); Sys.sleep(0.3)
+                                   ctx <- rstudioapi::getSourceEditorContext()
+                                   p <- ctx$path; if (is.null(p)) p <- "" }},
+                                 error = function(e) NULL)
+                    }}
+                }}
+                b2 <- if (nzchar(p)) normalizePath(p, mustWork = FALSE) else ""
+                if (nzchar(want) && !identical(normalizePath(want, mustWork = FALSE), b2)) {{
+                    list(success = FALSE,
+                         error = paste0("Refusing to insert: you targeted '", want,
+                                        "' but the focused document is '",
+                                        if (nzchar(p)) p else "(untitled)", "'."))
+                }} else {{
+                    loc <- {loc}
+                    if (is.null(loc)) rstudioapi::insertText(text = "{text}", id = ctx$id)
+                    else rstudioapi::insertText(location = loc, text = "{text}", id = ctx$id)
+                    saved <- FALSE
+                    if (do_save && nzchar(p)) {{
+                        saved <- tryCatch({{ rstudioapi::documentSave(id = ctx$id); TRUE }},
+                                          error = function(e) FALSE)
+                    }}
+                    list(success = TRUE,
+                         message = paste0("Inserted text at ", {where}),
+                         path = if (nzchar(p)) p else "(untitled buffer)",
+                         saved_to_disk = saved,
+                         note = if (saved) "Insert applied and file SAVED to disk."
+                                else "Insert applied to the EDITOR BUFFER ONLY; the file on disk is unchanged until saved.")
+                }}
+            }}
+        }} else {{
+            list(success = FALSE, error = "RStudio API not available")
+        }}
+        """
 
         result = await execute_r_code_via_addin(insert_code)
 
@@ -2662,11 +2892,10 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
                 text=f"Error inserting text: {result.get('error', 'Unknown error')}"
             )]
 
-        result_contents.append(types.TextContent(
+        return [types.TextContent(
             type="text",
-            text=result.get("output", "Text inserted successfully")
-        ))
-        return result_contents
+            text=result.get("output", "Text inserted")
+        )]
 
     elif name == "cancel_annotation_job":
         job_id = arguments.get("job_id", "").strip()
