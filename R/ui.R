@@ -1717,11 +1717,11 @@ query_agent_history <- function(agent_filter = "all", requesting_agent = NULL,
 #' @return A list with blocked (logical) and reason (character) fields
 
 validate_code_security <- function(code) {
-  # System command calls: allowed only when getOption('clauder.allow_system', FALSE) is TRUE (default off = public shipped behavior)
-  if (!isTRUE(getOption("clauder.allow_system", FALSE)) && (grepl("\\bsystem\\s*\\(", code) ||
+  # System command calls to block completely
+  if (grepl("\\bsystem\\s*\\(", code) ||
       grepl("\\bsystem2\\s*\\(", code) ||
       grepl("\\bshell\\s*\\(", code) ||
-      grepl("\\bshell\\.exec\\s*\\(", code))) {
+      grepl("\\bshell\\.exec\\s*\\(", code)) {
     return(list(
       blocked = TRUE,
       reason = "Security restriction: System command execution is not allowed"
