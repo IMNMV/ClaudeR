@@ -2106,7 +2106,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                 }}
                 buf <- paste(ctx$contents, collapse = "\n")
                 disk <- if (nzchar(p) && file.exists(p)) paste(readLines(p, warn = FALSE), collapse = "\n") else NA_character_
-                dirty <- if (is.na(disk)) NA else !identical(buf, disk)
+                dirty <- if (is.na(disk)) NA else !identical(sub("\n+$", "", buf), sub("\n+$", "", disk))
                 list(
                     content = buf,
                     path = if (nzchar(p)) p else "(unsaved / untitled buffer)",
