@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/ClaudeR_logo.png" alt="ClaudeR Logo" width="150"/>
+  <img src="assets/logo.svg" alt="ClaudeR Logo" width="180"/>
   <h1>ClaudeR - The Modern Researcher's Toolkit</h1>
   <p>
     <b>Connect RStudio to Claude Code, Codex, Gemini CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, and automated manuscript auditing.</b>
