@@ -1,0 +1,131 @@
+# Console capture: record what the USER runs in the console into the same
+# session log the agent writes to, so one file holds both sides of the work.
+#
+# The pieces, and why each is needed:
+#   addTaskCallback        the expression the user typed, and its visible value
+#   globalCallingHandlers  warnings and messages (they go to stderr, so a sink
+#                          cannot see them; R >= 4.0 lets us observe without
+#                          suppressing)
+#   options(error=)        uncaught errors
+# sink(type = "message") is deliberately NOT used: it cannot split, so it would
+# swallow the user's own errors in the console.
+
+.console_state <- new.env(parent = emptyenv())
+
+console_log_path <- function() {
+  s <- tryCatch(.claude_server_env$settings, error = function(e) NULL)
+  if (is.null(s) || !isTRUE(s$log_to_file)) return(NULL)
+  p <- s$log_file_path
+  if (is.null(p) || !nzchar(p)) return(NULL)
+  p
+}
+
+# One writer for every console entry, so the format stays consistent.
+console_write <- function(text, tag = "user") {
+  p <- console_log_path()
+  if (is.null(p)) return(invisible(FALSE))
+  ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  entry <- sprintf("# --- [%s] ---\n# Run by %s (console):\n%s\n\n", ts, tag, text)
+  tryCatch(cat(entry, file = p, append = TRUE), error = function(e) NULL)
+  invisible(TRUE)
+}
+
+# Trim runaway output so one huge print cannot bloat the log.
+console_trim <- function(x, max_lines = 40L) {
+  if (length(x) <= max_lines) return(x)
+  c(x[seq_len(max_lines)],
+    sprintf("# ... %d more lines not logged", length(x) - max_lines))
+}
+
+console_note_condition <- function(kind, msg) {
+  msg <- trimws(paste(msg, collapse = " "))
+  if (!nzchar(msg)) return(invisible(NULL))
+  .console_state$pending <- c(.console_state$pending,
+                              sprintf("# %s: %s", kind, msg))
+  invisible(NULL)
+}
+
+console_task_callback <- function(expr, value, ok, visible) {
+  # Never let logging break the user's session.
+  tryCatch({
+    if (is.null(console_log_path())) return(TRUE)
+    code <- paste(deparse(expr), collapse = "\n")
+
+    # Skip our own bookkeeping so the log does not describe itself.
+    if (grepl("^(start_console_logging|stop_console_logging|ClaudeR:::)", code)) return(TRUE)
+
+    lines <- character(0)
+    if (isTRUE(visible) && isTRUE(ok)) {
+      out <- tryCatch(utils::capture.output(print(value)),
+                      error = function(e) character(0))
+      if (length(out)) lines <- paste("#", console_trim(out))
+    }
+    if (!isTRUE(ok)) lines <- c(lines, "# error: command did not complete")
+    if (length(.console_state$pending)) {
+      lines <- c(.console_state$pending, lines)
+      .console_state$pending <- NULL
+    }
+    body <- if (length(lines)) paste0(code, "\n", paste(lines, collapse = "\n")) else code
+    console_write(body, tag = "user")
+  }, error = function(e) NULL)
+  TRUE
+}
+
+#' Start logging the user's console activity
+#'
+#' Adds the user's own console commands, and their results, to the session log
+#' the agent already writes to. An agent can then read one file and see both
+#' sides of the session.
+#'
+#' @return Invisibly TRUE if capture started.
+#' @export
+start_console_logging <- function() {
+  if (isTRUE(.console_state$active)) return(invisible(TRUE))
+  .console_state$pending <- NULL
+  .console_state$handle <- addTaskCallback(console_task_callback,
+                                           name = "clauder_console_log")
+  if (getRversion() >= "4.0.0") {
+    # globalCallingHandlers() refuses to run with handlers on the stack, so it
+    # must not be wrapped in tryCatch here.
+    .console_state$old_handlers <- globalCallingHandlers()
+    # Observe only. Do NOT invoke the muffle restarts: the user must still see
+    # their own warnings and messages in the console.
+    globalCallingHandlers(
+      warning = function(w) console_note_condition("warning", conditionMessage(w)),
+      message = function(m) console_note_condition("message", conditionMessage(m))
+    )
+  }
+  .console_state$old_error <- getOption("error")
+  options(error = function() {
+    tryCatch({
+      msg <- geterrmessage()
+      console_write(sprintf("# error: %s", trimws(msg)), tag = "user")
+    }, error = function(e) NULL)
+  })
+  .console_state$active <- TRUE
+  message("ClaudeR: console logging on. Your console commands now appear in the session log.")
+  # Our own startup message must not show up as the user's first log entry.
+  .console_state$pending <- NULL
+  invisible(TRUE)
+}
+
+#' Stop logging the user's console activity
+#'
+#' @return Invisibly TRUE.
+#' @export
+stop_console_logging <- function() {
+  if (!isTRUE(.console_state$active)) return(invisible(TRUE))
+  tryCatch(removeTaskCallback("clauder_console_log"), error = function(e) NULL)
+  if (getRversion() >= "4.0.0") {
+    # Drop ours, then put back whatever was registered before, so handlers
+    # belonging to other packages survive.
+    globalCallingHandlers(NULL)
+    old <- .console_state$old_handlers
+    if (length(old)) do.call(globalCallingHandlers, old)
+  }
+  options(error = .console_state$old_error)
+  .console_state$active <- FALSE
+  .console_state$pending <- NULL
+  message("ClaudeR: console logging off.")
+  invisible(TRUE)
+}

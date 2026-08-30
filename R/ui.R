@@ -734,6 +734,8 @@ claudeAddin <- function() {
           condition = "input.log_to_file == true",
           textInput("log_file_path", "Log file path",
                            value = settings$log_file_path),
+          checkboxInput("log_console", "Also log my own console commands",
+                           value = isTRUE(settings$log_console)),
           actionButton("open_log", "Open Log File", class = "btn-sm"),
           actionButton("export_script", "Export Clean Script", class = "btn-sm")
         )
@@ -790,6 +792,11 @@ claudeAddin <- function() {
     observeEvent(input$print_to_console, {
       update_setting("print_to_console", input$print_to_console)
     }, ignoreInit = TRUE)
+    observeEvent(input$log_console, {
+      update_setting("log_console", input$log_console)
+      if (isTRUE(input$log_console)) start_console_logging() else stop_console_logging()
+    }, ignoreInit = TRUE)
+
     observeEvent(input$log_to_file, {
       update_setting("log_to_file", input$log_to_file)
     }, ignoreInit = TRUE)
