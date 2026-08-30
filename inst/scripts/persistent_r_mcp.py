@@ -30,13 +30,18 @@ R_ADDIN_URL = "http://127.0.0.1:8787"  # Fallback if no discovery files found
 # On Windows, prefer USERPROFILE explicitly. Python's expanduser already does
 # this internally, but being explicit guards against odd HOME settings (e.g.
 # OneDrive-redirected Documents) and matches the R-side discovery_dir().
-if sys.platform == "win32":
-    SESSIONS_DIR = os.path.join(
-        os.environ.get("USERPROFILE") or os.path.expanduser("~"),
-        ".claude_r_sessions",
-    )
-else:
-    SESSIONS_DIR = os.path.expanduser("~/.claude_r_sessions")
+def _home_dir() -> str:
+    """Home directory, resolved the same way the R side resolves it.
+
+    Every path shared with R must go through this. R uses path.expand("~"),
+    which on Windows follows USERPROFILE, so a HOME pointing at OneDrive would
+    otherwise put the two halves in different folders."""
+    if sys.platform == "win32":
+        return os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    return os.path.expanduser("~")
+
+
+SESSIONS_DIR = os.path.join(_home_dir(), ".claude_r_sessions")
 _agent_id: Optional[str] = None       # Set in main()
 _agent_id_source: str = "unset"       # Where the identity came from (for the intro)
 _target_session: Optional[str] = None  # Set by connect_session tool
@@ -329,7 +334,7 @@ def _coord_dir() -> str:
     get_r_addin_url()  # latch a session if not bound yet
     session = _target_session or "default"
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", session)
-    d = os.path.join(os.path.expanduser("~"), ".clauder_coord", safe)
+    d = os.path.join(_home_dir(), ".clauder_coord", safe)
     os.makedirs(d, mode=0o700, exist_ok=True)
     return d
 

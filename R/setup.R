@@ -105,10 +105,14 @@ configure <- function(for_cursor = FALSE, use_uvx = TRUE, python_path = NULL) {
 
   
   # --- Add or update the r-studio server entry ---
-  config$mcpServers$`r-studio` <- list(
-    command = mcp_command,
-    args = mcp_args
-  )
+  # Update command and args in place. Anything else the user put on this entry
+  # (most importantly an env block carrying CLAUDER_AGENT_ID) must survive, so
+  # do not replace the whole entry.
+  existing <- config$mcpServers$`r-studio`
+  if (!is.list(existing)) existing <- list()
+  existing$command <- mcp_command
+  existing$args <- mcp_args
+  config$mcpServers$`r-studio` <- existing
 
   
   # --- Write the updated config back to the file ---

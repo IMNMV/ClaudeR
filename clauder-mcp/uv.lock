@@ -163,7 +163,7 @@ wheels = [
 
 [[package]]
 name = "clauder-mcp"
-version = "0.14.3"
+version = "0.14.5"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
