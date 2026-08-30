@@ -65,6 +65,19 @@ write_discovery_file <- function(session_name, port, token) {
     started_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%S")
   )
   f <- file.path(d, paste0(session_name, ".json"))
+  # Two live sessions sharing a name would silently clobber each other's
+  # discovery file, and agents would then be routed to one of them holding the
+  # other's token. Port reuse is already caught loudly; this was not.
+  if (file.exists(f)) {
+    other <- tryCatch(jsonlite::fromJSON(f), error = function(e) NULL)
+    if (!is.null(other) && !identical(as.integer(other$pid), Sys.getpid()) &&
+        pid_is_alive(other$pid)) {
+      warning(sprintf(paste0("Another live R session is already registered as '%s' ",
+                             "(pid %s, port %s). Give this session a different name, ",
+                             "or agents may be routed to the wrong one."),
+                      session_name, other$pid, other$port), call. = FALSE)
+    }
+  }
   jsonlite::write_json(info, f, auto_unbox = TRUE, pretty = TRUE)
   try(Sys.chmod(f, mode = "0600"), silent = TRUE)
 }
@@ -74,6 +87,30 @@ remove_discovery_file <- function(session_name) {
   if (file.exists(f)) file.remove(f)
 }
 
+# Is a process alive? Must never kill it.
+#
+# tools::pskill(pid, signal = 0) is the usual idiom, and it is safe on Unix
+# where it maps to kill(pid, 0). On Windows it is NOT: ?tools::pskill states
+# that only SIGINT and SIGTERM exist there and that pskill "will always use the
+# Windows system call TerminateProcess". Using it as a liveness probe therefore
+# terminated the very session it was asking about, and returned TRUE for the
+# kill, so the discovery file was then judged live and left behind.
+pid_is_alive <- function(pid) {
+  pid <- suppressWarnings(as.integer(pid))
+  if (is.na(pid) || pid <= 0) return(FALSE)
+  if (.Platform$OS.type == "windows") {
+    # tasklist ships with Windows, so this needs no extra package.
+    out <- tryCatch(
+      suppressWarnings(system2("tasklist",
+                               c("/FI", shQuote(sprintf("PID eq %d", pid)), "/NH"),
+                               stdout = TRUE, stderr = NULL)),
+      error = function(e) character(0)
+    )
+    return(any(grepl(paste0("\\b", pid, "\\b"), out)))
+  }
+  isTRUE(tryCatch(tools::pskill(pid, signal = 0), error = function(e) FALSE))
+}
+
 cleanup_stale_discovery_files <- function() {
   d <- discovery_dir()
   if (!dir.exists(d)) return(invisible(NULL))
@@ -81,9 +118,7 @@ cleanup_stale_discovery_files <- function() {
   for (f in files) {
     tryCatch({
       info <- jsonlite::fromJSON(f)
-      # signal = 0 checks if PID exists without killing it
-      pid_alive <- tools::pskill(info$pid, signal = 0)
-      if (!isTRUE(pid_alive)) file.remove(f)
+      if (!pid_is_alive(info$pid)) file.remove(f)
     }, error = function(e) {
       # Corrupted file, remove it
       file.remove(f)
