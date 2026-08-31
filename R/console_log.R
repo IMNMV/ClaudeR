@@ -7,6 +7,11 @@
 #                          cannot see them; R >= 4.0 lets us observe without
 #                          suppressing)
 #   options(error=)        uncaught errors
+#   sink(split = TRUE)     everything printed as a side effect: cat(), progress
+#                          output, print() called inside a function. The task
+#                          callback only ever sees the value a command returns,
+#                          so without this the log shows f() but not what f()
+#                          printed. split = TRUE keeps it visible in the console.
 # sink(type = "message") is deliberately NOT used: it cannot split, so it would
 # swallow the user's own errors in the console.
 
@@ -45,6 +50,51 @@ console_note_condition <- function(kind, msg) {
   invisible(NULL)
 }
 
+# Start teeing stdout to a scratch file. split = TRUE so the console still
+# shows everything; we only read a copy.
+console_sink_open <- function() {
+  f <- tempfile(fileext = ".txt")
+  con <- file(f, open = "wt")
+  .console_state$sink_file <- f
+  .console_state$sink_con <- con
+  .console_state$consumed <- 0L
+  sink(con, split = TRUE)
+  invisible(TRUE)
+}
+
+# Pop our sink, being careful not to disturb a capture.output() that an agent
+# call may have pushed on top of it.
+console_sink_close <- function() {
+  con <- .console_state$sink_con
+  if (is.null(con)) return(invisible(FALSE))
+  tryCatch({
+    if (sink.number() > 0) sink()
+    flush(con); close(con)
+  }, error = function(e) NULL)
+  tryCatch(unlink(.console_state$sink_file), error = function(e) NULL)
+  .console_state$sink_con <- NULL
+  .console_state$sink_file <- NULL
+  .console_state$consumed <- 0L
+  invisible(TRUE)
+}
+
+# Lines printed since the previous command. Reads by offset rather than
+# truncating, because reopening the file mid-session corrupts the sink stack.
+console_drain <- function() {
+  con <- .console_state$sink_con
+  f <- .console_state$sink_file
+  if (is.null(con) || is.null(f)) return(character(0))
+  tryCatch({
+    flush(con)
+    all <- readLines(f, warn = FALSE)
+    seen <- .console_state$consumed %||% 0L
+    .console_state$consumed <- length(all)
+    if (length(all) > seen) all[(seen + 1L):length(all)] else character(0)
+  }, error = function(e) character(0))
+}
+
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
 console_task_callback <- function(expr, value, ok, visible) {
   # Never let logging break the user's session.
   tryCatch({
@@ -55,7 +105,11 @@ console_task_callback <- function(expr, value, ok, visible) {
     if (grepl("^(start_console_logging|stop_console_logging|ClaudeR:::)", code)) return(TRUE)
 
     lines <- character(0)
-    if (isTRUE(visible) && isTRUE(ok)) {
+    printed <- console_drain()
+    if (length(printed)) {
+      lines <- paste("#", console_trim(printed))
+    } else if (isTRUE(visible) && isTRUE(ok)) {
+      # Nothing was printed as a side effect, so fall back to the value itself.
       out <- tryCatch(utils::capture.output(print(value)),
                       error = function(e) character(0))
       if (length(out)) lines <- paste("#", console_trim(out))
@@ -82,6 +136,7 @@ console_task_callback <- function(expr, value, ok, visible) {
 start_console_logging <- function() {
   if (isTRUE(.console_state$active)) return(invisible(TRUE))
   .console_state$pending <- NULL
+  console_sink_open()
   .console_state$handle <- addTaskCallback(console_task_callback,
                                            name = "clauder_console_log")
   if (getRversion() >= "4.0.0") {
@@ -102,6 +157,9 @@ start_console_logging <- function() {
       console_write(sprintf("# error: %s", trimws(msg)), tag = "user")
     }, error = function(e) NULL)
   })
+  reg.finalizer(.console_state,
+                function(e) tryCatch(console_sink_close(), error = function(x) NULL),
+                onexit = TRUE)
   .console_state$active <- TRUE
   message("ClaudeR: console logging on. Your console commands now appear in the session log.")
   # Our own startup message must not show up as the user's first log entry.
@@ -116,6 +174,7 @@ start_console_logging <- function() {
 stop_console_logging <- function() {
   if (!isTRUE(.console_state$active)) return(invisible(TRUE))
   tryCatch(removeTaskCallback("clauder_console_log"), error = function(e) NULL)
+  console_sink_close()
   if (getRversion() >= "4.0.0") {
     # Drop ours, then put back whatever was registered before, so handlers
     # belonging to other packages survive.
