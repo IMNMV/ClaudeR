@@ -92,7 +92,7 @@ export_log_as_notebook <- function(log_path = NULL, output_path = NULL,
     is_error <- grepl("(ERROR)", agent_line, fixed = TRUE)
     err_msgs <- sub("^# Error: ", "", block[grepl("^# Error: ", block)])
 
-    code_lines <- block[!grepl("^# --- \\[|^# Code executed by |^# Error: ", block)]
+    code_lines <- block[!grepl("^# --- \\[|^# Code executed by |^# Run by |^# Error: |^#> ", block)]
     while (length(code_lines) > 0 && trimws(code_lines[length(code_lines)]) == "") {
       code_lines <- code_lines[-length(code_lines)]
     }

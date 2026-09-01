@@ -1441,6 +1441,21 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
       output <- c(output, collected_conditions)
     }
 
+    # This execution's sink was opened on top of the console-logging sink (if
+    # one is active), and split = TRUE cascades, so everything printed here has
+    # also landed in the console buffer. Drop it, or the next thing the user
+    # types would carry the agent's output as if the user had produced it.
+    tryCatch(console_drain(), error = function(e) NULL)
+
+    # Record what the code printed, not just the code. The log is the one file
+    # an agent reads back to see what happened, and until now it showed the
+    # call but never its result.
+    if (settings$log_to_file && !is.null(settings$log_file_path) &&
+        settings$log_file_path != "" && length(output) > 0) {
+      tryCatch(log_output_to_file(output, settings$log_file_path),
+               error = function(e) NULL)
+    }
+
     # --- AFTER eval: only capture if a NEW plot was actually created ---
     captured_plot <- FALSE
     plot_data <- NULL
@@ -1583,7 +1598,10 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
     # Unwind any sinks opened during this execution
     if (exists("sink_depth")) {
       while (sink.number() > sink_depth) sink()
-    } else if (sink.number() > 0) sink()
+    }
+    # No sink_depth means we failed before opening one. Do NOT pop blindly:
+    # console logging keeps a sink of its own underneath, and popping it
+    # silently stops the user's console from being recorded.
 
     # Recover whatever was printed before the error: partial output plus
     # captured warnings/messages are often exactly the context the agent
@@ -1636,7 +1654,10 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL) {
     # Unwind any sinks this execution opened
     if (exists("sink_depth")) {
       while (sink.number() > sink_depth) sink()
-    } else if (sink.number() > 0) sink()
+    }
+    # No sink_depth means we failed before opening one. Do NOT pop blindly:
+    # console logging keeps a sink of its own underneath, and popping it
+    # silently stops the user's console from being recorded.
 
     # Clean up temporary files
     if (exists("output_file") && file.exists(output_file)) {
@@ -1681,7 +1702,7 @@ past_history_entries <- function(max_files = 5L) {
       agent_line <- if (length(block) >= 2) block[2] else ""
       agent <- sub("^# Code executed by ([^ ]+).*$", "\\1", agent_line)
       agent <- sub(":$", "", agent)
-      code_lines <- block[!grepl("^# --- \\[|^# Code executed by |^# Error: ", block)]
+      code_lines <- block[!grepl("^# --- \\[|^# Code executed by |^# Run by |^# Error: |^#> ", block)]
       code_lines <- code_lines[nzchar(trimws(code_lines))]
       entries[[length(entries) + 1L]] <- list(
         timestamp = suppressWarnings(as.POSIXct(ts)),
@@ -1797,6 +1818,20 @@ validate_code_security <- function(code) {
 
   # Allow everything else
   return(list(blocked = FALSE))
+}
+
+# Append what a command printed, under the entry just written for it.
+# The "#> " prefix marks these lines as output rather than code, so replay,
+# history and notebook export skip them.
+log_output_to_file <- function(output, log_path, max_lines = 40L) {
+  if (length(output) == 0) return(invisible(NULL))
+  if (length(output) > max_lines) {
+    output <- c(output[seq_len(max_lines)],
+                sprintf("... %d more lines not logged", length(output) - max_lines))
+  }
+  entry <- paste0(paste0("#> ", output, collapse = "\n"), "\n\n")
+  tryCatch(cat(entry, file = log_path, append = TRUE), error = function(e) NULL)
+  invisible(NULL)
 }
 
 #' Log code to file
@@ -1971,7 +2006,7 @@ export_log_as_script <- function(log_path = NULL, output_path = NULL, include_er
 
     # Extract code lines (skip the header comments)
     # Header lines: "# --- [timestamp] ---", "# Code executed by ...", "# Error: ..."
-    code_lines <- block[!grepl("^# --- \\[|^# Code executed by |^# Error: |^#\\s*$", block)]
+    code_lines <- block[!grepl("^# --- \\[|^# Code executed by |^# Run by |^# Error: |^#> |^#\\s*$", block)]
 
     # Remove trailing blank lines
     while (length(code_lines) > 0 && code_lines[length(code_lines)] == "") {

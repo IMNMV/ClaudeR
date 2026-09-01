@@ -46,7 +46,7 @@ console_note_condition <- function(kind, msg) {
   msg <- trimws(paste(msg, collapse = " "))
   if (!nzchar(msg)) return(invisible(NULL))
   .console_state$pending <- c(.console_state$pending,
-                              sprintf("# %s: %s", kind, msg))
+                              sprintf("#> %s: %s", kind, msg))
   invisible(NULL)
 }
 
@@ -59,6 +59,7 @@ console_sink_open <- function() {
   .console_state$sink_con <- con
   .console_state$consumed <- 0L
   sink(con, split = TRUE)
+  .console_state$sink_owned <- TRUE
   invisible(TRUE)
 }
 
@@ -68,7 +69,10 @@ console_sink_close <- function() {
   con <- .console_state$sink_con
   if (is.null(con)) return(invisible(FALSE))
   tryCatch({
-    if (sink.number() > 0) sink()
+    # Only pop if ours is the sink on top. Popping blindly would remove one
+    # that an agent execution opened and leave that execution writing nowhere.
+    if (isTRUE(.console_state$sink_owned) && sink.number() > 0) sink()
+    .console_state$sink_owned <- FALSE
     flush(con); close(con)
   }, error = function(e) NULL)
   tryCatch(unlink(.console_state$sink_file), error = function(e) NULL)
@@ -95,8 +99,22 @@ console_drain <- function() {
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
+# Our sink can be removed by something else unwinding the sink stack. At top
+# level, with every execution finished, ours should be the only one left. If it
+# is gone, put it back rather than silently recording nothing from here on.
+console_sink_heal <- function() {
+  if (!isTRUE(.console_state$active)) return(invisible(FALSE))
+  if (isTRUE(.console_state$sink_owned) && sink.number() >= 1) return(invisible(FALSE))
+  if (sink.number() != 0) return(invisible(FALSE))
+  con <- .console_state$sink_con
+  if (!is.null(con)) tryCatch(close(con), error = function(e) NULL)
+  tryCatch(console_sink_open(), error = function(e) NULL)
+  invisible(TRUE)
+}
+
 console_task_callback <- function(expr, value, ok, visible) {
-  # Never let logging break the user's session.
+  # A task callback that signals an error is removed by R, which would end
+  # console logging silently, so nothing here is allowed to escape.
   tryCatch({
     if (is.null(console_log_path())) return(TRUE)
     code <- paste(deparse(expr), collapse = "\n")
@@ -107,14 +125,14 @@ console_task_callback <- function(expr, value, ok, visible) {
     lines <- character(0)
     printed <- console_drain()
     if (length(printed)) {
-      lines <- paste("#", console_trim(printed))
+      lines <- paste0("#> ", console_trim(printed))
     } else if (isTRUE(visible) && isTRUE(ok)) {
       # Nothing was printed as a side effect, so fall back to the value itself.
       out <- tryCatch(utils::capture.output(print(value)),
                       error = function(e) character(0))
-      if (length(out)) lines <- paste("#", console_trim(out))
+      if (length(out)) lines <- paste0("#> ", console_trim(out))
     }
-    if (!isTRUE(ok)) lines <- c(lines, "# error: command did not complete")
+    if (!isTRUE(ok)) lines <- c(lines, "#> error: command did not complete")
     if (length(.console_state$pending)) {
       lines <- c(.console_state$pending, lines)
       .console_state$pending <- NULL
@@ -122,6 +140,7 @@ console_task_callback <- function(expr, value, ok, visible) {
     body <- if (length(lines)) paste0(code, "\n", paste(lines, collapse = "\n")) else code
     console_write(body, tag = "user")
   }, error = function(e) NULL)
+  tryCatch(console_sink_heal(), error = function(e) NULL)
   TRUE
 }
 
@@ -136,12 +155,11 @@ console_task_callback <- function(expr, value, ok, visible) {
 start_console_logging <- function() {
   if (isTRUE(.console_state$active)) return(invisible(TRUE))
   .console_state$pending <- NULL
-  console_sink_open()
-  .console_state$handle <- addTaskCallback(console_task_callback,
-                                           name = "clauder_console_log")
+  # Order matters. globalCallingHandlers() cannot be wrapped in tryCatch (it
+  # refuses to run with handlers on the stack), so it goes first: if it fails,
+  # it fails before a sink or a callback has been installed, leaving nothing
+  # half-configured behind.
   if (getRversion() >= "4.0.0") {
-    # globalCallingHandlers() refuses to run with handlers on the stack, so it
-    # must not be wrapped in tryCatch here.
     .console_state$old_handlers <- globalCallingHandlers()
     # Observe only. Do NOT invoke the muffle restarts: the user must still see
     # their own warnings and messages in the console.
@@ -150,11 +168,18 @@ start_console_logging <- function() {
       message = function(m) console_note_condition("message", conditionMessage(m))
     )
   }
+  # Capturing printed output is the optional half. If the sink cannot be opened
+  # the callback must still be registered, or a failure here would silently
+  # stop commands being logged at all, which is worse than losing the output.
+  ok_sink <- isTRUE(tryCatch({ console_sink_open(); TRUE },
+                             error = function(e) FALSE))
+  .console_state$handle <- addTaskCallback(console_task_callback,
+                                           name = "clauder_console_log")
   .console_state$old_error <- getOption("error")
   options(error = function() {
     tryCatch({
       msg <- geterrmessage()
-      console_write(sprintf("# error: %s", trimws(msg)), tag = "user")
+      console_write(sprintf("#> error: %s", trimws(msg)), tag = "user")
     }, error = function(e) NULL)
   })
   reg.finalizer(.console_state,
@@ -162,6 +187,10 @@ start_console_logging <- function() {
                 onexit = TRUE)
   .console_state$active <- TRUE
   message("ClaudeR: console logging on. Your console commands now appear in the session log.")
+  if (!ok_sink) {
+    message("ClaudeR: could not capture printed output here; ",
+            "commands and their values will still be logged.")
+  }
   # Our own startup message must not show up as the user's first log entry.
   .console_state$pending <- NULL
   invisible(TRUE)
