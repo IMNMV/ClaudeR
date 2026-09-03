@@ -5,7 +5,15 @@
 #   addTaskCallback        the expression the user typed, and its visible value
 #   globalCallingHandlers  warnings and messages (they go to stderr, so a sink
 #                          cannot see them; R >= 4.0 lets us observe without
-#                          suppressing)
+#                          suppressing). CONSTRAINT: it can only be called with
+#                          an empty handler stack, i.e. from a bare top-level
+#                          console call. Inside a Shiny observer (the addin
+#                          checkbox), a task callback, a later() callback, or
+#                          tryCatch() it errors "should not be called with
+#                          handlers on the stack". So it is attempted only when
+#                          sys.nframe() says we are at top level; otherwise
+#                          warnings are read from last.warning after each
+#                          command instead, and message() output is not captured.
 #   options(error=)        uncaught errors
 #   sink(split = TRUE)     everything printed as a side effect: cat(), progress
 #                          output, print() called inside a function. The task
@@ -43,6 +51,7 @@ console_trim <- function(x, max_lines = 40L) {
 }
 
 console_note_condition <- function(kind, msg) {
+  if (!isTRUE(.console_state$active)) return(invisible(NULL))
   msg <- trimws(paste(msg, collapse = " "))
   if (!nzchar(msg)) return(invisible(NULL))
   .console_state$pending <- c(.console_state$pending,
@@ -133,6 +142,17 @@ console_task_callback <- function(expr, value, ok, visible) {
       if (length(out)) lines <- paste0("#> ", console_trim(out))
     }
     if (!isTRUE(ok)) lines <- c(lines, "#> error: command did not complete")
+    # Without globalCallingHandlers (see header), pick warnings up from
+    # last.warning. It lingers across commands, so only report it when it
+    # changed since the previous command.
+    if (!isTRUE(.console_state$gch_installed)) {
+      lw <- tryCatch(get0("last.warning", envir = baseenv(), inherits = FALSE),
+                     error = function(e) NULL)
+      if (!is.null(lw) && !identical(lw, .console_state$last_lw)) {
+        .console_state$last_lw <- lw
+        lines <- c(lines, paste0("#> warning: ", names(lw)))
+      }
+    }
     if (length(.console_state$pending)) {
       lines <- c(.console_state$pending, lines)
       .console_state$pending <- NULL
@@ -153,13 +173,43 @@ console_task_callback <- function(expr, value, ok, visible) {
 #' @return Invisibly TRUE if capture started.
 #' @export
 start_console_logging <- function() {
-  if (isTRUE(.console_state$active)) return(invisible(TRUE))
+  # Called from the console (top level) OR from the addin's Shiny observer.
+  at_top <- sys.nframe() == 1L
+  registered <- "clauder_console_log" %in% getTaskCallbackNames()
+  if (isTRUE(.console_state$active) && registered) return(invisible(TRUE))
   .console_state$pending <- NULL
-  # Order matters. globalCallingHandlers() cannot be wrapped in tryCatch (it
-  # refuses to run with handlers on the stack), so it goes first: if it fails,
-  # it fails before a sink or a callback has been installed, leaving nothing
-  # half-configured behind.
-  if (getRversion() >= "4.0.0") {
+  .console_state$last_lw <- tryCatch(get0("last.warning", envir = baseenv(), inherits = FALSE),
+                                     error = function(e) NULL)
+
+  # 1. The essential half, first and unconditionally: the task callback that
+  #    writes each command. Nothing below may prevent this from being armed.
+  if (!registered) {
+    .console_state$handle <- addTaskCallback(console_task_callback,
+                                             name = "clauder_console_log")
+  }
+
+  # 2. Printed output (optional). If the sink cannot be opened we still log
+  #    commands and their values.
+  ok_sink <- isTRUE(tryCatch({ console_sink_open(); TRUE }, error = function(e) FALSE))
+
+  # 3. Uncaught errors.
+  if (is.null(.console_state$old_error_set)) {
+    .console_state$old_error <- getOption("error")
+    .console_state$old_error_set <- TRUE
+  }
+  options(error = function() {
+    tryCatch({
+      msg <- geterrmessage()
+      console_write(sprintf("#> error: %s", trimws(msg)), tag = "user")
+    }, error = function(e) NULL)
+  })
+
+  .console_state$active <- TRUE
+
+  # 4. Warnings and messages via globalCallingHandlers, LAST, and only from a
+  #    bare top-level call (see header). Not wrapped in tryCatch: that would
+  #    itself put a handler on the stack and guarantee the error.
+  if (!isTRUE(.console_state$gch_installed) && at_top && getRversion() >= "4.0.0") {
     .console_state$old_handlers <- globalCallingHandlers()
     # Observe only. Do NOT invoke the muffle restarts: the user must still see
     # their own warnings and messages in the console.
@@ -167,31 +217,23 @@ start_console_logging <- function() {
       warning = function(w) console_note_condition("warning", conditionMessage(w)),
       message = function(m) console_note_condition("message", conditionMessage(m))
     )
+    .console_state$gch_installed <- TRUE
   }
-  # Capturing printed output is the optional half. If the sink cannot be opened
-  # the callback must still be registered, or a failure here would silently
-  # stop commands being logged at all, which is worse than losing the output.
-  ok_sink <- isTRUE(tryCatch({ console_sink_open(); TRUE },
-                             error = function(e) FALSE))
-  .console_state$handle <- addTaskCallback(console_task_callback,
-                                           name = "clauder_console_log")
-  .console_state$old_error <- getOption("error")
-  options(error = function() {
-    tryCatch({
-      msg <- geterrmessage()
-      console_write(sprintf("#> error: %s", trimws(msg)), tag = "user")
-    }, error = function(e) NULL)
-  })
+
   reg.finalizer(.console_state,
                 function(e) tryCatch(console_sink_close(), error = function(x) NULL),
                 onexit = TRUE)
-  .console_state$active <- TRUE
   message("ClaudeR: console logging on. Your console commands now appear in the session log.")
   if (!ok_sink) {
     message("ClaudeR: could not capture printed output here; ",
             "commands and their values will still be logged.")
   }
-  # Our own startup message must not show up as the user's first log entry.
+  if (!isTRUE(.console_state$gch_installed)) {
+    message("ClaudeR: warnings are logged from last.warning; message() output is not ",
+            "captured when logging is started from the addin. Run ",
+            "start_console_logging() in the console for full capture.")
+  }
+  # Our own startup messages must not show up as the user's first log entry.
   .console_state$pending <- NULL
   invisible(TRUE)
 }
@@ -201,17 +243,25 @@ start_console_logging <- function() {
 #' @return Invisibly TRUE.
 #' @export
 stop_console_logging <- function() {
-  if (!isTRUE(.console_state$active)) return(invisible(TRUE))
+  at_top <- sys.nframe() == 1L
+  if (!isTRUE(.console_state$active) &&
+      !("clauder_console_log" %in% getTaskCallbackNames())) return(invisible(TRUE))
   tryCatch(removeTaskCallback("clauder_console_log"), error = function(e) NULL)
   console_sink_close()
-  if (getRversion() >= "4.0.0") {
+  if (isTRUE(.console_state$gch_installed) && at_top) {
     # Drop ours, then put back whatever was registered before, so handlers
-    # belonging to other packages survive.
+    # belonging to other packages survive. Only possible at bare top level;
+    # from the addin the handlers stay installed but become no-ops because
+    # console_note_condition() checks .console_state$active.
     globalCallingHandlers(NULL)
     old <- .console_state$old_handlers
     if (length(old)) do.call(globalCallingHandlers, old)
+    .console_state$gch_installed <- FALSE
   }
-  options(error = .console_state$old_error)
+  if (isTRUE(.console_state$old_error_set)) {
+    options(error = .console_state$old_error)
+    .console_state$old_error_set <- NULL
+  }
   .console_state$active <- FALSE
   .console_state$pending <- NULL
   message("ClaudeR: console logging off.")
