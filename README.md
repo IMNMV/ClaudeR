@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/imnmv-clauder-badge.png)](https://mseep.ai/app/imnmv-clauder)
+
 <div align="center">
   <img src="assets/logo.svg" alt="ClaudeR Logo" width="180"/>
   <h1>ClaudeR - The Modern Researcher's Toolkit</h1>
