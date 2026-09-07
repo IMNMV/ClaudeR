@@ -8,6 +8,8 @@ Encoding: UTF-8
 Depends:
     R (>= 4.0)
 Imports:
+    fs,
+    ps,
     base64enc,
     callr,
     ggplot2,

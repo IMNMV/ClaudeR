@@ -24,7 +24,7 @@ import mcp.types as types
 server = Server("r-studio")
 
 # Configuration — overwritten in main() after arg parsing
-R_ADDIN_URL = "http://127.0.0.1:8787"  # Fallback if no discovery files found
+R_ADDIN_URL = None  # No implicit port: an undiscovered RStudio is not a default target.
 
 # Session discovery
 # On Windows, prefer USERPROFILE explicitly. Python's expanduser already does
@@ -46,6 +46,7 @@ _agent_id: Optional[str] = None       # Set in main()
 _agent_id_source: str = "unset"       # Where the identity came from (for the intro)
 _target_session: Optional[str] = None  # Set by connect_session tool
 _target_token: Optional[str] = None    # Per-session auth token from the discovery file
+_target_identity = None              # PID/port/start/token captured at explicit binding
 _agent_introduced: bool = False        # First-call introduction flag
 
 # Cache variable to store the result of the ggplot2 check
@@ -65,105 +66,115 @@ _annot_state: Dict[str, Any] = {
 }
 
 
-def _pid_alive(pid: int) -> bool:
-    """Check if a process is running.
-
-    On POSIX, signal 0 is the canonical liveness probe. On Windows, os.kill(pid, 0)
-    raises even for live processes, so we use OpenProcess(SYNCHRONIZE, ...) which
-    is the minimum-privilege Windows equivalent and only succeeds for live PIDs.
-    """
-    if pid <= 0:
+def _pid_alive(pid: int) -> Optional[bool]:
+    """Read-only tri-state probe: None means unknown, never permission to delete."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
     if sys.platform == "win32":
         import ctypes
-        SYNCHRONIZE = 0x00100000
-        handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel.OpenProcess(0x00100000, False, pid)
         if not handle:
-            return False
-        ctypes.windll.kernel32.CloseHandle(handle)
-        return True
+            return False if ctypes.get_last_error() == 87 else None
+        try:
+            result = kernel.WaitForSingleObject(handle, 0)
+            return True if result == 258 else False if result == 0 else None
+        finally:
+            kernel.CloseHandle(handle)
     try:
         os.kill(pid, 0)
         return True
-    except (OSError, ProcessLookupError):
+    except ProcessLookupError:
         return False
-
-
-def discover_sessions() -> List[Dict[str, Any]]:
-    """Read discovery files, pruning any whose R process is dead."""
-    sessions = []
-    if not os.path.isdir(SESSIONS_DIR):
-        return sessions
-    for f in os.listdir(SESSIONS_DIR):
-        if not f.endswith(".json"):
-            continue
-        fpath = os.path.join(SESSIONS_DIR, f)
-        try:
-            with open(fpath) as fh:
-                info = json.load(fh)
-            if not _pid_alive(info.get("pid", -1)):
-                os.remove(fpath)
-                continue
-            sessions.append(info)
-        except Exception:
-            try:
-                os.remove(fpath)
-            except OSError:
-                pass
-    return sessions
-
-
-def _session_info() -> Optional[Dict[str, Any]]:
-    """The discovery record for the session we are bound to, if any.
-
-    Read fresh each time rather than cached: the addin rewrites the file when
-    the user changes a setting, and connect_session can re-bind mid-session.
-    """
-    try:
-        sessions = discover_sessions()
-        if not sessions:
-            return None
-        if _target_session:
-            for s in sessions:
-                if s.get("session_name") == _target_session:
-                    return s
-        # Same preference order as get_r_addin_url, so the tools we advertise
-        # always belong to the session the agent will actually talk to.
-        pick = next((s for s in sessions
-                     if s.get("session_name") == "default"), None)
-        if not pick:
-            sessions.sort(key=lambda s: s.get("port", 99999))
-            pick = sessions[0]
-        return pick
-    except Exception:
+    except OSError:
         return None
 
 
-def get_r_addin_url() -> Optional[str]:
-    """Get the URL for the active R session. Binds on first resolution and
-    stays sticky. Prefers the 'default' session when no target is set.
+def discover_sessions() -> List[Dict[str, Any]]:
+    """Discover valid live/unknown sessions without deleting another process's files."""
+    sessions = []
+    try:
+        names = os.listdir(SESSIONS_DIR)
+    except OSError:
+        return sessions
+    for filename in names:
+        if not filename.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(SESSIONS_DIR, filename), encoding="utf-8") as fh:
+                info = json.load(fh)
+            if not isinstance(info, dict):
+                continue
+            name, port, pid = info.get("session_name"), info.get("port"), info.get("pid")
+            if not isinstance(name, str) or not name or not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+                continue
+            if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+                continue
+            if info.get("token") is not None and not isinstance(info["token"], str):
+                continue
+            if _pid_alive(pid) is False:
+                continue
+            sessions.append(info)
+        except (OSError, ValueError, TypeError):
+            # A partial write, unreadable file or racing rename is not proof of death.
+            continue
+    return sessions
 
-    Also latches the session's auth token, which the R server requires on
-    every request (see _auth_headers)."""
-    global _target_session, _target_token
+
+class SessionBindingError(RuntimeError):
+    pass
+
+
+def _session_identity(info):
+    return (info.get("pid"), info.get("port"), info.get("started_at"), info.get("token"))
+
+
+def get_r_addin_url() -> Optional[str]:
+    """Fail closed after binding; never route a lost target to another R session."""
+    global _target_session, _target_token, _target_identity
     sessions = discover_sessions()
-    if not sessions:
-        _target_token = None
-        return R_ADDIN_URL
     if _target_session:
-        for s in sessions:
-            if s["session_name"] == _target_session:
-                _target_token = s.get("token")
-                return f"http://127.0.0.1:{s['port']}"
-        _target_session = None  # bound session gone, re-pick
-    # Pick: prefer "default" name, else lowest port
-    pick = next((s for s in sessions if s.get("session_name") == "default"), None)
-    if not pick:
-        sessions.sort(key=lambda s: s.get("port", 99999))
+        matches = [s for s in sessions if s["session_name"] == _target_session]
+        if len(matches) != 1:
+            _target_token = None
+            raise SessionBindingError("BOUND_SESSION_LOST_OR_AMBIGUOUS: explicitly connect_session again; no code was rerouted")
+        pick = matches[0]
+        if _target_identity is not None and _session_identity(pick) != _target_identity:
+            _target_token = None
+            raise SessionBindingError("BOUND_SESSION_CHANGED: explicitly reconnect after verifying the target PID")
+    else:
+        if not sessions:
+            _target_token = None
+            return R_ADDIN_URL
+        if len(sessions) != 1:
+            raise SessionBindingError("MULTIPLE_SESSIONS: use list_sessions then connect_session; refusing an implicit target")
         pick = sessions[0]
     _target_session = pick["session_name"]
+    _target_identity = _session_identity(pick)
     _target_token = pick.get("token")
     return f"http://127.0.0.1:{pick['port']}"
+
+
+def _session_info() -> Optional[Dict[str, Any]]:
+    """Fresh settings only for the uniquely identifiable execution target."""
+    try:
+        sessions = discover_sessions()
+        if _target_session:
+            matches = [s for s in sessions if s.get("session_name") == _target_session]
+            if len(matches) != 1:
+                return None
+            pick = matches[0]
+            if _target_identity is not None and _session_identity(pick) != _target_identity:
+                return None
+            return pick
+        return sessions[0] if len(sessions) == 1 else None
+    except Exception:
+        return None
 
 
 def _auth_headers() -> Dict[str, str]:
@@ -225,7 +236,13 @@ async def execute_r_code_via_addin(code: str, want_plot: bool = False) -> Dict[s
     session's plot_auto setting. Older R servers ignore the field and return
     the plot as before.
     """
-    url = get_r_addin_url()
+    try:
+        url = get_r_addin_url()
+    except SessionBindingError as exc:
+        # Binding is refused, not broken. Return it as a normal tool result so
+        # the agent can act on it; raising here surfaces as an opaque internal
+        # error instead of "pick a session".
+        return {"success": False, "error": str(exc)}
     if url is None:
         return {
             "success": False,
@@ -261,7 +278,10 @@ async def execute_r_code_via_addin(code: str, want_plot: bool = False) -> Dict[s
 
 async def post_to_r_addin(payload: Dict[str, Any], timeout: float = 10.0) -> Dict[str, Any]:
     """Send an arbitrary JSON payload to the R addin HTTP server."""
-    url = get_r_addin_url()
+    try:
+        url = get_r_addin_url()
+    except SessionBindingError as exc:
+        return {"success": False, "error": str(exc)}
     if url is None:
         return {"success": False, "error": "No R sessions found. Start the ClaudeR addin in RStudio first."}
     try:
@@ -279,7 +299,12 @@ async def check_addin_status(return_info: bool = False):
     """Check if the RStudio addin is running.
     If return_info is True, returns the full status dict or None.
     Otherwise returns a bool."""
-    url = get_r_addin_url()
+    try:
+        url = get_r_addin_url()
+    except SessionBindingError:
+        # Status is a question, not a command: an ambiguous binding means "not
+        # usable right now", which is what False/None already communicates.
+        return None if return_info else False
     if url is None:
         return None if return_info else False
     try:
@@ -364,7 +389,12 @@ async def get_agent_introduction() -> str:
 # wait_for_message can long-poll without a single R roundtrip.
 
 def _coord_dir() -> str:
-    get_r_addin_url()  # latch a session if not bound yet
+    # Latch a session if not bound yet. An ambiguous binding must not stop
+    # coordination: the directory is derived from the name we already hold.
+    try:
+        get_r_addin_url()
+    except SessionBindingError:
+        pass
     session = _target_session or "default"
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", session)
     d = os.path.join(_home_dir(), ".clauder_coord", safe)
@@ -481,7 +511,10 @@ def _coord_target() -> tuple:
     loudly in that case, and say so when the binding moves to a different
     live session, because earlier traffic sits in the old log unseen."""
     global _coord_bound
-    get_r_addin_url()  # re-binds _target_session to a live session if any exists
+    try:
+        get_r_addin_url()  # Validate binding; never reroute after target loss.
+    except SessionBindingError as exc:
+        return (None, f"FAILED: session '{_target_session}' cannot be used: {exc}. Nothing was written or read.")
     if not discover_sessions():
         stale = _target_session or _coord_bound or "default"
         return (None,
@@ -2015,7 +2048,7 @@ async def list_tools() -> List[types.Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextContent | types.ImageContent]:
     """Handle R tool calls."""
-    global _target_session, _agent_introduced, _agent_id
+    global _target_session, _target_identity, _agent_introduced, _agent_id
 
     # These tools check Python-side state only — skip addin check
     _skip_addin_check = {"list_sessions", "connect_session", "load_annotation_data", "annotate", "run_annotation_job", "get_annotation_job_status", "cancel_annotation_job",
@@ -2660,7 +2693,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             )]
 
         sessions = discover_sessions()
-        found = any(s.get("session_name") == session_name for s in sessions)
+        matches = [s for s in sessions if s.get("session_name") == session_name]
+        found = len(matches) == 1
 
         if not found:
             available = [s.get("session_name", "?") for s in sessions]
@@ -2670,6 +2704,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             )]
 
         _target_session = session_name
+        _target_identity = _session_identity(matches[0])
 
         connect_msg = f"Connected to session '{session_name}'. All subsequent tool calls will be routed there."
         contents = [types.TextContent(type="text", text=connect_msg)]

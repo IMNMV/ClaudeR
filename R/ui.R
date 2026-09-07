@@ -54,80 +54,89 @@ generate_session_token <- function() {
   paste(sprintf("%02x", sample.int(256L, 32L, replace = TRUE) - 1L), collapse = "")
 }
 
+discovery_path <- function(session_name) {
+  if (length(session_name) != 1L || is.na(session_name) || !nzchar(session_name) ||
+      session_name %in% c(".", "..") || grepl('[\\\\/:<>"|?*[:cntrl:]]', session_name, perl = TRUE)) {
+    stop("Invalid discovery session name")
+  }
+  file.path(discovery_dir(), paste0(session_name, ".json"))
+}
+
+with_discovery_lock <- function(f, code) {
+  lock <- paste0(f, ".lock")
+  if (!dir.create(lock, showWarnings = FALSE, mode = "0700")) {
+    stop("Discovery record is locked; do not remove another writer's lock")
+  }
+  on.exit(unlink(lock, recursive = TRUE), add = TRUE)
+  force(code)
+}
+
+pid_is_alive <- function(pid) {
+  if (length(pid) != 1L) return(NA)
+  pid <- suppressWarnings(as.integer(pid))
+  if (is.na(pid) || pid <= 0L) return(NA)
+  # ps uses read-only native probes on both Windows and POSIX; permission errors
+  # remain unknown, rather than permission to delete a live session's record.
+  tryCatch(pid %in% ps::ps_pids(), error = function(e) NA)
+}
+
 write_discovery_file <- function(session_name, port, token) {
   s <- tryCatch(load_claude_settings(), error = function(e) list())
   d <- discovery_dir()
   if (!dir.exists(d)) dir.create(d, recursive = TRUE, mode = "0700")
-  info <- list(
-    session_name = session_name,
-    port = port,
-    pid = Sys.getpid(),
-    token = token,
-    started_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
-    # Read by the bridge on each call. Absent in files written by older
-    # versions, where the bridge falls back to its own defaults.
-    plot_auto = isTRUE(s$plot_auto),
-    tool_sets = if (is.null(s$tool_sets)) "all" else s$tool_sets
-  )
-  f <- file.path(d, paste0(session_name, ".json"))
-  # Two live sessions sharing a name would silently clobber each other's
-  # discovery file, and agents would then be routed to one of them holding the
-  # other's token. Port reuse is already caught loudly; this was not.
-  if (file.exists(f)) {
-    other <- tryCatch(jsonlite::fromJSON(f), error = function(e) NULL)
-    if (!is.null(other) && !identical(as.integer(other$pid), Sys.getpid()) &&
-        pid_is_alive(other$pid)) {
-      warning(sprintf(paste0("Another live R session is already registered as '%s' ",
-                             "(pid %s, port %s). Give this session a different name, ",
-                             "or agents may be routed to the wrong one."),
-                      session_name, other$pid, other$port), call. = FALSE)
+  f <- discovery_path(session_name)
+  with_discovery_lock(f, {
+    other <- if (file.exists(f)) {
+      # Say which file needs looking at; a raw jsonlite parse error does not.
+      tryCatch(jsonlite::fromJSON(f), error = function(e) {
+        stop(sprintf("Unreadable discovery record at %s (%s). Inspect or remove it, then start the server again.",
+                     f, conditionMessage(e)), call. = FALSE)
+      })
+    } else NULL
+    if (!is.null(other) && (!is.list(other) || length(other$pid) != 1L)) {
+      stop(sprintf("Unreadable discovery identity in %s; explicit inspection required", f), call. = FALSE)
     }
-  }
-  jsonlite::write_json(info, f, auto_unbox = TRUE, pretty = TRUE)
-  try(Sys.chmod(f, mode = "0600"), silent = TRUE)
+    if (!is.null(other) && !identical(as.integer(other$pid), Sys.getpid()) &&
+        !identical(pid_is_alive(other$pid), FALSE)) {
+      stop(sprintf("Session name '%s' is already owned by a live or unknown process", session_name))
+    }
+    same_owner <- !is.null(other) && identical(as.integer(other$pid), Sys.getpid()) &&
+      identical(other$token, token)
+    started <- if (same_owner && !is.null(other$started_at)) other$started_at else
+      format(Sys.time(), "%Y-%m-%dT%H:%M:%S")
+    info <- list(session_name = session_name, port = as.integer(port),
+                 pid = Sys.getpid(), token = token, started_at = started,
+                 plot_auto = isTRUE(s$plot_auto),
+                 tool_sets = if (is.null(s$tool_sets)) "all" else s$tool_sets)
+    tmp <- tempfile(pattern = ".discovery-", tmpdir = d)
+    on.exit(if (file.exists(tmp)) unlink(tmp), add = TRUE)
+    file.create(tmp)
+    Sys.chmod(tmp, mode = "0600")
+    jsonlite::write_json(info, tmp, auto_unbox = TRUE, pretty = TRUE)
+    # libuv rename replaces the destination atomically, including on Windows.
+    fs::file_move(tmp, f)
+  })
+  invisible(f)
 }
 
 remove_discovery_file <- function(session_name) {
-  f <- file.path(discovery_dir(), paste0(session_name, ".json"))
-  if (file.exists(f)) file.remove(f)
-}
-
-# Is a process alive? Must never kill it.
-#
-# tools::pskill(pid, signal = 0) is the usual idiom, and it is safe on Unix
-# where it maps to kill(pid, 0). On Windows it is NOT: ?tools::pskill states
-# that only SIGINT and SIGTERM exist there and that pskill "will always use the
-# Windows system call TerminateProcess". Using it as a liveness probe therefore
-# terminated the very session it was asking about, and returned TRUE for the
-# kill, so the discovery file was then judged live and left behind.
-pid_is_alive <- function(pid) {
-  pid <- suppressWarnings(as.integer(pid))
-  if (is.na(pid) || pid <= 0) return(FALSE)
-  if (.Platform$OS.type == "windows") {
-    # tasklist ships with Windows, so this needs no extra package.
-    out <- tryCatch(
-      suppressWarnings(system2("tasklist",
-                               c("/FI", shQuote(sprintf("PID eq %d", pid)), "/NH"),
-                               stdout = TRUE, stderr = NULL)),
-      error = function(e) character(0)
-    )
-    return(any(grepl(paste0("\\b", pid, "\\b"), out)))
-  }
-  isTRUE(tryCatch(tools::pskill(pid, signal = 0), error = function(e) FALSE))
+  f <- discovery_path(session_name)
+  if (!file.exists(f)) return(invisible(NULL))
+  with_discovery_lock(f, {
+    info <- tryCatch(jsonlite::fromJSON(f), error = function(e) NULL)
+    if (is.list(info) && identical(as.integer(info$pid), Sys.getpid())) file.remove(f)
+  })
+  invisible(NULL)
 }
 
 cleanup_stale_discovery_files <- function() {
   d <- discovery_dir()
   if (!dir.exists(d)) return(invisible(NULL))
-  files <- list.files(d, pattern = "\\.json$", full.names = TRUE)
-  for (f in files) {
-    tryCatch({
+  for (f in list.files(d, pattern = "\\.json$", full.names = TRUE)) {
+    tryCatch(with_discovery_lock(f, {
       info <- jsonlite::fromJSON(f)
-      if (!pid_is_alive(info$pid)) file.remove(f)
-    }, error = function(e) {
-      # Corrupted file, remove it
-      file.remove(f)
-    })
+      if (is.list(info) && identical(pid_is_alive(info$pid), FALSE)) file.remove(f)
+    }), error = function(e) NULL) # locked, corrupt or unreadable is NOT stale
   }
   invisible(NULL)
 }
@@ -509,6 +518,20 @@ claudeAddin <- function() {
   # Restore state from a still-running server (UI was closed but server kept going)
   resuming <- isTRUE(.claude_server_env$running) && !is.null(.claude_server_env$server)
   server_state <- if (resuming) .claude_server_env$server else NULL
+  if (resuming) {
+    # Refresh discovery without restarting the HTTP server or rotating identity.
+    # Reopening the UI must not be blocked by a discovery problem: the server is
+    # already running and agents are already connected, so a stale lock or an
+    # unreadable record is reported, not raised.
+    tryCatch(
+      write_discovery_file(.claude_server_env$session_name,
+                           .claude_server_env$port, .claude_server_env$token),
+      error = function(e) {
+        message("ClaudeR: could not refresh the discovery file (", conditionMessage(e),
+                "). The server is still running; agents already connected are unaffected.")
+      }
+    )
+  }
 
   # Load settings. The canonical copy lives in .claude_server_env so the HTTP
   # handler and any reopened addin UI share one set of live values -- otherwise
@@ -1109,7 +1132,19 @@ claudeAddin <- function() {
           if (session_name == "") session_name <- paste0("session_", input$port)
           .claude_server_env$session_name <- session_name
           .claude_server_env$coord_seen <- NULL  # re-baseline coordination echo
-          write_discovery_file(session_name, input$port, .claude_server_env$token)
+          tryCatch(
+            write_discovery_file(session_name, input$port, .claude_server_env$token),
+            error = function(e) {
+              # Only roll back the server this handler just created. A name
+              # collision must never stop another research session's server.
+              stopServer(server_state)
+              server_state <<- NULL
+              .claude_server_env$server <- NULL
+              .claude_server_env$running <- FALSE
+              state$running <- FALSE
+              stop(e)
+            }
+          )
 
           # Create log file with session name in the filename
           if (isTRUE(.claude_server_env$settings$log_to_file)) {
