@@ -86,9 +86,15 @@ write_discovery_file <- function(session_name, port, token) {
   if (!dir.exists(d)) dir.create(d, recursive = TRUE, mode = "0700")
   f <- discovery_path(session_name)
   with_discovery_lock(f, {
-    other <- if (file.exists(f)) jsonlite::fromJSON(f) else NULL
+    other <- if (file.exists(f)) {
+      # Say which file needs looking at; a raw jsonlite parse error does not.
+      tryCatch(jsonlite::fromJSON(f), error = function(e) {
+        stop(sprintf("Unreadable discovery record at %s (%s). Inspect or remove it, then start the server again.",
+                     f, conditionMessage(e)), call. = FALSE)
+      })
+    } else NULL
     if (!is.null(other) && (!is.list(other) || length(other$pid) != 1L)) {
-      stop("Unreadable discovery identity; explicit inspection required")
+      stop(sprintf("Unreadable discovery identity in %s; explicit inspection required", f), call. = FALSE)
     }
     if (!is.null(other) && !identical(as.integer(other$pid), Sys.getpid()) &&
         !identical(pid_is_alive(other$pid), FALSE)) {
@@ -514,8 +520,17 @@ claudeAddin <- function() {
   server_state <- if (resuming) .claude_server_env$server else NULL
   if (resuming) {
     # Refresh discovery without restarting the HTTP server or rotating identity.
-    write_discovery_file(.claude_server_env$session_name,
-                         .claude_server_env$port, .claude_server_env$token)
+    # Reopening the UI must not be blocked by a discovery problem: the server is
+    # already running and agents are already connected, so a stale lock or an
+    # unreadable record is reported, not raised.
+    tryCatch(
+      write_discovery_file(.claude_server_env$session_name,
+                           .claude_server_env$port, .claude_server_env$token),
+      error = function(e) {
+        message("ClaudeR: could not refresh the discovery file (", conditionMessage(e),
+                "). The server is still running; agents already connected are unaffected.")
+      }
+    )
   }
 
   # Load settings. The canonical copy lives in .claude_server_env so the HTTP

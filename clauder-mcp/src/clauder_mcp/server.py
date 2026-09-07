@@ -236,7 +236,13 @@ async def execute_r_code_via_addin(code: str, want_plot: bool = False) -> Dict[s
     session's plot_auto setting. Older R servers ignore the field and return
     the plot as before.
     """
-    url = get_r_addin_url()
+    try:
+        url = get_r_addin_url()
+    except SessionBindingError as exc:
+        # Binding is refused, not broken. Return it as a normal tool result so
+        # the agent can act on it; raising here surfaces as an opaque internal
+        # error instead of "pick a session".
+        return {"success": False, "error": str(exc)}
     if url is None:
         return {
             "success": False,
@@ -272,7 +278,10 @@ async def execute_r_code_via_addin(code: str, want_plot: bool = False) -> Dict[s
 
 async def post_to_r_addin(payload: Dict[str, Any], timeout: float = 10.0) -> Dict[str, Any]:
     """Send an arbitrary JSON payload to the R addin HTTP server."""
-    url = get_r_addin_url()
+    try:
+        url = get_r_addin_url()
+    except SessionBindingError as exc:
+        return {"success": False, "error": str(exc)}
     if url is None:
         return {"success": False, "error": "No R sessions found. Start the ClaudeR addin in RStudio first."}
     try:
@@ -290,7 +299,12 @@ async def check_addin_status(return_info: bool = False):
     """Check if the RStudio addin is running.
     If return_info is True, returns the full status dict or None.
     Otherwise returns a bool."""
-    url = get_r_addin_url()
+    try:
+        url = get_r_addin_url()
+    except SessionBindingError:
+        # Status is a question, not a command: an ambiguous binding means "not
+        # usable right now", which is what False/None already communicates.
+        return None if return_info else False
     if url is None:
         return None if return_info else False
     try:
@@ -375,7 +389,12 @@ async def get_agent_introduction() -> str:
 # wait_for_message can long-poll without a single R roundtrip.
 
 def _coord_dir() -> str:
-    get_r_addin_url()  # latch a session if not bound yet
+    # Latch a session if not bound yet. An ambiguous binding must not stop
+    # coordination: the directory is derived from the name we already hold.
+    try:
+        get_r_addin_url()
+    except SessionBindingError:
+        pass
     session = _target_session or "default"
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", session)
     d = os.path.join(_home_dir(), ".clauder_coord", safe)
