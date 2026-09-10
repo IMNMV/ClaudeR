@@ -1,0 +1,14 @@
+[project]
+name = "clauder"
+version = "0.1.0"
+description = "Connect AI agents to a live Python session (Positron, Jupyter, VS Code, or a bare REPL) over the ClaudeR protocol"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Nykko Vitali" }]
+keywords = ["mcp", "llm", "positron", "jupyter", "data-science"]
+license = { text = "MIT" }
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -4,6 +4,7 @@ assets
 ^\.github$
 ^\.claude$
 ^clauder-mcp$
+^clauder-py$
 ^Dockerfile$
 ^glama\.json$
 ^llms-install\.md$

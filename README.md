@@ -116,6 +116,7 @@ claudeAddin()
 
 - [Quick Start](#quick-start)
 - [Features](#features)
+- [Python Sessions and Positron](#python-sessions-and-positron)
 - [How It Works](#how-it-works)
 - [Reviewer Zero](#reviewer-zero-automated-academic-audits)
 - [R Best Practices Protocol](#r-best-practices-protocol)
@@ -316,6 +317,68 @@ The chair synthesis ends with the part that matters: a ranked list of concrete r
 The revise-and-resubmit workflow, compressed. Give the agent the decision letter and your manuscript, and run `reviewer_response_prompt()`. The agent parses the letter into individual reviewer points, locates each point in your manuscript, and drafts a point-by-point response. Where a reviewer asks a data question, the agent reruns the analysis in your live session, so the answer contains real computed numbers rather than recalled ones. A gate blocks completion until every point has a drafted response.
 
 The deliverables: a formatted response letter via `export_response_letter()` (markdown, plus .docx when pandoc is installed), and your manuscript annotated with a Word comment at each spot that needs an edit, tagged with the reviewer point it answers.
+
+## Python Sessions and Positron
+
+ClaudeR also connects an agent to a live **Python** session, and both halves work in
+[Positron](https://positron.posit.co) as well as RStudio.
+
+```python
+import clauder
+clauder.start()
+```
+
+The agent then executes code in that session, where your loaded dataframes and fitted
+models already are, and sees the figures it draws. Run it in Positron, Jupyter, VS Code,
+or a bare REPL. Sessions announce themselves the same way R ones do, so `list_sessions`
+shows both and the agent connects to either by name:
+
+```
+Active sessions (2):
+  analysis [python] — port 8790, pid 8088, started 2026-09-09T10:50:09
+  modelling [r] — port 8787, pid 84615, started 2026-09-09T09:12:44
+```
+
+Start it once per session, the same as `claudeAddin()` in R. If the port is busy it moves
+to the next free one and tells you which it took.
+
+If you would rather not type it each time, run it from an IPython startup file:
+
+```python
+# ~/.ipython/profile_default/startup/50-clauder.py
+import clauder
+clauder.start(quiet=True)
+```
+
+That opens a server in every Python session you start, including ones you did not intend
+to expose to an agent, so it is off by default and worth thinking about before enabling.
+
+### What works where
+
+A Python session gets the live environment. It does not get the editor or the audit
+tooling, because those drive the IDE through `rstudioapi`, which has no Python equivalent.
+
+| | R | Python |
+|---|---|---|
+| Execute code in your live session | yes | yes |
+| Plots returned to the agent, and in your plot pane | yes | yes |
+| Per-agent log of every line executed | yes | yes |
+| Multi-agent coordination and the consensus gate | yes | yes |
+| Read and edit your open editor buffer | yes | no |
+| Approve-before-apply edits (`suggest_edit`) | yes | no |
+| Checkpoint and roll back the environment | yes | no |
+| Reviewer Zero and the audit tools | yes | no |
+
+So "load this file, fit the model, plot the residuals" works in Python. "Look at the file
+I have open and fix that function" is R only. An agent can still read and write those
+files with its own file tools, it just cannot go through your editor buffer.
+
+### Positron notes
+
+R in Positron needs nothing special. Positron ships an `rstudioapi` compatibility layer,
+so the editor tools work there, with one difference: `suggest_edit` stages the change
+unsaved rather than using `showEditSuggestion()`, which Positron does not implement. You
+accept by saving or reject with undo.
 
 ## How It Works
 
