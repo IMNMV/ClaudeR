@@ -80,7 +80,11 @@ class DiscoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(bridge.SessionBindingError, 'MULTIPLE_SESSIONS'):
             bridge.get_r_addin_url()
         result = asyncio.run(bridge.call_tool('list_sessions', {}))
-        self.assertIn('Active R sessions (2)', result[0].text)
+        # Sessions can be R or Python now, so the listing is language-tagged
+        # and no longer says "R sessions".
+        self.assertIn('Active sessions (2)', result[0].text)
+        self.assertIn('A [r]', result[0].text)
+        self.assertIn('B [r]', result[0].text)
 
     def test_no_sessions_does_not_guess_port(self):
         self.assertIsNone(bridge.get_r_addin_url())

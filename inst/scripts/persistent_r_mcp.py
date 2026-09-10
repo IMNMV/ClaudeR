@@ -865,6 +865,34 @@ for _n in ("reconcile_values", "verify_references", "check_cross_references",
     TOOL_GROUPS[_n] = "audit"
 
 
+# Tools whose handlers post R code to the session. Against a Python session
+# the interpreter receives R and raises a syntax error that explains nothing,
+# so they are refused with a reason instead. Derived by checking which
+# handlers call execute_r_code_via_addin or post_to_r_addin; execute_r and
+# execute_r_with_plot are excluded because they run whatever language the
+# session speaks.
+R_ONLY_TOOLS = frozenset({
+    "cancel_async_job", "check_cross_references", "checkpoint_session",
+    "clean_error_log", "create_task_list", "execute_r_async",
+    "generate_codebook", "generate_notebook", "get_active_document",
+    "get_async_result", "get_bibtex", "get_r_info", "get_session_history",
+    "get_viewer_content", "insert_text", "list_checkpoints",
+    "modify_code_section", "probe_scripts", "read_file", "reconcile_values",
+    "restore_session", "screening_report", "search_citations",
+    "search_project_code", "suggest_edit", "update_task_status",
+    "verify_references",
+})
+
+
+def _session_language() -> str:
+    """Language of the session we are bound to. Records written before Python
+    sessions existed carry no `language`, and those are all R."""
+    info = _session_info()
+    if not info:
+        return "r"
+    return str(info.get("language") or "r").lower()
+
+
 def _enabled_tool_sets() -> Optional[List[str]]:
     """Groups this session exposes, or None meaning all of them."""
     info = _session_info()
@@ -1832,7 +1860,8 @@ def _all_tools() -> List[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "stale_after_s": {"type": "number", "description": "Seconds after which an agent is flagged stale (default 900)."}
+                    "stale_after_s": {"type": "number", "description": "Seconds after which an agent is flagged stale (default 900)."},
+                    "hide_after_s": {"type": "number", "description": "Omit agents not seen for this long (default 86400, one day). The log keeps them; this only controls what is listed. Raise it to see the full history."}
                 }
             },
             annotations={
@@ -2056,6 +2085,20 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                          "send_message", "check_messages", "wait_for_message", "coordination_roster",
                          # Identity is Python-side state, settable while R is down
                          "set_agent_name"}
+    # Refuse an R-only tool against a Python session with a reason. Without
+    # this the R code reaches the Python interpreter and comes back as
+    # "invalid syntax (1134164898.py, line 1)", which tells nobody anything.
+    if name in R_ONLY_TOOLS and _session_language() == "python":
+        return [types.TextContent(
+            type="text",
+            text=(f"'{name}' runs R code, and this session is Python. "
+                  "execute_r and execute_r_with_plot work here (they run "
+                  "Python), as do the coordination tools. The editor, "
+                  "checkpoint and manuscript-audit tools need an R session: "
+                  "use list_sessions to find one, or read and write files "
+                  "with your own file tools instead.")
+        )]
+
     if name not in _skip_addin_check:
         # Check if the R addin is running
         if not await check_addin_status():
@@ -2085,7 +2128,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         result = await execute_r_code_via_addin(arguments["code"])
 
         if not result.get("success", False):
-            err_text = f"R Error: {result.get('error', 'Unknown error')}"
+            lang_label = "Python" if _session_language() == "python" else "R"
+            err_text = f"{lang_label} Error: {result.get('error', 'Unknown error')}"
             # Include whatever printed before the error — often the context
             # the agent needs to fix the code
             if result.get("output"):
@@ -2127,8 +2171,9 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                 text="Error: 'code' parameter is required"
             )]
 
-        # First, perform the one-time check for ggplot2.
-        if not await check_ggplot_installed():
+        # ggplot2 is an R precondition, so it must not gate a Python session,
+        # where plots come from matplotlib.
+        if _session_language() != "python" and not await check_ggplot_installed():
             return [types.TextContent(
                 type="text",
                 text="Error: The 'ggplot2' package is required for this tool but is not installed. Please install it in RStudio."
@@ -2150,7 +2195,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         if not result.get("success", False):
             result_contents.append(types.TextContent(
                 type="text",
-                text=f"R Error: {result.get('error', 'Unknown error')}"
+                text=f"{'Python' if _session_language() == 'python' else 'R'} Error: {result.get('error', 'Unknown error')}"
             ))
         
         # Add plot if available
@@ -2213,8 +2258,33 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         result = await execute_r_code_via_addin(f"""
         if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {{
             want <- "{target}"
+            # Positron's rstudioapi shim returns a usable context whose id is
+            # NULL, where RStudio fills one in. Requiring an id rejected a
+            # perfectly good editor context, so judge usability by whether we
+            # can actually read the document.
+            ctx_usable <- function(c) {{
+              !is.null(c) && (
+                (!is.null(c$id) && nzchar(c$id)) ||
+                (!is.null(c$path) && nzchar(c$path)) ||
+                length(c$contents) > 0
+              )
+            }}
             ctx <- tryCatch(rstudioapi::getSourceEditorContext(), error = function(e) NULL)
-            if (is.null(ctx) || is.null(ctx$id) || !nzchar(ctx$id)) {{
+            # A supplied path has to be able to open the file when nothing is
+            # focused at all. The checks below used to run first, so `path`
+            # could never rescue an empty editor.
+            if (nzchar(want) && !ctx_usable(ctx)) {{
+                tryCatch({{
+                  if (isTRUE(rstudioapi::hasFun("documentOpen"))) {{
+                    rstudioapi::documentOpen(want)
+                  }} else {{
+                    rstudioapi::navigateToFile(want)
+                  }}
+                  Sys.sleep(0.4)
+                  ctx <- rstudioapi::getSourceEditorContext()
+                }}, error = function(e) NULL)
+            }}
+            if (!ctx_usable(ctx)) {{
                 list(error = paste("No source document is open or focused in RStudio.",
                                    "Open the target file in the Source pane first, then retry."))
             }} else {{
@@ -2223,9 +2293,17 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                     a <- normalizePath(want, mustWork = FALSE)
                     b <- if (nzchar(p)) normalizePath(p, mustWork = FALSE) else ""
                     if (!identical(a, b)) {{
-                        tryCatch({{ rstudioapi::documentOpen(want); Sys.sleep(0.3)
-                                   ctx <- rstudioapi::getSourceEditorContext()
-                                   p <- ctx$path; if (is.null(p)) p <- "" }},
+                        tryCatch({{
+                          # Positron shims navigateToFile but not documentOpen,
+                          # so prefer whichever the IDE actually implements.
+                          if (isTRUE(rstudioapi::hasFun("documentOpen"))) {{
+                            rstudioapi::documentOpen(want)
+                          }} else {{
+                            rstudioapi::navigateToFile(want)
+                          }}
+                          Sys.sleep(0.3)
+                          ctx <- rstudioapi::getSourceEditorContext()
+                          p <- ctx$path; if (is.null(p)) p <- "" }},
                                  error = function(e) NULL)
                     }}
                 }}
@@ -2273,8 +2351,33 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         suggest_code = f"""
         if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {{
             want <- "{target}"
+            # Positron's rstudioapi shim returns a usable context whose id is
+            # NULL, where RStudio fills one in. Requiring an id rejected a
+            # perfectly good editor context, so judge usability by whether we
+            # can actually read the document.
+            ctx_usable <- function(c) {{
+              !is.null(c) && (
+                (!is.null(c$id) && nzchar(c$id)) ||
+                (!is.null(c$path) && nzchar(c$path)) ||
+                length(c$contents) > 0
+              )
+            }}
             ctx <- tryCatch(rstudioapi::getSourceEditorContext(), error = function(e) NULL)
-            if (is.null(ctx) || is.null(ctx$id) || !nzchar(ctx$id)) {{
+            # A supplied path has to be able to open the file when nothing is
+            # focused at all. The checks below used to run first, so `path`
+            # could never rescue an empty editor.
+            if (nzchar(want) && !ctx_usable(ctx)) {{
+                tryCatch({{
+                  if (isTRUE(rstudioapi::hasFun("documentOpen"))) {{
+                    rstudioapi::documentOpen(want)
+                  }} else {{
+                    rstudioapi::navigateToFile(want)
+                  }}
+                  Sys.sleep(0.4)
+                  ctx <- rstudioapi::getSourceEditorContext()
+                }}, error = function(e) NULL)
+            }}
+            if (!ctx_usable(ctx)) {{
                 list(success = FALSE,
                      error = "No source document is open or focused in RStudio. Open the target file first.")
             }} else {{
@@ -2283,9 +2386,17 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                     a <- normalizePath(want, mustWork = FALSE)
                     b <- if (nzchar(p)) normalizePath(p, mustWork = FALSE) else ""
                     if (!identical(a, b)) {{
-                        tryCatch({{ rstudioapi::documentOpen(want); Sys.sleep(0.3)
-                                   ctx <- rstudioapi::getSourceEditorContext()
-                                   p <- ctx$path; if (is.null(p)) p <- "" }},
+                        tryCatch({{
+                          # Positron shims navigateToFile but not documentOpen,
+                          # so prefer whichever the IDE actually implements.
+                          if (isTRUE(rstudioapi::hasFun("documentOpen"))) {{
+                            rstudioapi::documentOpen(want)
+                          }} else {{
+                            rstudioapi::navigateToFile(want)
+                          }}
+                          Sys.sleep(0.3)
+                          ctx <- rstudioapi::getSourceEditorContext()
+                          p <- ctx$path; if (is.null(p)) p <- "" }},
                                  error = function(e) NULL)
                     }}
                 }}
@@ -2470,7 +2581,9 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         escaped_pattern = escape_r_string(pattern)
         escaped_root = escape_r_string(root_dir)
         escaped_extensions = escape_r_string(extensions)
-        code = f'ClaudeR:::search_project_code_impl("{escaped_pattern}", extensions = "{escaped_extensions}", root_dir = "{escaped_root}", max_results = {max_results}L, ignore_case = {"TRUE" if ignore_case else "FALSE"})'
+        max_files = int(arguments.get("max_files", 2000))
+        allow_wide = "TRUE" if arguments.get("allow_wide") else "FALSE"
+        code = f'ClaudeR:::search_project_code_impl("{escaped_pattern}", extensions = "{escaped_extensions}", root_dir = "{escaped_root}", max_results = {max_results}L, ignore_case = {"TRUE" if ignore_case else "FALSE"}, max_files = {max_files}L, allow_wide = {allow_wide})'
         result = await execute_r_code_via_addin(code)
         if result.get("success", False):
             output = result.get("output", "No results.")
@@ -2665,18 +2778,22 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         if not sessions:
             return [types.TextContent(
                 type="text",
-                text="No active R sessions found. Start the ClaudeR addin in RStudio first."
+                text="No active sessions found. Start the ClaudeR addin in RStudio, "
+                     "or run `import clauder; clauder.start()` in a Python session."
             )]
 
         lines = []
         for s in sessions:
             target_marker = " (connected)" if _target_session == s.get("session_name") else ""
+            # "language" is absent in records written before Python sessions
+            # existed, and those are all R.
+            lang = s.get("language") or "r"
             lines.append(
-                f"  {s.get('session_name', '?')} — port {s.get('port', '?')}, "
+                f"  {s.get('session_name', '?')} [{lang}] — port {s.get('port', '?')}, "
                 f"pid {s.get('pid', '?')}, started {s.get('started_at', '?')}{target_marker}"
             )
 
-        header = f"Active R sessions ({len(sessions)}):"
+        header = f"Active sessions ({len(sessions)}):"
         current = f"Current agent: {_agent_id}"
         target = f"Connected to: {_target_session or 'auto (first available)'}"
         return [types.TextContent(
@@ -2706,7 +2823,22 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         _target_session = session_name
         _target_identity = _session_identity(matches[0])
 
-        connect_msg = f"Connected to session '{session_name}'. All subsequent tool calls will be routed there."
+        # Say which language this session runs. An agent that assumes R and
+        # sends R code to a Python session gets a syntax error it cannot
+        # explain, so this is stated at the moment it matters.
+        lang = (matches[0].get("language") or "r").lower()
+        if lang == "python":
+            connect_msg = (
+                f"Connected to session '{session_name}'. This is a PYTHON session: "
+                "send Python code to execute_r and execute_r_with_plot, not R. "
+                "The namespace persists between calls. All subsequent tool calls "
+                "are routed here."
+            )
+        else:
+            connect_msg = (
+                f"Connected to session '{session_name}'. This is an R session. "
+                "All subsequent tool calls will be routed there."
+            )
         contents = [types.TextContent(type="text", text=connect_msg)]
 
         # Deliver agent introduction right after connecting
@@ -2851,8 +2983,33 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {{
             want <- "{target}"
             do_save <- {do_save}
+            # Positron's rstudioapi shim returns a usable context whose id is
+            # NULL, where RStudio fills one in. Requiring an id rejected a
+            # perfectly good editor context, so judge usability by whether we
+            # can actually read the document.
+            ctx_usable <- function(c) {{
+              !is.null(c) && (
+                (!is.null(c$id) && nzchar(c$id)) ||
+                (!is.null(c$path) && nzchar(c$path)) ||
+                length(c$contents) > 0
+              )
+            }}
             ctx <- tryCatch(rstudioapi::getSourceEditorContext(), error = function(e) NULL)
-            if (is.null(ctx) || is.null(ctx$id) || !nzchar(ctx$id)) {{
+            # A supplied path has to be able to open the file when nothing is
+            # focused at all. The checks below used to run first, so `path`
+            # could never rescue an empty editor.
+            if (nzchar(want) && !ctx_usable(ctx)) {{
+                tryCatch({{
+                  if (isTRUE(rstudioapi::hasFun("documentOpen"))) {{
+                    rstudioapi::documentOpen(want)
+                  }} else {{
+                    rstudioapi::navigateToFile(want)
+                  }}
+                  Sys.sleep(0.4)
+                  ctx <- rstudioapi::getSourceEditorContext()
+                }}, error = function(e) NULL)
+            }}
+            if (!ctx_usable(ctx)) {{
                 list(success = FALSE,
                      error = paste("No source document is open or focused in RStudio.",
                                    "Open the target file in the Source pane (or pass 'path'), then retry."))
@@ -2862,9 +3019,17 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                     a <- normalizePath(want, mustWork = FALSE)
                     b <- if (nzchar(p)) normalizePath(p, mustWork = FALSE) else ""
                     if (!identical(a, b)) {{
-                        tryCatch({{ rstudioapi::documentOpen(want); Sys.sleep(0.3)
-                                   ctx <- rstudioapi::getSourceEditorContext()
-                                   p <- ctx$path; if (is.null(p)) p <- "" }},
+                        tryCatch({{
+                          # Positron shims navigateToFile but not documentOpen,
+                          # so prefer whichever the IDE actually implements.
+                          if (isTRUE(rstudioapi::hasFun("documentOpen"))) {{
+                            rstudioapi::documentOpen(want)
+                          }} else {{
+                            rstudioapi::navigateToFile(want)
+                          }}
+                          Sys.sleep(0.3)
+                          ctx <- rstudioapi::getSourceEditorContext()
+                          p <- ctx$path; if (is.null(p)) p <- "" }},
                                  error = function(e) NULL)
                     }}
                 }}
@@ -2966,8 +3131,33 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {{
             want <- "{target}"
             do_save <- {do_save}
+            # Positron's rstudioapi shim returns a usable context whose id is
+            # NULL, where RStudio fills one in. Requiring an id rejected a
+            # perfectly good editor context, so judge usability by whether we
+            # can actually read the document.
+            ctx_usable <- function(c) {{
+              !is.null(c) && (
+                (!is.null(c$id) && nzchar(c$id)) ||
+                (!is.null(c$path) && nzchar(c$path)) ||
+                length(c$contents) > 0
+              )
+            }}
             ctx <- tryCatch(rstudioapi::getSourceEditorContext(), error = function(e) NULL)
-            if (is.null(ctx) || is.null(ctx$id) || !nzchar(ctx$id)) {{
+            # A supplied path has to be able to open the file when nothing is
+            # focused at all. The checks below used to run first, so `path`
+            # could never rescue an empty editor.
+            if (nzchar(want) && !ctx_usable(ctx)) {{
+                tryCatch({{
+                  if (isTRUE(rstudioapi::hasFun("documentOpen"))) {{
+                    rstudioapi::documentOpen(want)
+                  }} else {{
+                    rstudioapi::navigateToFile(want)
+                  }}
+                  Sys.sleep(0.4)
+                  ctx <- rstudioapi::getSourceEditorContext()
+                }}, error = function(e) NULL)
+            }}
+            if (!ctx_usable(ctx)) {{
                 list(success = FALSE,
                      error = paste("No source document is open or focused in RStudio.",
                                    "Open the target file in the Source pane (or pass 'path'), then retry."))
@@ -2977,9 +3167,17 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
                     a <- normalizePath(want, mustWork = FALSE)
                     b <- if (nzchar(p)) normalizePath(p, mustWork = FALSE) else ""
                     if (!identical(a, b)) {{
-                        tryCatch({{ rstudioapi::documentOpen(want); Sys.sleep(0.3)
-                                   ctx <- rstudioapi::getSourceEditorContext()
-                                   p <- ctx$path; if (is.null(p)) p <- "" }},
+                        tryCatch({{
+                          # Positron shims navigateToFile but not documentOpen,
+                          # so prefer whichever the IDE actually implements.
+                          if (isTRUE(rstudioapi::hasFun("documentOpen"))) {{
+                            rstudioapi::documentOpen(want)
+                          }} else {{
+                            rstudioapi::navigateToFile(want)
+                          }}
+                          Sys.sleep(0.3)
+                          ctx <- rstudioapi::getSourceEditorContext()
+                          p <- ctx$path; if (is.null(p)) p <- "" }},
                                  error = function(e) NULL)
                     }}
                 }}
@@ -3507,6 +3705,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
 
     elif name == "coordination_roster":
         stale_after = float(arguments.get("stale_after_s", 900))
+        hide_after = float(arguments.get("hide_after_s", 86400))
         note, coord_err = _coord_target()
         if coord_err:
             return [types.TextContent(type="text", text=coord_err)]
@@ -3520,16 +3719,35 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         for ev in events:
             last[ev.get("from", "?")] = ev.get("ts", "")
         lines = []
+        hidden = 0
         now = datetime.now()
         for agent_name, ts in sorted(last.items()):
             try:
                 seen = datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")
                 ago = (now - seen).total_seconds()
+                # The log is append-only, so every agent that ever wrote to
+                # this session name is still in it. Reused names (and
+                # "default" above all) collect agents for weeks, and an agent
+                # last seen 19 days ago is noise on every roster call. Keep
+                # them in the log, just stop listing them.
+                if ago > hide_after:
+                    hidden += 1
+                    continue
                 flag = " [STALE]" if ago > stale_after else ""
                 lines.append(f"  {agent_name}: last seen {round(ago)}s ago{flag}")
             except ValueError:
                 lines.append(f"  {agent_name}: last seen {ts}")
-        reply = "Coordination roster:\n" + "\n".join(lines)
+        if not lines:
+            reply = ("No agent has been active on this session within the last "
+                     f"{round(hide_after / 3600)}h")
+            if hidden:
+                reply += f" ({hidden} older, still in the log)"
+            reply += "."
+        else:
+            reply = "Coordination roster:\n" + "\n".join(lines)
+            if hidden:
+                reply += (f"\n  ({hidden} agent(s) not seen in over "
+                          f"{round(hide_after / 3600)}h, hidden; raise hide_after_s to show them)")
         if note:
             reply = note + "\n" + reply
         result_contents.append(types.TextContent(type="text", text=reply))
