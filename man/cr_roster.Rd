@@ -5,12 +5,15 @@
 \alias{cr_ping}
 \title{List agents seen on the coordination log with staleness}
 \usage{
-cr_roster(stale_after_s = 900, session = NULL)
+cr_roster(stale_after_s = 900, hide_after_s = 86400, session = NULL)
 
 cr_ping(agent = NULL, session = NULL)
 }
 \arguments{
 \item{stale_after_s}{Seconds after which an agent is flagged stale.}
+
+\item{hide_after_s}{Omit agents not seen for this long (default one day).
+The log itself is unchanged; pass `Inf` to list every agent it holds.}
 
 \item{session}{Session name; defaults to the active session.}
 

@@ -252,11 +252,13 @@ claim_state <- function(task, session = NULL) {
 #' that have nothing to say.
 #'
 #' @param stale_after_s Seconds after which an agent is flagged stale.
+#' @param hide_after_s Omit agents not seen for this long (default one day).
+#'   The log itself is unchanged; pass `Inf` to list every agent it holds.
 #' @param agent Identity stamped by `cr_ping()`; defaults to the executing agent.
 #' @param session Session name; defaults to the active session.
 #' @return data.frame of agent, last_seen, seconds_ago, stale.
 #' @export
-cr_roster <- function(stale_after_s = 900, session = NULL) {
+cr_roster <- function(stale_after_s = 900, hide_after_s = 86400, session = NULL) {
   evs <- coord_events(session)
   if (length(evs) == 0) {
     return(data.frame(agent = character(0), last_seen = character(0),
@@ -272,7 +274,21 @@ cr_roster <- function(stale_after_s = 900, session = NULL) {
                seconds_ago = round(ago), stale = ago > stale_after_s,
                stringsAsFactors = FALSE)
   }))
-  out[order(out$seconds_ago), ]
+  # The log is append-only, so it holds every agent that ever wrote to this
+  # session name. A reused name ("default" most of all) accumulates agents for
+  # weeks, and one last seen 19 days ago is noise. Keep them in the log, just
+  # do not return them. Pass hide_after_s = Inf for the full history.
+  out <- out[order(out$seconds_ago), ]
+  if (is.finite(hide_after_s)) {
+    dropped <- sum(out$seconds_ago > hide_after_s)
+    out <- out[out$seconds_ago <= hide_after_s, , drop = FALSE]
+    if (dropped > 0) {
+      attr(out, "hidden") <- dropped
+      message(sprintf("%d agent(s) not seen in over %gh are hidden; pass hide_after_s = Inf to see them.",
+                      dropped, hide_after_s / 3600))
+    }
+  }
+  out
 }
 
 #' @rdname cr_roster

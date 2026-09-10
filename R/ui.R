@@ -2271,20 +2271,52 @@ clean_clauder_log <- function(log_path, output_path = NULL) {
 #' @param pattern Regex pattern to search for
 #' @param extensions Comma-separated file extensions (default "R,Rmd,qmd")
 #' @param root_dir Root directory to search (default ".")
+#' @param max_files Maximum files to scan before reporting a partial search.
+#'   Guards against a root that walks the whole disk.
+#' @param allow_wide Set TRUE to search the home directory or `/` on purpose.
+#'   Refused by default because the directory walk blocks R for minutes.
 #' @param max_results Maximum matches to return (default 50)
 #' @param ignore_case Case-insensitive search (default FALSE)
 #' @return Character string of matches
 search_project_code_impl <- function(pattern, extensions = "R,Rmd,qmd",
                                      root_dir = ".", max_results = 50L,
-                                     ignore_case = FALSE) {
+                                     ignore_case = FALSE, max_files = 2000L,
+                                     allow_wide = FALSE) {
   exts <- trimws(strsplit(extensions, ",")[[1]])
   ext_pattern <- paste0("\\.(", paste(exts, collapse = "|"), ")$")
+
+  # An unbounded recursive walk is a hang, not a slow search. root_dir
+  # defaults to "." and a session started in the home directory then reads
+  # every R file on the machine, blocking R for minutes with no output. Refuse
+  # the roots that can only be a mistake, and cap the rest.
+  root_abs <- normalizePath(root_dir, mustWork = FALSE)
+  if (!isTRUE(allow_wide) &&
+      root_abs %in% c(normalizePath("~", mustWork = FALSE), "/")) {
+    stop(sprintf(paste0("Refusing to search '%s' by accident: every R file on ",
+                        "the machine sits under it, and list.files() walks the ",
+                        "whole tree before anything can be capped, which blocks ",
+                        "R for minutes with no output. Point root_dir at the ",
+                        "project you mean, or pass allow_wide = TRUE to do it ",
+                        "deliberately."), root_abs),
+         call. = FALSE)
+  }
 
   all_files <- list.files(root_dir, pattern = ext_pattern,
                           recursive = TRUE, full.names = TRUE,
                           ignore.case = TRUE)
-  # Exclude common non-source directories
-  all_files <- all_files[!grepl("/(renv|packrat|\\.git)/", all_files)]
+  # Exclude directories that hold other people's code, not the project's.
+  all_files <- all_files[!grepl(
+    "/(renv|packrat|node_modules|site-packages|\\.venv|venv|\\.git|\\.Rproj\\.user|\\.quarto|_freeze|checkpoints?)/",
+    all_files)]
+
+  # A project has hundreds of source files. Tens of thousands means the root
+  # is wrong, so scan a bounded prefix and say the search was partial rather
+  # than reading everything.
+  scanned_all <- TRUE
+  if (length(all_files) > max_files) {
+    scanned_all <- FALSE
+    all_files <- all_files[seq_len(max_files)]
+  }
 
   if (length(all_files) == 0) {
     return(paste0("No files with extensions [", extensions, "] found under: ",
@@ -2319,13 +2351,18 @@ search_project_code_impl <- function(pattern, extensions = "R,Rmd,qmd",
     if (length(results) >= max_results) break
   }
 
+  partial <- if (scanned_all) "" else sprintf(
+    "\n(Partial search: stopped at %d files. Narrow root_dir, or raise max_files.)",
+    max_files)
+
   if (length(results) == 0) {
-    return(paste0("No matches for pattern '", pattern, "' in ", length(all_files), " files."))
+    return(paste0("No matches for pattern '", pattern, "' in ",
+                  length(all_files), " files.", partial))
   }
 
   header <- sprintf("Found %d match(es) across %d file(s):\n",
                     length(results), length(unique(sub(":.*", "", results))))
-  paste0(header, paste(results, collapse = "\n"))
+  paste0(header, paste(results, collapse = "\n"), partial)
 }
 
 #' Probe R scripts in a clean background session

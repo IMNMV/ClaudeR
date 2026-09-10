@@ -9,7 +9,9 @@ search_project_code_impl(
   extensions = "R,Rmd,qmd",
   root_dir = ".",
   max_results = 50L,
-  ignore_case = FALSE
+  ignore_case = FALSE,
+  max_files = 2000L,
+  allow_wide = FALSE
 )
 }
 \arguments{
@@ -22,6 +24,12 @@ search_project_code_impl(
 \item{max_results}{Maximum matches to return (default 50)}
 
 \item{ignore_case}{Case-insensitive search (default FALSE)}
+
+\item{max_files}{Maximum files to scan before reporting a partial search.
+Guards against a root that walks the whole disk.}
+
+\item{allow_wide}{Set TRUE to search the home directory or `/` on purpose.
+Refused by default because the directory walk blocks R for minutes.}
 }
 \value{
 Character string of matches
