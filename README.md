@@ -593,6 +593,23 @@ If you can do it with R, your AI assistant can too.
 - You can close the Shiny UI (Stop button in the console) to work alongside the AI. The server keeps running in the background and agents stay connected. Re-run `claudeAddin()` to bring the UI back, or click **Stop Server** in the UI to fully stop it.
 - R is single-threaded, but async jobs run in a separate process via `callr` so the main session stays responsive. The background process does not share the main session's environment, so async code must be self-contained.
 
+## Citation
+
+If ClaudeR contributes to published work, a citation is appreciated:
+
+```r
+citation("ClaudeR")
+```
+
+```
+Vitali, N. (2026). ClaudeR: Connect live RStudio and Python sessions to AI
+agents over MCP. R package version 0.15.0.
+https://github.com/IMNMV/ClaudeR
+```
+
+GitHub's "Cite this repository" button in the sidebar produces the same thing
+from `CITATION.cff`.
+
 ## License
 
 This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.

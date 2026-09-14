@@ -1,7 +1,9 @@
 Package: ClaudeR
 Title: R Integration for Claude AI
 Version: 0.15.0
-Authors@R: person("Nykko", "Vitali", email = "nykvt@icloud.com", role = c("aut", "cre"))
+Authors@R: person("Nykko", "Vitali", email = "nykvt@icloud.com",
+                  role = c("aut", "cre"),
+                  comment = c(ORCID = "0000-0001-7146-5268"))
 Description: Connects RStudio with Claude AI to enable interactive coding sessions.
 License: MIT + file LICENSE
 Encoding: UTF-8

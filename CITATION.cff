@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "If you use this software in published work, please cite it as below."
+type: software
+title: ClaudeR
+abstract: >-
+  An R package and MCP server that connects AI agents to a live RStudio or
+  Python session, so the agent runs code where the data and fitted models
+  already are. Every line it executes is logged and attributed, checkpoints
+  make steps reversible, and several agents can share one session under a
+  consensus gate. Includes protocols for manuscript auditing, systematic
+  review screening, and reproducible session logs.
+authors:
+  - family-names: Vitali
+    given-names: Nykko
+    orcid: "https://orcid.org/0000-0001-7146-5268"
+    affiliation: Harvard University
+    email: nvitali@fas.harvard.edu
+repository-code: "https://github.com/IMNMV/ClaudeR"
+url: "https://github.com/IMNMV/ClaudeR"
+license: MIT
+version: 0.15.0
+date-released: "2026-09-07"
+keywords:
+  - R
+  - reproducibility
+  - model context protocol
+  - large language models
+  - research software
+  - RStudio
+  - Positron

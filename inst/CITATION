@@ -1,0 +1,16 @@
+citHeader("To cite ClaudeR in publications, please use:")
+
+bibentry(
+  bibtype  = "Manual",
+  title    = "{ClaudeR}: Connect live RStudio and Python sessions to AI agents over MCP",
+  author   = person("Nykko", "Vitali",
+                    comment = c(ORCID = "0000-0001-7146-5268")),
+  year     = "2026",
+  note     = sprintf("R package version %s", meta$Version),
+  url      = "https://github.com/IMNMV/ClaudeR",
+  textVersion = paste0(
+    "Vitali, N. (2026). ClaudeR: Connect live RStudio and Python sessions ",
+    "to AI agents over MCP. R package version ", meta$Version, ". ",
+    "https://github.com/IMNMV/ClaudeR"
+  )
+)
