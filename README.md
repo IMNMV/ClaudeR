@@ -23,7 +23,7 @@
 
 Several agents can share one session and divide the work between them, or you can run separate sessions side by side so each agent works on its own dataset without touching the others.
 
-**Why this instead of a subscription tool?** The work happens in your live session, where your data and models live. Every line an agent executes is logged and attributed to the agent that ran it, checkpoints make any step reversible, and audit findings are written back into your documents as native Word comments. A tool that runs your code somewhere else cannot offer that, because the session is the whole point.
+It covers much of what a paid research AI tool does, with the work happening in your own session and a record of every line an agent ran.
 
 ## Quick Start
 
