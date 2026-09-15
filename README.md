@@ -2,7 +2,7 @@
   <img src="assets/logo.svg" alt="ClaudeR Logo" width="180"/>
   <h1>ClaudeR - The Modern Researcher's Toolkit</h1>
   <p>
-    <b>Connect RStudio to Claude Code, Codex, Gemini CLI, or any MCP-based LLM agent for interactive coding, multi-agent orchestration, and automated manuscript auditing.</b>
+    <b>Connect a live R or Python session, in RStudio or Positron, to Claude Code, Codex, or any MCP-based LLM agent. For interactive analysis, multi-agent orchestration, and automated manuscript auditing.</b>
   </p>
   <p>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
@@ -13,16 +13,17 @@
     <a href="https://github.com/IMNMV/ClaudeR/commits/main"><img src="https://img.shields.io/github/last-commit/IMNMV/ClaudeR/main" alt="GitHub last commit"></a>
     <a href="https://pypi.org/project/clauder-mcp/"><img src="https://img.shields.io/pypi/v/clauder-mcp" alt="PyPI version"></a>
     <img src="https://img.shields.io/badge/R-%3E%3D4.0-blue?logo=r" alt="R version">
+    <img src="https://img.shields.io/badge/Python-%3E%3D3.9-blue?logo=python&logoColor=white" alt="Python version">
     <a href="https://glama.ai/mcp/servers/IMNMV/ClaudeR"><img src="https://glama.ai/mcp/servers/IMNMV/ClaudeR/badges/score.svg" alt="ClaudeR MCP server"></a>
   </p>
 </div>
 
 
-**ClaudeR** is an R package that forges a direct link between RStudio and MCP configured LLM agents like Claude Code or Codex. This allows interactive coding sessions where the agent can execute code in your active RStudio environment so it can see the executed code and any generated plots in real-time. If you need help editing a script, a quick analysis done, or an LLM to audit your statistical claims against any manuscript before submission: ClaudeR has got your back.
+**ClaudeR** connects MCP-configured LLM agents, like Claude Code or Codex, to the R session you are already working in. The agent runs code where your cleaned data and fitted models actually are, sees the plots it draws, reads the objects in your environment, and can edit the file open in your editor. A companion Python package does the same for a live Python session, and both work in RStudio and [Positron](https://positron.posit.co).
 
-This package, additionally, allows multiple agents to work on one script, or it can make multiple RStudio windows siloed so multiple agents can operate independently on different datasets. It's also compatible with Cursor and any service that support MCP servers.
+Several agents can share one session and divide the work between them, or you can run separate sessions side by side so each agent works on its own dataset without touching the others.
 
-**Why this instead of the subscription tools?** Most paid "AI for researchers" products are workflow wrappers: a prompt, a free public API, and the same frontier models you already pay for through a CLI subscription. ClaudeR's answer is structural, beyond just price. The work happens in your live R session, where your actual data and models live, with a per-agent audit trail of every line executed, checkpoints that make any step reversible, and findings written back into your actual documents as Word comments. A web wrapper cannot offer any of that.
+**Why this instead of a subscription tool?** The work happens in your live session, where your data and models live. Every line an agent executes is logged and attributed to the agent that ran it, checkpoints make any step reversible, and audit findings are written back into your documents as native Word comments. A tool that runs your code somewhere else cannot offer that, because the session is the whole point.
 
 ## Quick Start
 
@@ -41,6 +42,12 @@ claudeAddin()
 ```
 
 > **AI agents:** See [llms-install.md](llms-install.md) for automated setup instructions.
+
+## Demo
+
+| Single agent via Claude Desktop App | Multi-agent: Codex + Claude Code via CLI | GPT 5.4 Codex: Data analysis + Quarto report |
+|:---:|:---:|:---:|
+| [![Single Agent Demo](https://img.youtube.com/vi/KSKcuxRSZDY/0.jpg)](https://youtu.be/KSKcuxRSZDY) | [![Multi-Agent Demo](https://img.youtube.com/vi/5ZMyfR6ZvYU/0.jpg)](https://youtu.be/5ZMyfR6ZvYU) | [![Codex Quarto Demo](https://img.youtube.com/vi/TE-U8DPlShY/0.jpg)](https://youtu.be/TE-U8DPlShY) |
 
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
@@ -106,12 +113,6 @@ claudeAddin()
 
 </details>
 
-## Demo
-
-| Single agent via Claude Desktop App | Multi-agent: Codex + Claude Code via CLI | GPT 5.4 Codex: Data analysis + Quarto report |
-|:---:|:---:|:---:|
-| [![Single Agent Demo](https://img.youtube.com/vi/KSKcuxRSZDY/0.jpg)](https://youtu.be/KSKcuxRSZDY) | [![Multi-Agent Demo](https://img.youtube.com/vi/5ZMyfR6ZvYU/0.jpg)](https://youtu.be/5ZMyfR6ZvYU) | [![Codex Quarto Demo](https://img.youtube.com/vi/TE-U8DPlShY/0.jpg)](https://youtu.be/TE-U8DPlShY) |
-
 ## Table of Contents
 
 - [Quick Start](#quick-start)
@@ -166,7 +167,6 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`get_bibtex`**: Fetch the canonical BibTeX entry for a DOI via doi.org content negotiation.
 - **`generate_notebook`**: Turn a session log into a narrated Quarto lab notebook. Rendering re-runs the code so outputs and plots regenerate.
 - **`generate_codebook`**: Scan a project and emit the codebook OSF and journals require: versioned package list, script inventory, per-variable summaries (class, n, missingness), and outputs produced.
-- **`annotate_manuscript()`** (R function, driven by Reviewer Zero's write-back step): inject audit findings into a .docx as native Word comments the author can accept or dismiss.
 - **`screening_report`**: Summarize systematic-review screening passes. Computes agreement and Cohen's kappa between two model screeners, the PRISMA flow counts, and the conflict set a human must adjudicate.
 - **`send_message` / `check_messages` / `wait_for_message` / `coordination_roster`**: Typed multi-agent messaging on an append-only shared log. `wait_for_message` blocks until a matching event arrives (rendezvous without polling), and everything works even while the R session is busy executing another agent's code.
 - **`checkpoint_session`**: Snapshot the R global environment to disk before risky operations. Checkpoints survive R restarts.
@@ -394,7 +394,7 @@ This architecture ensures that the AI can only perform approved operations throu
 
 ## CLI Integration
 
-ClaudeR supports command-line interface (CLI) agents: the **Claude Code CLI**, the **OpenAI Codex CLI**, the **Qwen Code CLI**, the **Google Antigravity CLI** (`agy`), and the legacy **Google Gemini CLI** (which shuts down June 18, 2026, with `agy` as its replacement). This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
+ClaudeR supports command-line interface (CLI) agents: the **Claude Code CLI**, the **OpenAI Codex CLI**, the **Qwen Code CLI**, and the **Google Antigravity CLI** (`agy`). The Google Gemini CLI shut down on June 18, 2026; `agy` replaced it, and `install_cli(tools = "gemini")` still exists for anyone on an old pinned build. This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
 
 ## Security Model
 
