@@ -9,5 +9,5 @@ both an R session and a Python session, and an agent picks either by name.
 
 from .server import start, status, stop
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __all__ = ["start", "stop", "status"]

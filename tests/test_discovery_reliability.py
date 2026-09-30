@@ -63,16 +63,32 @@ class DiscoveryTests(unittest.TestCase):
             bridge.get_r_addin_url()
         self.assertEqual(bridge._target_session, 'A')
 
-    def test_changed_identity_requires_explicit_reconnect(self):
+    def test_restarted_session_rebinds_and_notifies(self):
+        # Same name, sole live match, new process identity: the user restarted
+        # their session. That is a daily event, and it used to fail closed and
+        # then surface as "addin is not running" through the tool gate.
         self.record()
         bridge.get_r_addin_url()
+        first_identity = bridge._target_identity
         self.record(token='new-token')
-        with self.assertRaisesRegex(bridge.SessionBindingError, 'BOUND_SESSION_CHANGED'):
-            bridge.get_r_addin_url()
-        result = asyncio.run(bridge.call_tool('connect_session', {'session_name':'A'}))
-        self.assertIn('Connected', result[0].text)
-        self.assertIn('48878', bridge.get_r_addin_url())
+        bridge._rebind_note = None
+        url = bridge.get_r_addin_url()
+        self.assertIsNotNone(url)
+        self.assertEqual(bridge._target_session, 'A')
+        self.assertNotEqual(bridge._target_identity, first_identity)
         self.assertEqual(bridge._target_token, 'new-token')
+        self.assertIn('was restarted', bridge._rebind_note or '')
+
+    def test_lost_target_still_refuses_to_switch_names(self):
+        # Rebinding is only for the unambiguous same-name case. A bound name
+        # that vanishes while a different name is live must still refuse.
+        self.record()
+        bridge.get_r_addin_url()
+        os.remove(self.root / 'A.json')
+        self.record('B', port=48879)
+        with self.assertRaisesRegex(bridge.SessionBindingError, 'BOUND_SESSION_LOST'):
+            bridge.get_r_addin_url()
+        self.assertEqual(bridge._target_session, 'A')
 
     def test_multiple_sessions_require_selection(self):
         self.record()

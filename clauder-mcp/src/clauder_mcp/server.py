@@ -47,6 +47,10 @@ _agent_id_source: str = "unset"       # Where the identity came from (for the in
 _target_session: Optional[str] = None  # Set by connect_session tool
 _target_token: Optional[str] = None    # Per-session auth token from the discovery file
 _target_identity = None              # PID/port/start/token captured at explicit binding
+# Set when the bound session turns out to have been restarted, and cleared once
+# the notice has been shown on a tool result. The agent's picture of the
+# environment is stale after a restart, and it has to be told.
+_rebind_note: Optional[str] = None
 _agent_introduced: bool = False        # First-call introduction flag
 
 # Cache variable to store the result of the ggplot2 check
@@ -136,7 +140,7 @@ def _session_identity(info):
 
 def get_r_addin_url() -> Optional[str]:
     """Fail closed after binding; never route a lost target to another R session."""
-    global _target_session, _target_token, _target_identity
+    global _target_session, _target_token, _target_identity, _rebind_note
     sessions = discover_sessions()
     if _target_session:
         matches = [s for s in sessions if s["session_name"] == _target_session]
@@ -145,8 +149,21 @@ def get_r_addin_url() -> Optional[str]:
             raise SessionBindingError("BOUND_SESSION_LOST_OR_AMBIGUOUS: explicitly connect_session again; no code was rerouted")
         pick = matches[0]
         if _target_identity is not None and _session_identity(pick) != _target_identity:
-            _target_token = None
-            raise SessionBindingError("BOUND_SESSION_CHANGED: explicitly reconnect after verifying the target PID")
+            # Exactly one live session carries the bound name and only its
+            # process identity differs: the user restarted it, which happens
+            # every day. There is nothing to disambiguate, so rebind rather
+            # than fail closed. Refusing here used to surface, via the tool
+            # gate, as "RStudio addin is not running", which was false, hid
+            # the remedy, and had users restarting the whole client to clear
+            # this one variable. The restart still matters to the agent, so
+            # the next tool result carries a notice.
+            old_pid = _target_identity[0] if _target_identity else "?"
+            _rebind_note = (
+                f"Session '{_target_session}' was restarted since this connection was "
+                f"made (pid {old_pid} -> {pick.get('pid')}). Reconnected automatically. "
+                "Objects, loaded packages and the working directory from before the "
+                "restart are gone, so re-check state before relying on it."
+            )
     else:
         if not sessions:
             _target_token = None
@@ -2077,7 +2094,7 @@ async def list_tools() -> List[types.Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextContent | types.ImageContent]:
     """Handle R tool calls."""
-    global _target_session, _target_identity, _agent_introduced, _agent_id
+    global _target_session, _target_identity, _agent_introduced, _agent_id, _rebind_note
 
     # These tools check Python-side state only — skip addin check
     _skip_addin_check = {"list_sessions", "connect_session", "load_annotation_data", "annotate", "run_annotation_job", "get_annotation_job_status", "cancel_annotation_job",
@@ -2100,6 +2117,14 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         )]
 
     if name not in _skip_addin_check:
+        # Resolve the binding first and report ITS failure by name. Letting
+        # check_addin_status swallow a SessionBindingError produced "the addin
+        # is not running" while the addin was plainly running, and told the
+        # agent nothing about connect_session.
+        try:
+            get_r_addin_url()
+        except SessionBindingError as exc:
+            return [types.TextContent(type="text", text=f"Session binding: {exc}")]
         # Check if the R addin is running
         if not await check_addin_status():
             return [types.TextContent(
@@ -2108,6 +2133,11 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             )]
 
     result_contents = []
+
+    # A bound session was restarted underneath us: say so once, up front.
+    if _rebind_note:
+        result_contents.append(types.TextContent(type="text", text=_rebind_note))
+        _rebind_note = None
 
     # First tool call: prepend agent context so the model knows its identity
     if not _agent_introduced:

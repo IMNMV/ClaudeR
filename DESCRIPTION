@@ -1,6 +1,6 @@
 Package: ClaudeR
 Title: R Integration for Claude AI
-Version: 0.16.0
+Version: 0.16.1
 Authors@R: person("Nykko", "Vitali", email = "nykvt@icloud.com",
                   role = c("aut", "cre"),
                   comment = c(ORCID = "0000-0001-7146-5268"))

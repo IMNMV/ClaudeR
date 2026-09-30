@@ -11,6 +11,7 @@ the code. Outside IPython it falls back to exec against a persistent namespace.
 
 from __future__ import annotations
 
+import atexit
 import base64
 import io
 import json
@@ -52,6 +53,7 @@ class _State:
 
 
 STATE = _State()
+_atexit_registered = False
 
 
 def _shell():
@@ -366,6 +368,15 @@ def start(session_name: str = "default", port: int = 8790,
                          name="clauder-server")
     t.start()
     STATE.thread = t
+
+    # Remove our discovery record when the interpreter exits, so closing the
+    # IDE does not leave a dead-session file behind. The bridge filters dead
+    # pids anyway, so this is tidiness rather than correctness; a SIGKILL
+    # skips it and that is fine. Registered once, and stop() is idempotent.
+    global _atexit_registered
+    if not _atexit_registered:
+        atexit.register(stop, quiet=True)
+        _atexit_registered = True
 
     if not quiet:
         moved = " (requested port was busy)" if STATE.port != int(requested_port) else ""
