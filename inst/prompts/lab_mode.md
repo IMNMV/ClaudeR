@@ -61,7 +61,7 @@ The RStudio session has a single-threaded HTTP server. Multiple subagents callin
 
 - Use `execute_r` only for fast inspections: `class(x)`, `dim(df)`, `head(df)`, `ls()`.
 - Use `execute_r_async` with `inputs`/`outputs` marshaling for **everything else**: model fits, simulations, bulk transformations, EDA loops, anything iterating, anything fitting, anything plotting. No exceptions.
-- Poll for results with `get_async_result`. While waiting, do other work — read the ledger, plan the next step, draft your finding text.
+- Collect results with `get_async_result`, which waits until the job finishes. To do other work first (read the ledger, plan the next step, draft your finding text), check with `get_async_result(job_id, wait_s = 0)` and come back later.
 - If you need to cancel a runaway job, use `cancel_async_job`.
 
 If you find yourself wanting to `execute_r("fit <- brm(...)")` synchronously, **stop and use the async variant instead.** The orchestrator should call out subagents that violate this rule in the assembly phase.

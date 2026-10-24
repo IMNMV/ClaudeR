@@ -453,17 +453,32 @@ format_coord_event <- function(e) {
 }
 
 # Compact presence summary from the event log: who has written, how long ago.
-coord_roster_text <- function(session = NULL, stale_after = 900) {
+# Same one-day cutoff as cr_roster(): the log is append-only, so a reused
+# session name would otherwise list agents from weeks ago in the Agents panel
+# of a session that was just opened. Returns NULL when nobody is recent.
+coord_roster_text <- function(session = NULL, stale_after = 900,
+                              hide_after = 86400) {
   evs <- tryCatch(coord_events(session), error = function(err) list())
   if (length(evs) == 0) return(NULL)
   last <- list()
   for (e in evs) if (!is.null(e$from)) last[[e$from]] <- e$ts
+  if (length(last) == 0) return(NULL)
   now <- Sys.time()
-  parts <- vapply(names(last), function(nm) {
+  ago <- vapply(names(last), function(nm) {
     ts <- suppressWarnings(as.POSIXct(last[[nm]], format = "%Y-%m-%dT%H:%M:%OS"))
-    if (is.na(ts)) return(sprintf("%s (?)", nm))
-    ago <- round(as.numeric(difftime(now, ts, units = "secs")))
-    sprintf("%s (%ss ago%s)", nm, ago, if (ago > stale_after) ", STALE" else "")
+    if (is.na(ts)) NA_real_ else round(as.numeric(difftime(now, ts, units = "secs")))
+  }, numeric(1))
+  hidden <- sum(!is.na(ago) & ago > hide_after)
+  keep <- is.na(ago) | ago <= hide_after
+  if (!any(keep)) return(NULL)
+  ago <- ago[keep]
+  ago <- ago[order(ago, na.last = TRUE)]
+  parts <- vapply(names(ago), function(nm) {
+    a <- ago[[nm]]
+    if (is.na(a)) return(sprintf("%s (?)", nm))
+    sprintf("%s (%ss ago%s)", nm, a, if (a > stale_after) ", STALE" else "")
   }, character(1))
-  paste(parts, collapse = ", ")
+  txt <- paste(parts, collapse = ", ")
+  if (hidden > 0) txt <- sprintf("%s (+%d older, hidden)", txt, hidden)
+  txt
 }

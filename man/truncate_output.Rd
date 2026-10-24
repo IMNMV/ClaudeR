@@ -23,3 +23,8 @@ handles the other). Keeps the head and the tail: the head shows what the
 object looks like, and the tail preserves the warnings and messages, which
 are appended last and matter most.
 }
+\details{
+Whenever anything is cut, the full output is first written to a file in
+the session's temp directory and the notice names that file, so the agent
+can read the omitted part instead of re-running the code.
+}

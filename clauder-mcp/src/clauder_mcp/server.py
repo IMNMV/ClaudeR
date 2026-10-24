@@ -1263,13 +1263,22 @@ def _all_tools() -> List[types.Tool]:
         ),
         types.Tool(
             name="get_async_result",
-            description="Check the result of an async R job. Waits ~10 seconds before checking to avoid excessive polling. If the job is still running, call this again.",
+            description=(
+                "Wait for an async R job and return its result. Returns the moment the job "
+                "finishes, or after wait_s seconds if it is still running (then call again to "
+                "keep waiting). One call replaces many polls, and the main R session stays "
+                "free while you wait. Pass wait_s=0 for a quick status check."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "job_id": {
                         "type": "string",
                         "description": "The job ID returned by execute_r_async"
+                    },
+                    "wait_s": {
+                        "type": "number",
+                        "description": "Max seconds to wait for the job to finish (default 300, cap 1800). Lower it if your client times out tool calls sooner."
                     }
                 },
                 "required": ["job_id"]
@@ -2724,15 +2733,28 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
 
     elif name == "get_async_result":
         job_id = arguments.get("job_id", "")
+        try:
+            wait_s = min(max(float(arguments.get("wait_s", 300)), 0.0), 1800.0)
+        except (TypeError, ValueError):
+            wait_s = 300.0
 
-        # Throttle polling — wait before checking
-        await asyncio.sleep(10)
-
-        # Ask R for the job status. Collection loads outputs back into the
-        # main session (readRDS + assign), which can be slow for big results.
-        result = await post_to_r_addin({"check_job": job_id}, timeout=120.0)
-
-        status = result.get("status", "unknown")
+        # Wait here instead of making the agent poll: a 20-minute fit used to
+        # cost ~120 calls at the old fixed 10 s delay. The checks back off
+        # from 2 s to 10 s, so short jobs return quickly and long ones cost
+        # the main session one cheap is_alive() call every 10 s. Collection
+        # loads outputs back into the main session (readRDS + assign), which
+        # can be slow for big results, hence the long per-check timeout.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + wait_s
+        pause = 2.0
+        while True:
+            result = await post_to_r_addin({"check_job": job_id}, timeout=120.0)
+            status = result.get("status", "unknown")
+            remaining = deadline - loop.time()
+            if status != "running" or remaining <= 0:
+                break
+            await asyncio.sleep(min(pause, remaining))
+            pause = min(pause * 1.5, 10.0)
 
         if status == "not_found":
             return [types.TextContent(
@@ -2744,7 +2766,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             elapsed = result.get("elapsed_seconds", "?")
             return [types.TextContent(
                 type="text",
-                text=f"Job {job_id} is still running ({elapsed}s elapsed). Call get_async_result(\"{job_id}\") again to check."
+                text=f"Job {job_id} is still running ({elapsed}s elapsed). Call get_async_result(\"{job_id}\") again to keep waiting."
             )]
 
         # Job is complete

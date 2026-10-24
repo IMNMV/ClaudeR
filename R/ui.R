@@ -1385,17 +1385,27 @@ summarize_result_value <- function(value, max_len = 100L) {
 #' object looks like, and the tail preserves the warnings and messages, which
 #' are appended last and matter most.
 #'
+#' Whenever anything is cut, the full output is first written to a file in
+#' the session's temp directory and the notice names that file, so the agent
+#' can read the omitted part instead of re-running the code.
+#'
 #' @param lines Character vector of captured output lines
 #' @param max_lines Maximum lines to keep
 #' @param max_chars Hard character ceiling applied after line trimming
 #' @return A single truncated string
 truncate_output <- function(lines, max_lines = 500L, max_chars = 50000L) {
+  full <- paste(lines, collapse = "\n")
+  if (length(lines) <= max_lines && nchar(full) <= max_chars) return(full)
+
+  saved <- save_full_output(lines)
+  where <- if (is.null(saved)) "" else sprintf("; full output saved to %s", saved)
+
   if (length(lines) > max_lines) {
     head_n <- as.integer(max_lines * 0.8)
     tail_n <- max_lines - head_n
     lines <- c(
       utils::head(lines, head_n),
-      sprintf("... [%d lines omitted] ...", length(lines) - max_lines),
+      sprintf("... [%d lines omitted%s] ...", length(lines) - max_lines, where),
       utils::tail(lines, tail_n)
     )
   }
@@ -1403,10 +1413,36 @@ truncate_output <- function(lines, max_lines = 500L, max_chars = 50000L) {
   if (nchar(txt) > max_chars) {
     txt <- paste0(
       substr(txt, 1L, max_chars),
-      sprintf("\n... [output truncated at %d characters]", max_chars)
+      sprintf("\n... [output truncated at %d characters%s]", max_chars, where)
     )
   }
   txt
+}
+
+# Write untruncated output to <tempdir>/clauder_output/ and return the path,
+# or NULL if the write fails (the truncated reply still goes out). Keeps the
+# newest 20 files; R removes the folder with the rest of tempdir() on exit.
+# Named by timestamp, never by a random draw: that would advance the user's
+# RNG stream and change the results of seeded code run after it.
+save_full_output <- function(lines, keep = 20L) {
+  tryCatch({
+    dir <- file.path(tempdir(), "clauder_output")
+    dir.create(dir, showWarnings = FALSE, recursive = TRUE)
+    stamp <- format(Sys.time(), "%Y%m%d_%H%M%OS3")
+    path <- file.path(dir, sprintf("output_%s.txt", stamp))
+    n <- 1L
+    while (file.exists(path)) {
+      n <- n + 1L
+      path <- file.path(dir, sprintf("output_%s_%d.txt", stamp, n))
+    }
+    writeLines(lines, path, useBytes = TRUE)
+    old <- list.files(dir, pattern = "^output_.*\\.txt$", full.names = TRUE)
+    if (length(old) > keep) {
+      old <- old[order(file.mtime(old), old, decreasing = TRUE)]
+      unlink(old[-seq_len(keep)])
+    }
+    normalizePath(path, winslash = "/")
+  }, error = function(e) NULL)
 }
 
 #' Execute R code in the active RStudio session

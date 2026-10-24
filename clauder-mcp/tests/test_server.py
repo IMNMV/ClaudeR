@@ -248,3 +248,93 @@ class TestSetAgentNameGuard:
         asyncio.run(_srv.call_tool(
             "set_agent_name", {"name": "Claude-Gatherers"}))
         assert _srv._agent_id == "Claude-Gatherers"
+
+
+# --- get_async_result waits for the job ------------------------------------
+
+import time
+
+
+def _fake_r(monkeypatch, replies):
+    """Bind to a pretend live R session whose check_job answers come from
+    `replies` in order (the last one repeats). Returns the list of calls."""
+    calls = []
+
+    async def fake_post(payload, timeout=10.0):
+        calls.append(payload)
+        return replies[min(len(calls), len(replies)) - 1]
+
+    async def fake_status(return_info=False):
+        return True
+
+    monkeypatch.setattr(_srv, "_session_language", lambda: "r")
+    monkeypatch.setattr(_srv, "get_r_addin_url", lambda: "http://127.0.0.1:1")
+    monkeypatch.setattr(_srv, "check_addin_status", fake_status)
+    monkeypatch.setattr(_srv, "_agent_introduced", True)
+    monkeypatch.setattr(_srv, "_rebind_note", None)
+    monkeypatch.setattr(_srv, "post_to_r_addin", fake_post)
+    return calls
+
+
+RUNNING = {"status": "running", "elapsed_seconds": 5}
+DONE = {"status": "complete", "success": True, "output": "fit done"}
+
+
+class TestAsyncWait:
+    """One call should wait for the job instead of making the agent poll
+    every 10 s (a 20-minute fit used to cost ~120 calls)."""
+
+    def test_returns_as_soon_as_job_finishes(self, monkeypatch):
+        calls = _fake_r(monkeypatch, [RUNNING, RUNNING, DONE])
+        t0 = time.monotonic()
+        out = asyncio.run(_srv.call_tool("get_async_result",
+                                         {"job_id": "j1", "wait_s": 60}))
+        assert out[0].text == "fit done"
+        assert len(calls) == 3
+        assert time.monotonic() - t0 < 10   # 2 s + 3 s of back-off, not 60
+
+    def test_already_finished_job_has_no_delay(self, monkeypatch):
+        calls = _fake_r(monkeypatch, [DONE])
+        t0 = time.monotonic()
+        out = asyncio.run(_srv.call_tool("get_async_result", {"job_id": "j1"}))
+        assert out[0].text == "fit done"
+        assert len(calls) == 1
+        assert time.monotonic() - t0 < 1    # the old code always slept 10 s
+
+    def test_wait_zero_checks_once(self, monkeypatch):
+        calls = _fake_r(monkeypatch, [RUNNING])
+        out = asyncio.run(_srv.call_tool("get_async_result",
+                                         {"job_id": "j1", "wait_s": 0}))
+        assert len(calls) == 1
+        assert "still running" in out[0].text
+
+    def test_gives_up_at_wait_s_and_says_to_call_again(self, monkeypatch):
+        calls = _fake_r(monkeypatch, [RUNNING])
+        t0 = time.monotonic()
+        out = asyncio.run(_srv.call_tool("get_async_result",
+                                         {"job_id": "j1", "wait_s": 3}))
+        took = time.monotonic() - t0
+        assert 2.5 < took < 5
+        assert "still running" in out[0].text and "again" in out[0].text
+        assert len(calls) >= 2
+
+    def test_unknown_job_stops_waiting(self, monkeypatch):
+        calls = _fake_r(monkeypatch, [{"status": "not_found"}])
+        out = asyncio.run(_srv.call_tool("get_async_result",
+                                         {"job_id": "nope", "wait_s": 60}))
+        assert len(calls) == 1
+        assert "No job found" in out[0].text
+
+    def test_lost_connection_stops_waiting(self, monkeypatch):
+        calls = _fake_r(monkeypatch, [{"success": False,
+                                       "error": "Error communicating with RStudio: refused"}])
+        out = asyncio.run(_srv.call_tool("get_async_result",
+                                         {"job_id": "j1", "wait_s": 60}))
+        assert len(calls) == 1
+        assert "refused" in out[0].text
+
+    def test_bad_wait_value_falls_back(self, monkeypatch):
+        calls = _fake_r(monkeypatch, [DONE])
+        out = asyncio.run(_srv.call_tool("get_async_result",
+                                         {"job_id": "j1", "wait_s": "soon"}))
+        assert out[0].text == "fit done"
