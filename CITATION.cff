@@ -18,7 +18,7 @@ authors:
 repository-code: "https://github.com/IMNMV/ClaudeR"
 url: "https://github.com/IMNMV/ClaudeR"
 license: MIT
-version: 0.16.2
+version: 0.16.3
 date-released: "2026-09-30"
 keywords:
   - R

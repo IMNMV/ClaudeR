@@ -1157,6 +1157,17 @@ claudeAddin <- function() {
             update_setting("log_file_path", new_log)
             write_log_header(new_log)
             shiny::updateTextInput(session, "log_file_path", value = new_log)
+            message("ClaudeR: session log at ", normalizePath(new_log, winslash = "/"))
+          }
+
+          # "Also log my own console commands" is saved between sessions and
+          # the box comes back ticked, but its observer ignores the initial
+          # value, so after an R restart the box said on while nothing was
+          # armed. Arm it here, once the log file exists.
+          if (isTRUE(.claude_server_env$settings$log_console)) {
+            tryCatch(start_console_logging(), error = function(e) {
+              message("ClaudeR: could not start console logging: ", conditionMessage(e))
+            })
           }
 
           # Wrap viewer to capture HTML widget URLs

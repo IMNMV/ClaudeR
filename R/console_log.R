@@ -25,7 +25,11 @@
 
 .console_state <- new.env(parent = emptyenv())
 
+# The running session's log, or NULL. Only while a server is running: with
+# the server stopped, log_file_path still names the last session's file, and
+# appending to it would mix this session's commands into a finished log.
 console_log_path <- function() {
+  if (!isTRUE(.claude_server_env$running)) return(NULL)
   s <- tryCatch(.claude_server_env$settings, error = function(e) NULL)
   if (is.null(s) || !isTRUE(s$log_to_file)) return(NULL)
   p <- s$log_file_path
@@ -125,7 +129,13 @@ console_task_callback <- function(expr, value, ok, visible) {
   # A task callback that signals an error is removed by R, which would end
   # console logging silently, so nothing here is allowed to escape.
   tryCatch({
-    if (is.null(console_log_path())) return(TRUE)
+    if (is.null(console_log_path())) {
+      # No running session to log to. Still consume what was printed, or it
+      # would be attributed to the first command after the server starts.
+      console_drain()
+      .console_state$pending <- NULL
+      return(TRUE)
+    }
     code <- paste(deparse(expr), collapse = "\n")
 
     # Skip our own bookkeeping so the log does not describe itself.
@@ -223,7 +233,21 @@ start_console_logging <- function() {
   reg.finalizer(.console_state,
                 function(e) tryCatch(console_sink_close(), error = function(x) NULL),
                 onexit = TRUE)
-  message("ClaudeR: console logging on. Your console commands now appear in the session log.")
+  # Entries go to the running session's log. Before the addin has started a
+  # server there is no log to write to, so say that instead of claiming
+  # commands are being recorded (they are, from the moment it starts).
+  p <- console_log_path()
+  if (!is.null(p)) {
+    message("ClaudeR: console logging on. Your console commands now go to ",
+            normalizePath(p, winslash = "/", mustWork = FALSE))
+  } else if (!is.null(.claude_server_env$settings) &&
+             !isTRUE(.claude_server_env$settings$log_to_file)) {
+    message("ClaudeR: console logging on, but 'Log code to file' is off in the addin, ",
+            "so nothing will be written until it is ticked.")
+  } else {
+    message("ClaudeR: console logging on. Nothing is written until a session is ",
+            "started in the addin; from then on your commands go to its log.")
+  }
   if (!ok_sink) {
     message("ClaudeR: could not capture printed output here; ",
             "commands and their values will still be logged.")

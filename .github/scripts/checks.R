@@ -501,5 +501,25 @@ r <- tryCatch({
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("editor: line-count-changing splice persists to disk") else fail("editor splice:", r)
 
+# --- Console logging writes only into a running session's log ---
+# With the server stopped, log_file_path still names the previous session's
+# file; console entries must not be appended to a finished log.
+sys.source("R/console_log.R", envir = env)
+r <- tryCatch({
+  f <- tempfile(fileext = ".R")
+  env$.claude_server_env$settings <- list(log_to_file = TRUE, log_file_path = f)
+  env$.claude_server_env$running <- FALSE
+  stopped_null <- is.null(env$console_log_path())
+  env$.claude_server_env$running <- TRUE
+  env$console_write("x <- 1", tag = "user")
+  written <- identical(env$console_log_path(), f) &&
+    any(grepl("# Run by user (console):", readLines(f), fixed = TRUE))
+  env$.claude_server_env$running <- FALSE
+  env$.claude_server_env$settings <- NULL
+  unlink(f)
+  stopped_null && written
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("console log: written only while a session runs") else fail("console log path:", r)
+
 if (!ok) quit(status = 1)
 cat("\nAll checks passed.\n")
