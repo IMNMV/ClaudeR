@@ -2157,22 +2157,28 @@ export_log_as_script <- function(log_path = NULL, output_path = NULL, include_er
     ""
   )
 
-  for (i in seq_along(block_starts)) {
+  # Code of each block, and whether it is an error block. Header lines:
+  # "# --- [timestamp] ---", "# Code executed by ...", "# Error: ...".
+  parsed <- lapply(seq_along(block_starts), function(i) {
     block <- lines[block_starts[i]:block_ends[i]]
-
-    # Check if this is an error block
-    is_error <- any(grepl("(ERROR)", block, fixed = TRUE))
-
-    # Extract code lines (skip the header comments)
-    # Header lines: "# --- [timestamp] ---", "# Code executed by ...", "# Error: ..."
     code_lines <- block[!grepl("^# --- \\[|^# Code executed by |^# Run by |^# Error: |^#> |^#\\s*$", block)]
-
-    # Remove trailing blank lines
     while (length(code_lines) > 0 && code_lines[length(code_lines)] == "") {
       code_lines <- code_lines[-length(code_lines)]
     }
+    list(code = code_lines, is_error = any(grepl("(ERROR)", block, fixed = TRUE)))
+  })
 
+  for (i in seq_along(parsed)) {
+    code_lines <- parsed[[i]]$code
+    is_error <- parsed[[i]]$is_error
     if (length(code_lines) == 0) next
+
+    # Agent code is logged before it runs, and a failure then appends an
+    # (ERROR) block with the same code. Without this the failed code stayed
+    # in the script as live code, so the "clean" script stopped at the same
+    # error when rerun.
+    nxt <- if (i < length(parsed)) parsed[[i + 1]] else NULL
+    if (!is_error && !is.null(nxt) && nxt$is_error && identical(nxt$code, code_lines)) next
 
     if (is_error && include_errors) {
       clean_lines <- c(clean_lines, "# [The following block produced an error]", paste0("# ", code_lines), "")

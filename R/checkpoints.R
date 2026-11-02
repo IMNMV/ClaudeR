@@ -72,6 +72,27 @@ checkpoint_session <- function(label = NULL, envir = .GlobalEnv, dir = NULL,
   invisible(path)
 }
 
+# Find a checkpoint by file name, by name without ".RData", or by the label
+# it was saved with (the newest one carrying that label). Agents naturally
+# pass the label they chose ("before_filter"); only accepting the stamped
+# file name made that fail with "not found".
+resolve_checkpoint <- function(checkpoint, dir) {
+  for (cand in c(file.path(dir, checkpoint),
+                 file.path(dir, paste0(checkpoint, ".RData")))) {
+    if (file.exists(cand)) return(cand)
+  }
+  safe <- gsub("[^a-zA-Z0-9_-]", "_", substr(checkpoint, 1, 40))
+  hits <- sort(list.files(dir, pattern = "^chk_.*\\.RData$", full.names = TRUE))
+  hits <- hits[endsWith(basename(hits), paste0("_", safe, ".RData"))]
+  if (length(hits) == 0) {
+    have <- sub("\\.RData$", "", basename(list.files(dir, pattern = "^chk_.*\\.RData$")))
+    stop("Checkpoint not found: ", checkpoint,
+         if (length(have)) paste0(". Available: ", paste(utils::tail(have, 10), collapse = ", ")),
+         call. = FALSE)
+  }
+  hits[length(hits)]
+}
+
 #' Restore the R session environment from a checkpoint
 #'
 #' Rolls `envir` back to a checkpoint written by [checkpoint_session()].
@@ -104,11 +125,7 @@ restore_session <- function(checkpoint = NULL, envir = .GlobalEnv, dir = NULL,
     }
     checkpoint <- all_chk[length(all_chk)]
   } else if (!file.exists(checkpoint)) {
-    candidate <- file.path(dir, checkpoint)
-    if (!file.exists(candidate)) {
-      stop("Checkpoint not found: ", checkpoint, call. = FALSE)
-    }
-    checkpoint <- candidate
+    checkpoint <- resolve_checkpoint(checkpoint, dir)
   }
 
   if (isTRUE(backup)) {

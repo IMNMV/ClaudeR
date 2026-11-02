@@ -521,5 +521,35 @@ r <- tryCatch({
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("console log: written only while a session runs") else fail("console log path:", r)
 
+# --- Clean-script export drops code that failed, keeping it only as a comment ---
+r <- tryCatch({
+  log <- tempfile(fileext = ".R")
+  env$log_code_to_file("x <- 1", log, agent_id = "a")
+  env$log_code_to_file("stop('boom')", log, agent_id = "a")
+  env$log_error_to_file("stop('boom')", "boom", log, agent_id = "a")
+  env$log_code_to_file("y <- x + 1", log, agent_id = "a")
+  out <- suppressMessages(env$export_log_as_script(log, tempfile(fileext = ".R")))
+  s <- readLines(out)
+  unlink(c(log, out))
+  sum(s == "stop('boom')") == 0 && sum(s == "# stop('boom')") == 1 &&
+    "x <- 1" %in% s && "y <- x + 1" %in% s
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("export: failed code is commented, not left live") else fail("export of failed code:", r)
+
+# --- restore_session finds a checkpoint by the label it was saved with ---
+r <- tryCatch({
+  d <- tempfile(); dir.create(d)
+  e <- new.env()
+  assign("v", 1, e); suppressMessages(env$checkpoint_session("before_filter", envir = e, dir = d))
+  assign("v", 2, e)
+  suppressMessages(env$restore_session("before_filter", envir = e, dir = d))
+  got <- get("v", e)
+  miss <- tryCatch({ env$restore_session("nope", envir = e, dir = d); "no error" },
+                   error = function(x) conditionMessage(x))
+  unlink(d, recursive = TRUE)
+  got == 1 && grepl("Available:", miss)
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("checkpoints: restore by label") else fail("restore by label:", r)
+
 if (!ok) quit(status = 1)
 cat("\nAll checks passed.\n")
