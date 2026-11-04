@@ -338,3 +338,158 @@ class TestAsyncWait:
         out = asyncio.run(_srv.call_tool("get_async_result",
                                          {"job_id": "j1", "wait_s": "soon"}))
         assert out[0].text == "fit done"
+
+
+# --- annotation jobs: locked-down calls, retries, raw replies, limit stop ---
+
+import json
+import os
+import sys
+
+FAKE_HELP = ("  --safe-mode   x\n  --tools <tools...>   x\n  --strict-mcp-config   x\n"
+             "  --disable-slash-commands   x\n  --output-format <format>   x\n")
+
+FAKE_CLAUDE = r'''#!{python}
+# Stands in for the claude CLI. What it does comes from FAKE_MODE; every call
+# is recorded in FAKE_LOG (argv, folder, whether an API key was visible).
+import json, os, sys
+if "--help" in sys.argv:
+    print(os.environ.get("FAKE_HELP", ""))
+    sys.exit(0)
+prompt = sys.stdin.read()
+log = os.environ["FAKE_LOG"]
+n = sum(1 for _ in open(log)) if os.path.exists(log) else 0
+with open(log, "a") as f:
+    f.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "cwd_files": os.listdir("."),
+                        "api_key": "ANTHROPIC_API_KEY" in os.environ, "prompt": prompt}}) + "\n")
+mode = os.environ["FAKE_MODE"]
+keys = [json.loads(l)["_row"] for l in prompt.splitlines() if l.startswith("{{") and '"_row"' in l]
+if mode == "bad_then_ok" and n == 0 or mode == "always_bad":
+    reply = "I think this one is about a person."
+elif mode == "limit":
+    print(json.dumps([{{"type": "result", "is_error": True, "result": "You've hit your limit, resets 5pm"}}]))
+    sys.exit(1)
+elif mode == "batch_missing_one" and n == 0:
+    reply = json.dumps({{k: {{"label": "person"}} for k in keys[:-1]}})
+elif keys:
+    reply = json.dumps({{k: {{"label": "person"}} for k in keys}})
+else:
+    reply = '```json\n{{"label": "person"}}\n```'
+if "--output-format" in sys.argv:
+    # The event list Claude Code prints, rate-limit status line included.
+    print(json.dumps([{{"type": "system"}},
+                      {{"type": "rate_limit_event", "rate_limit_info": {{"status": "allowed"}}}},
+                      {{"type": "result", "is_error": False, "result": reply}}]))
+else:
+    print(reply)
+'''
+
+
+def _annot_rows(n=1):
+    rows = [{"row_id": str(i + 1), "message": f"message {i + 1}", "label": "",
+             "_schema": "label:choice[person,thing]" if i == 0 else ""} for i in range(n)]
+    return rows, ["row_id", "message", "label", "_schema"]
+
+
+def _run_annot(tmp_path, monkeypatch, mode, n=1, help_text=FAKE_HELP, **kw):
+    """Run one annotation job against the fake CLI, in this thread. Returns
+    (job, calls, rows, raw replies)."""
+    fake = tmp_path / "claude"
+    fake.write_text(FAKE_CLAUDE.format(python=sys.executable))
+    fake.chmod(0o755)
+    monkeypatch.setenv("FAKE_MODE", mode)
+    monkeypatch.setenv("FAKE_LOG", str(tmp_path / "calls.jsonl"))
+    monkeypatch.setenv("FAKE_HELP", help_text)
+    rows, fieldnames = _annot_rows(n)
+    fieldnames = kw.pop("fieldnames", fieldnames)
+    work = tmp_path / "data_annotating.csv"
+    raw = tmp_path / "data_annotating_raw.jsonl"
+    schema = _parse_annotation_schema("label:choice[person,thing]")
+    _srv._annot_jobs["t"] = {"status": "starting", "total": n, "done": 0, "errors": [],
+                             "work_path": str(work), "tool": "claude", "cancelled": False}
+    _srv._annotation_job_worker("t", rows, fieldnames, list(range(n)), schema, str(work),
+                                "claude", str(fake), None, 30, raw_path=str(raw), **kw)
+    calls_file = tmp_path / "calls.jsonl"
+    calls = [json.loads(l) for l in open(calls_file)] if calls_file.exists() else []
+    replies = [json.loads(l) for l in open(raw)] if raw.exists() else []
+    return _srv._annot_jobs["t"], calls, rows, replies
+
+
+class TestAnnotationJob:
+    def test_call_sees_only_the_row(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "ok")
+        argv = calls[0]["argv"]
+        for flag in ("--safe-mode", "--strict-mcp-config", "--disable-slash-commands"):
+            assert flag in argv
+        assert argv[argv.index("--tools") + 1] == ""
+        assert argv[argv.index("--output-format") + 1] == "json"
+        # An empty folder, not the project, and it is cleaned up afterwards
+        assert calls[0]["cwd_files"] == []
+        assert os.path.realpath(calls[0]["cwd"]) != os.path.realpath(os.getcwd())
+        assert not os.path.exists(calls[0]["cwd"])
+        assert calls[0]["api_key"] is True          # kept unless no_api_key
+        assert job["status"] == "complete" and rows[0]["label"] == "person"
+
+    def test_no_api_key_removes_the_key(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "ok", no_api_key=True)
+        assert calls[0]["api_key"] is False
+        assert rows[0]["label"] == "person"
+
+    def test_every_reply_is_kept_word_for_word(self, tmp_path, monkeypatch):
+        job, calls, rows, replies = _run_annot(tmp_path, monkeypatch, "ok", n=2)
+        assert [r["rows"] for r in replies] == [["1"], ["2"]]
+        assert all('"label": "person"' in r["stdout"].replace('\\"', '"') for r in replies)
+        import csv
+        saved = list(csv.DictReader(open(tmp_path / "data_annotating.csv")))
+        assert [r["label"] for r in saved] == ["person", "person"]
+
+    def test_bad_reply_is_asked_again(self, tmp_path, monkeypatch):
+        job, calls, rows, replies = _run_annot(tmp_path, monkeypatch, "bad_then_ok")
+        assert len(calls) == 2 and [r["try"] for r in replies] == [1, 2]
+        assert rows[0]["label"] == "person" and job["errors"] == []
+
+    def test_gives_up_after_three_tries(self, tmp_path, monkeypatch):
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "always_bad")
+        assert len(calls) == 3
+        assert job["status"] == "complete" and len(job["errors"]) == 1
+        assert rows[0]["label"] == ""
+
+    def test_usage_limit_stops_and_keeps_rows(self, tmp_path, monkeypatch):
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "limit", n=3)
+        assert job["status"] == "stopped_at_limit"
+        assert len(calls) == 1 and job["errors"] == [] and job["done"] == 0
+        assert "limit" in job["limit_message"]
+
+    def test_rate_limit_status_line_is_not_a_limit(self, tmp_path, monkeypatch):
+        # Claude Code's output always carries a rate-limit status event. A
+        # reply that is not JSON must be retried, not mistaken for the limit.
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "always_bad")
+        assert job["status"] == "complete" and len(calls) == 3
+
+    def test_batch_asks_again_only_for_missing_rows(self, tmp_path, monkeypatch):
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "batch_missing_one",
+                                         n=3, batch_size=3)
+        assert len(calls) == 2
+        assert calls[0]["prompt"].count('"_row"') == 3
+        assert calls[1]["prompt"].count('"_row"') == 1
+        assert [r["label"] for r in rows] == ["person"] * 3 and job["errors"] == []
+
+    def test_default_is_one_row_per_call(self, tmp_path, monkeypatch):
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "ok", n=3)
+        assert len(calls) == 3 and all('"_row"' not in c["prompt"] for c in calls)
+
+    def test_older_cli_without_the_flags_still_works(self, tmp_path, monkeypatch):
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "ok", help_text="")
+        assert calls[0]["argv"] == ["-p", "--no-session-persistence"]
+        assert rows[0]["label"] == "person"
+
+    def test_crash_marks_the_job_failed_and_keeps_the_file(self, tmp_path, monkeypatch):
+        work = tmp_path / "data_annotating.csv"
+        work.write_text("row_id,message,label,_schema\n1,message 1,,x\n")
+        # A field list missing a column makes the save fail.
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "ok",
+                                         fieldnames=["row_id", "message", "label"])
+        assert job["status"] == "failed"
+        assert work.read_text() == "row_id,message,label,_schema\n1,message 1,,x\n"

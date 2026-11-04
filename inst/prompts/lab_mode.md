@@ -546,7 +546,7 @@ Anything failing (1)–(4) is automatic CONCERNS. Anything beyond is subjective 
 If you cannot dispatch subagents (your host CLI is single-agent only), tell the user this and offer two paths:
 
 1. **Sequential simulation:** You play each role in turn, following the same ledger discipline, with explicit transitions ("Now operating as EDA specialist..."). Slower, no parallelism, but the discipline and audit trail still produce useful artifacts.
-2. **Switch CLIs:** Suggest they re-run on a CLI that supports subagents (Claude Code's Task tool, Codex's `[agents]`, Gemini CLI's `/subagents`, Antigravity's `invoke_subagent`).
+2. **Switch CLIs:** Suggest they re-run on a CLI that supports subagents (Claude Code's Task tool, Codex's `[agents]`, Antigravity's `invoke_subagent`).
 
 In sequential mode, the assembly review still works — you just play every voting role yourself with explicit attempts to find concerns in each role's lens. This is weaker than true multi-agent assembly but better than nothing.
 

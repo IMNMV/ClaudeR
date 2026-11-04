@@ -1079,7 +1079,7 @@ claudeAddin <- function() {
             tags$li(tags$b("Executions:"), " total number of code blocks executed across all agents.")
           ),
           tags$h5("How it works"),
-          tags$p("Each AI tool (Claude Code, Codex, Gemini, etc.) is assigned a unique agent ID when it first connects.",
+          tags$p("Each AI tool (Claude Code, Codex, Antigravity, etc.) is assigned a unique agent ID when it first connects.",
             "If you see multiple IDs, multiple agents are sharing this R session.",
             "They can see each other's work through ", tags$code("get_session_history"), " and the shared log file."),
           tags$p("Use ", tags$b("Fresh start on restart"), " to clear agent history when starting a new task.")
@@ -3322,9 +3322,8 @@ finalize_lab_session <- function(lab_folder,
 #' round to disk, and produces a self-contained timestamped lab folder.
 #'
 #' Agent-agnostic: works on any host CLI with subagent primitives (Claude Code
-#' Task tool, Codex `[agents]`, Gemini CLI `/subagents`, Antigravity
-#' `invoke_subagent`). Falls back to sequential role-playing on single-agent
-#' CLIs.
+#' Task tool, Codex `[agents]`, Antigravity `invoke_subagent`). Falls back to
+#' sequential role-playing on single-agent CLIs.
 #'
 #' @param description Required. A research question or task statement. The
 #'   orchestrator will refuse to proceed if this is empty or too vague.

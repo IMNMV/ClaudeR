@@ -22,7 +22,7 @@ devtools::install_github("IMNMV/ClaudeR")
 
 ### Step 2: Run the Setup Function for Your AI Tool
 
-Ask the user which CLI agent they want to install for (Claude Code, Codex, or Gemini), then run the matching command:
+Ask the user which CLI agent they want to install for (Claude Code, Codex, Qwen Code, or Antigravity), then run the matching command:
 
 **For Claude Code CLI:**
 ```R
@@ -48,12 +48,6 @@ install_cli(tools = "qwen")
 install_cli(tools = "agy")
 ```
 
-**For Google Gemini CLI (legacy; shuts down June 18, 2026):**
-```R
-library(ClaudeR)
-install_cli(tools = "gemini")
-```
-
 **For Claude Desktop or Cursor (desktop apps, not CLI):**
 ```R
 library(ClaudeR)
@@ -61,7 +55,7 @@ install_clauder()
 # For Cursor: install_clauder(for_cursor = TRUE)
 ```
 
-Each function prints the exact command or config you need to apply. For CLI tools, copy and run the printed command in your terminal. For Gemini, copy the JSON into your `gemini.json` settings file.
+Each function prints the exact command or config you need to apply. For CLI tools, copy and run the printed command in your terminal. For Antigravity, copy the JSON into `~/.gemini/config/mcp_config.json`.
 
 ### Step 3: Start the Server in RStudio (Manual Step)
 

@@ -47,9 +47,8 @@ round to disk, and produces a self-contained timestamped lab folder.
 }
 \details{
 Agent-agnostic: works on any host CLI with subagent primitives (Claude Code
-Task tool, Codex `[agents]`, Gemini CLI `/subagents`, Antigravity
-`invoke_subagent`). Falls back to sequential role-playing on single-agent
-CLIs.
+Task tool, Codex `[agents]`, Antigravity `invoke_subagent`). Falls back to
+sequential role-playing on single-agent CLIs.
 }
 \examples{
 \dontrun{

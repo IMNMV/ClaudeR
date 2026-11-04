@@ -52,6 +52,8 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
+- **Gemini CLI removed (R 0.16.4 / clauder-mcp 0.16.3).** Google shut Gemini CLI down on June 18, 2026, and Antigravity (`agy`) replaced it. `install_cli(tools = "gemini")` and the `gemini` option of `run_annotation_job` are gone, and both now point you to `agy` instead.
+- **Labelling calls see only the row (clauder-mcp 0.16.3).** `run_annotation_job` now starts each Claude call with no tools, MCP servers, hooks, CLAUDE.md, plugins or slash commands, from an empty folder, so the model labelling a row sees nothing but that row. Older Claude Code versions get whichever of these options they have. Codex calls also start from an empty folder. Every reply is kept word for word in `{name}_annotating_raw.jsonl`. A reply that isn't valid JSON or doesn't fit the schema is asked again, up to three tries. Hitting your plan's usage limit stops the job with every saved row kept, and running it again picks up where it stopped. Two new options: `no_api_key = true` removes API keys from each call so the CLI uses your subscription login, and `batch_size` sends several rows per call for very large jobs (the default stays 1, so no row can influence another). A crash no longer leaves a job reading "running" forever, and the working file is never left half written.
 - **The exported script reruns, and checkpoints restore by name (R 0.16.4).** Found rehearsing a demo. When an agent's code failed, the exported clean script kept that code as live code, so rerunning the script stopped at the same error; it now appears once, commented out. `restore_session("before_filter")` failed with "checkpoint not found" because only the stamped file name was accepted; the label a checkpoint was saved with now works, and a miss lists the checkpoints that exist.
 
 - **Console logging turns on when it says it is on (R 0.16.3).** From a user report. "Also log my own console commands" is remembered between sessions and the box comes back ticked, but after restarting R nothing was being recorded until the box was unticked and ticked again. It now starts with the server. Calling `start_console_logging()` before starting a session also said logging was on while writing nowhere; it now says commands are recorded once a session starts, and they are. Starting a session prints where its log is, and your commands are no longer appended to the previous session's log while the server is stopped.
@@ -187,7 +189,7 @@ With these tools, you can:
 - **Feedback & Assistance**: Get explanations of your R scripts or request edits at specific lines.
 - **Visualization**: The AI can generate, view, and refine plots and visualizations.
 - **Data Analysis**: Let the AI analyze your datasets and iteratively provide insights.
-- **Multi-Agent Workflows**: Run Claude Desktop, Claude Code, and Gemini CLI on the same R session simultaneously. Each agent is uniquely identified, and they can see each other's work through shared history and log files.
+- **Multi-Agent Workflows**: Run Claude Desktop, Claude Code, Codex, and Antigravity on the same R session simultaneously. Each agent is uniquely identified, and they can see each other's work through shared history and log files.
 - **Long-Running Analysis**: Async execution handles model fitting, simulations, and large data processing without timing out.
 - **Code Logging**: Save all code executed by the AI to log files for future reference. Every entry is tagged with the agent that ran it.
 - **Console Printing**: Print the AI's code to the console before execution.
@@ -292,6 +294,8 @@ data_annotation_prompt()
 ```
 
 Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row. The original file is never modified, and sessions are automatically resumable if interrupted.
+
+For a bigger file, `run_annotation_job` labels every row in the background, each in a fresh call to claude, codex, agy, qwen or a local ollama model that sees only that row. It keeps every reply, asks again when a reply is malformed, and stops cleanly at your plan's usage limit so you can pick up later. Check on it with `get_annotation_job_status`.
 
 ## Systematic Review Screening
 
@@ -400,7 +404,7 @@ This architecture ensures that the AI can only perform approved operations throu
 
 ## CLI Integration
 
-ClaudeR supports command-line interface (CLI) agents: the **Claude Code CLI**, the **OpenAI Codex CLI**, the **Qwen Code CLI**, and the **Google Antigravity CLI** (`agy`). The Google Gemini CLI shut down on June 18, 2026; `agy` replaced it, and `install_cli(tools = "gemini")` still exists for anyone on an old pinned build. This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
+ClaudeR supports command-line interface (CLI) agents: the **Claude Code CLI**, the **OpenAI Codex CLI**, the **Qwen Code CLI**, and the **Google Antigravity CLI** (`agy`). The Google Gemini CLI shut down on June 18, 2026, and `agy` replaced it. This is ideal for developers who prefer a terminal-based workflow, allowing you to interact with your AI assistant directly from the command line while maintaining a live connection to your RStudio session.
 
 ## Security Model
 
@@ -480,7 +484,7 @@ library(ClaudeR)
 install_clauder(use_uvx = FALSE, python_path = "/path/to/your/python")
 ```
 
-#### Option B: For CLI Tools (Claude Code / Codex / Gemini)
+#### Option B: For CLI Tools (Claude Code / Codex / Qwen / Antigravity)
 
 This non-interactive function generates the exact command or JSON configuration needed for your CLI tool.
 
@@ -498,9 +502,6 @@ install_cli(tools = "qwen")
 
 # For Google Antigravity CLI (agy, Gemini CLI's replacement)
 install_cli(tools = "agy")
-
-# For Google Gemini CLI (legacy, shuts down June 18, 2026)
-install_cli(tools = "gemini")
 ```
 
 For users who cannot use `uvx`, fall back to the legacy Python path method:
@@ -512,7 +513,6 @@ install_cli(tools = "claude", use_uvx = FALSE, python_path = "/path/to/my/python
 After running the function, you must **manually apply the configuration**:
 - **For Claude / Codex / Qwen**: Copy the command printed in the R console and run it in your terminal.
 - **For Antigravity (agy)**: Copy the generated JSON into `~/.gemini/config/mcp_config.json` (global) or `.agents/mcp_config.json` (per-workspace).
-- **For Gemini (legacy)**: Copy the generated JSON and manually add it to your `~/.gemini/settings.json` file.
 
 After setup, **quit and restart** any active Desktop Apps or terminal sessions for the new settings to load.
 
@@ -536,7 +536,7 @@ The ClaudeR add-in will appear in your RStudio Viewer pane. Click **"Start Serve
 ### Part 2: In Your AI Tool
 
 - **For Desktop Apps**: Open the Claude Desktop App or Cursor and begin your session.
-- **For CLI Tools**: Open your terminal and use the `claude` or `gemini` commands to start interacting with your AI assistant.
+- **For CLI Tools**: Open your terminal and use the `claude`, `codex`, `qwen` or `agy` commands to start interacting with your AI assistant.
 
 > Note: You can regain console/active document control by clicking the stop button in the RStudio console. This closes the Shiny UI but the MCP server keeps running in the background and your AI agents stay connected. Re-run `claudeAddin()` to bring the viewer pane back with the same server state (port, session name, execution count). To fully stop the server, click **"Stop Server"** in the UI before closing.
 

@@ -4,7 +4,7 @@ mcp-name: io.github.IMNMV/clauder
 
 MCP server that connects AI assistants to RStudio for interactive R coding and data analysis.
 
-This is the Python MCP bridge component of [ClaudeR](https://github.com/IMNMV/ClaudeR). It works with Claude Desktop, Claude Code, Codex CLI, Gemini CLI, Cursor, and any other MCP-compatible client.
+This is the Python MCP bridge component of [ClaudeR](https://github.com/IMNMV/ClaudeR). It works with Claude Desktop, Claude Code, Codex CLI, Antigravity CLI, Cursor, and any other MCP-compatible client.
 
 ## Prerequisites
 
@@ -33,9 +33,9 @@ claude mcp add --transport stdio --scope user r-studio -- uvx clauder-mcp
 codex mcp add r-studio -- uvx clauder-mcp
 ```
 
-### Gemini CLI
+### Antigravity CLI (agy)
 
-Add to your `~/.gemini/settings.json`:
+Add to `~/.gemini/config/mcp_config.json` (or `.agents/mcp_config.json` in a project):
 
 ```json
 {

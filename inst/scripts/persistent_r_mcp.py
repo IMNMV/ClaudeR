@@ -557,8 +557,8 @@ def _find_cli_path(tool: str) -> Optional[str]:
     return shutil.which(tool)
 
 
-def _build_subprocess_prompt(row: Dict, schema: Dict[str, Any], annot_fields: List[str]) -> str:
-    """Build a lean one-shot prompt for a single row annotation subprocess."""
+def _annotation_field_lines(schema: Dict[str, Any]) -> List[str]:
+    """One line per field to annotate, describing what values it takes."""
     field_lines = []
     for field, spec in schema.items():
         t, constraint = spec["type"], spec["constraint"]
@@ -571,7 +571,12 @@ def _build_subprocess_prompt(row: Dict, schema: Dict[str, Any], annot_fields: Li
             field_lines.append(f"- {field}: true or false")
         else:
             field_lines.append(f"- {field}: text (can be empty string \"\")")
+    return field_lines
 
+
+def _build_subprocess_prompt(row: Dict, schema: Dict[str, Any], annot_fields: List[str]) -> str:
+    """Build a lean one-shot prompt for a single row annotation subprocess."""
+    field_lines = _annotation_field_lines(schema)
     row_data = {k: v for k, v in row.items() if k not in annot_fields and k != "_schema"}
     row_json = json.dumps(row_data, ensure_ascii=False, indent=2)
     field_names = list(schema.keys())
@@ -584,6 +589,80 @@ def _build_subprocess_prompt(row: Dict, schema: Dict[str, Any], annot_fields: Li
         + f"\n\nRow:\n{row_json}\n\n"
         f"Return a JSON object with exactly these keys: {field_names}"
     )
+
+
+def _build_batch_prompt(items: List[tuple], schema: Dict[str, Any], annot_fields: List[str]) -> str:
+    """Prompt for several rows in one call (batch_size > 1). Each row carries a _row
+    key, and the reply maps each key to that row's annotation."""
+    field_lines = _annotation_field_lines(schema)
+    row_lines = []
+    for key, row in items:
+        row_data = {k: v for k, v in row.items() if k not in annot_fields and k != "_schema"}
+        row_lines.append(json.dumps({"_row": key, **row_data}, ensure_ascii=False))
+    keys = [key for key, _ in items]
+    return (
+        "Annotate each data row below. Judge every row on its own, as if it were the only one.\n"
+        "Return ONLY a valid JSON object. No explanation, no markdown, no code blocks.\n\n"
+        "Fields to annotate:\n"
+        + "\n".join(field_lines)
+        + "\n\nRows (one JSON object per line, each with a _row key):\n"
+        + "\n".join(row_lines)
+        + f"\n\nReturn one JSON object whose keys are these _row values: {keys}. "
+        f"Map each to an object with exactly these keys: {list(schema.keys())}"
+    )
+
+
+# How many times a row (or a batch) is asked before it is recorded as an error.
+_ANNOT_TRIES = 3
+
+# What the CLIs say when a plan's usage limit is hit. Only looked for in a call
+# that failed, so a row whose own text mentions a limit is not mistaken for one.
+_ANNOT_LIMIT_RE = re.compile(
+    r"usage limit|hit your (?:usage )?limit|limit reached|limit will reset|resets? at|"
+    r"quota exceeded|exceeded your (?:current )?quota|rate limit",
+    re.IGNORECASE,
+)
+
+# Removed from a call's environment when no_api_key is set, so the CLI uses the
+# subscription login and never bills an API key.
+_ANNOT_API_KEYS = {
+    "claude": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
+    "codex": ("OPENAI_API_KEY", "CODEX_API_KEY"),
+}
+
+_claude_flags_cache: Dict[str, List[str]] = {}
+
+
+def _claude_lockdown_flags(tool_path: str) -> List[str]:
+    """Flags that leave a labelling call with nothing but its prompt: no tools, no
+    MCP servers, no hooks, CLAUDE.md, plugins or slash commands. Only flags this
+    CLI's --help lists are used, so an older Claude Code still runs."""
+    if tool_path in _claude_flags_cache:
+        return _claude_flags_cache[tool_path]
+    try:
+        help_text = subprocess.run([tool_path, "--help"], capture_output=True,
+                                   text=True, timeout=30).stdout or ""
+    except Exception:
+        help_text = ""
+
+    def has(flag: str) -> bool:
+        return re.search(r"(?:^|\s)" + re.escape(flag) + r"(?=[\s<=,]|$)", help_text, re.M) is not None
+
+    flags: List[str] = []
+    if has("--safe-mode"):
+        flags.append("--safe-mode")
+    elif has("--settings"):
+        flags += ["--settings", '{"disableAllHooks": true}']
+    if has("--tools"):
+        flags += ["--tools", ""]
+    if has("--strict-mcp-config"):
+        flags.append("--strict-mcp-config")
+    if has("--disable-slash-commands"):
+        flags.append("--disable-slash-commands")
+    if has("--output-format"):
+        flags += ["--output-format", "json"]
+    _claude_flags_cache[tool_path] = flags
+    return flags
 
 
 def _extract_json(text: str) -> Optional[Dict]:
@@ -610,32 +689,44 @@ def _extract_json(text: str) -> Optional[Dict]:
     return None
 
 
-def _run_subprocess_row(
+def _annotation_call(
     prompt: str, tool: str, tool_path: str,
     model: Optional[str], timeout: int, reasoning_effort: str = "high",
-    ollama_base_url: str = "http://localhost:11434"
-) -> tuple:
-    """Run a single annotation subprocess (or HTTP call for ollama). Returns (result_dict or None, raw_output, error_msg)."""
+    ollama_base_url: str = "http://localhost:11434",
+    workdir: Optional[str] = None, env: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """One annotation call: a fresh CLI process, or an HTTP call for ollama.
+
+    Returns a dict with the model's reply ("text"), the backend's whole output
+    word for word ("stdout", "stderr", "returncode"), an error message or None,
+    and "limit", True when the failure was the plan's usage limit."""
+    out: Dict[str, Any] = {"text": "", "stdout": "", "stderr": "", "returncode": None,
+                           "error": None, "limit": False}
     try:
         if tool == "claude":
-            command = [tool_path, "-p", "--no-session-persistence"]
+            command = [tool_path, "-p", "--no-session-persistence"] + _claude_lockdown_flags(tool_path)
             if model:
                 command.extend(["--model", model])
             completed = subprocess.run(
                 command, input=prompt, text=True,
-                capture_output=True, timeout=timeout
+                capture_output=True, timeout=timeout, cwd=workdir, env=env
             )
-            output = completed.stdout
-
-        elif tool == "gemini":
-            command = [tool_path, "-p", prompt]
-            if model:
-                command.extend(["-m", model])
-            completed = subprocess.run(
-                command, text=True,
-                capture_output=True, timeout=timeout
-            )
-            output = completed.stdout
+            out.update(stdout=completed.stdout, stderr=completed.stderr,
+                       returncode=completed.returncode, text=completed.stdout)
+            if "--output-format" in command:
+                # The JSON result holds the reply in "result" and flags failures.
+                # Some setups print every event as a list, with the result last.
+                try:
+                    envelope = json.loads(completed.stdout)
+                    if isinstance(envelope, list):
+                        envelope = next((e for e in reversed(envelope)
+                                         if isinstance(e, dict) and e.get("type") == "result"), None)
+                    if isinstance(envelope, dict) and "result" in envelope:
+                        out["text"] = str(envelope.get("result") or "")
+                        if envelope.get("is_error"):
+                            out["error"] = f"Claude Code error: {out['text'][:300]}"
+                except Exception:
+                    pass
 
         elif tool == "agy":
             # Antigravity CLI. -p is an alias for --print (headless one-shot).
@@ -645,9 +736,10 @@ def _run_subprocess_row(
                 command.extend(["--model", model])
             completed = subprocess.run(
                 command, text=True,
-                capture_output=True, timeout=timeout
+                capture_output=True, timeout=timeout, env=env
             )
-            output = completed.stdout
+            out.update(stdout=completed.stdout, stderr=completed.stderr,
+                       returncode=completed.returncode, text=completed.stdout)
 
         elif tool == "qwen":
             command = [tool_path, "--prompt", prompt]
@@ -655,9 +747,10 @@ def _run_subprocess_row(
                 command.extend(["--model", model])
             completed = subprocess.run(
                 command, text=True,
-                capture_output=True, timeout=timeout
+                capture_output=True, timeout=timeout, env=env
             )
-            output = completed.stdout
+            out.update(stdout=completed.stdout, stderr=completed.stderr,
+                       returncode=completed.returncode, text=completed.stdout)
 
         elif tool == "ollama":
             # No subprocess; POST to Ollama's HTTP API. format=json puts the model in
@@ -675,15 +768,17 @@ def _run_subprocess_row(
                 with httpx.Client(timeout=timeout) as client:
                     resp = client.post(f"{ollama_base_url.rstrip('/')}/api/generate", json=payload)
                     resp.raise_for_status()
-                    output = resp.json().get("response", "")
+                    out["stdout"] = resp.text
+                    out["text"] = resp.json().get("response", "")
             except httpx.ConnectError:
-                return None, "", (
+                out["error"] = (
                     f"Could not reach Ollama at {ollama_base_url}. "
                     f"Is `ollama serve` running? Or set ollama_base_url to a different host."
                 )
             except httpx.HTTPStatusError as e:
                 body = (e.response.text or "")[:300]
-                return None, "", f"Ollama returned HTTP {e.response.status_code}: {body}"
+                out["stdout"] = e.response.text or ""
+                out["error"] = f"Ollama returned HTTP {e.response.status_code}: {body}"
 
         else:  # codex
             fd, last_msg_path = tempfile.mkstemp(suffix=".txt")
@@ -700,24 +795,33 @@ def _run_subprocess_row(
                 command.extend(["--model", model])
             completed = subprocess.run(
                 command, input=prompt, text=True,
-                capture_output=True, timeout=timeout
+                capture_output=True, timeout=timeout, cwd=workdir, env=env
             )
+            out.update(stdout=completed.stdout, stderr=completed.stderr,
+                       returncode=completed.returncode, text=completed.stdout)
             if os.path.exists(last_msg_path):
                 with open(last_msg_path) as f:
-                    output = f.read()
+                    last = f.read()
                 os.remove(last_msg_path)
-            else:
-                output = completed.stdout
+                if last.strip():
+                    out["text"] = last
 
-        parsed = _extract_json(output)
-        if parsed is None:
-            return None, output, f"Could not parse JSON from output: {output[:300]}"
-        return parsed, output, None
+        if out["error"] is None and out["returncode"] not in (None, 0):
+            out["error"] = f"Exited with code {out['returncode']}: {(out['stderr'] or out['stdout'])[:300]}"
 
     except subprocess.TimeoutExpired:
-        return None, "", f"Subprocess timed out after {timeout}s"
+        out["error"] = f"Subprocess timed out after {timeout}s"
     except Exception as e:
-        return None, "", str(e)
+        out["error"] = str(e)
+
+    # A failed call, or a reply with no JSON object in it, may be the plan's usage
+    # limit. Only the reply, the error and stderr are searched: Claude Code's JSON
+    # output always carries a rate-limit status line, even when nothing is wrong.
+    if out["error"] is not None or not isinstance(_extract_json(out["text"]), dict):
+        said = " ".join([out["error"] or "", out["stderr"] or "", out["text"] or ""])
+        if _ANNOT_LIMIT_RE.search(said):
+            out["limit"] = True
+    return out
 
 
 def _annotation_job_worker(
@@ -725,56 +829,128 @@ def _annotation_job_worker(
     unannotated_indices: List[int], schema: Dict[str, Any],
     work_path: str, tool: str, tool_path: str,
     model: Optional[str], timeout: int, reasoning_effort: str = "high",
-    ollama_base_url: str = "http://localhost:11434"
+    ollama_base_url: str = "http://localhost:11434",
+    batch_size: int = 1, no_api_key: bool = False, raw_path: Optional[str] = None
 ) -> None:
-    """Background thread: annotate each row with a fresh subprocess."""
+    """Background thread: annotate the rows, each batch (one row by default) in a
+    fresh process that sees only that batch. A bad reply is asked again, up to
+    _ANNOT_TRIES times. Every reply is kept word for word in raw_path. Hitting the
+    plan's usage limit stops the job with every saved row kept, so running the
+    job again later picks up where it stopped."""
     import csv as csv_module
 
     annot_fields = list(schema.keys())
     job = _annot_jobs[job_id]
     job["status"] = "running"
+    batch_size = max(1, int(batch_size or 1))
 
-    for row_idx in unannotated_indices:
-        if job.get("cancelled"):
-            job["status"] = "cancelled"
-            return
+    # Claude and Codex start in an empty folder, so no project files
+    # (CLAUDE.md, AGENTS.md, settings) reach the call.
+    workdir = tempfile.mkdtemp(prefix="clauder_annot_") if tool in ("claude", "codex") else None
+    env = None
+    if no_api_key and tool in _ANNOT_API_KEYS:
+        env = {k: v for k, v in os.environ.items() if k not in _ANNOT_API_KEYS[tool]}
 
-        row = rows[row_idx]
-        prompt = _build_subprocess_prompt(row, schema, annot_fields)
-        result, raw, err = _run_subprocess_row(prompt, tool, tool_path, model, timeout, reasoning_effort, ollama_base_url)
+    def row_label(i: int):
+        return rows[i].get("row_id", i)
 
-        if err or result is None:
-            job["errors"].append({
-                "row_id": row.get("row_id", row_idx),
-                "error": err or "No result"
-            })
-            job["done"] += 1
-            continue
-
-        valid, validation_err = _validate_annotation(
-            {k: str(v) for k, v in result.items()}, schema
-        )
-        if not valid:
-            job["errors"].append({
-                "row_id": row.get("row_id", row_idx),
-                "error": f"Validation failed: {validation_err}"
-            })
-            job["done"] += 1
-            continue
-
-        for field in annot_fields:
-            if field in result:
-                rows[row_idx][field] = result[field]
-
-        # Save immediately after each row
-        with open(work_path, "w", newline="", encoding="utf-8") as f:
+    def save() -> None:
+        # Written to a side file and moved into place, so a failed write can
+        # never leave the working file half written.
+        tmp_path = work_path + ".saving"
+        with open(tmp_path, "w", newline="", encoding="utf-8") as f:
             writer = csv_module.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
+        os.replace(tmp_path, work_path)
 
-        job["done"] += 1
+    def keep_raw(pending: List[int], attempt: int, res: Dict[str, Any]) -> None:
+        if not raw_path:
+            return
+        entry = {
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "rows": [row_label(i) for i in pending],
+            "try": attempt, "tool": tool, "model": model,
+            "returncode": res["returncode"], "error": res["error"],
+            "stdout": res["stdout"], "stderr": res["stderr"],
+        }
+        try:
+            with open(raw_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
-    job["status"] = "complete"
+    try:
+        for start in range(0, len(unannotated_indices), batch_size):
+            pending = list(unannotated_indices[start:start + batch_size])
+            last_err: Dict[int, str] = {}
+            for attempt in range(1, _ANNOT_TRIES + 1):
+                if job.get("cancelled"):
+                    job["status"] = "cancelled"
+                    return
+                if batch_size == 1:
+                    prompt = _build_subprocess_prompt(rows[pending[0]], schema, annot_fields)
+                else:
+                    prompt = _build_batch_prompt([(str(i), rows[i]) for i in pending], schema, annot_fields)
+                res = _annotation_call(prompt, tool, tool_path, model, timeout,
+                                       reasoning_effort, ollama_base_url, workdir, env)
+                keep_raw(pending, attempt, res)
+
+                if res["limit"]:
+                    job["status"] = "stopped_at_limit"
+                    job["limit_message"] = (res["error"] or res["stderr"] or res["stdout"] or "")[:300]
+                    return
+
+                parsed = None if res["error"] else _extract_json(res["text"])
+                if not isinstance(parsed, dict):
+                    parsed = None
+                if parsed is None:
+                    err = res["error"] or f"Could not parse JSON from output: {res['text'][:300]}"
+                    last_err = {i: err for i in pending}
+                    continue
+
+                if batch_size == 1:
+                    results = {pending[0]: parsed}
+                else:
+                    results = {i: parsed.get(str(i)) for i in pending}
+
+                still: List[int] = []
+                for i in pending:
+                    result = results.get(i)
+                    if not isinstance(result, dict):
+                        last_err[i] = "No annotation returned for this row"
+                        still.append(i)
+                        continue
+                    valid, validation_err = _validate_annotation(
+                        {k: str(v) for k, v in result.items()}, schema
+                    )
+                    if not valid:
+                        last_err[i] = f"Validation failed: {validation_err}"
+                        still.append(i)
+                        continue
+                    for field in annot_fields:
+                        rows[i][field] = result[field]
+                    job["done"] += 1
+
+                # Save immediately after each answered call
+                if len(still) < len(pending):
+                    save()
+                pending = still
+                if not pending:
+                    break
+
+            for i in pending:
+                job["errors"].append({"row_id": row_label(i), "error": last_err.get(i, "No result")})
+                job["done"] += 1
+
+        job["status"] = "complete"
+    except Exception as e:
+        # Without this a crash left the job reading "running" forever.
+        job["status"] = "failed"
+        job["errors"].append({"row_id": "-", "error": f"The job stopped: {type(e).__name__}: {e}"})
+    finally:
+        if workdir:
+            shutil.rmtree(workdir, ignore_errors=True)
 
 
 # --- Annotation helpers ---
@@ -1528,7 +1704,12 @@ def _all_tools() -> List[types.Tool]:
             name="run_annotation_job",
             description=(
                 "Annotate a CSV dataset using a fresh subprocess (or Ollama HTTP call) per row, with no context bleed between rows. "
-                "Each row is scored by a brand-new claude, codex, gemini, agy (Antigravity), qwen, or ollama process that sees only that row. "
+                "Each row is scored by a brand-new claude, codex, agy (Antigravity), qwen, or ollama process that sees only that row. "
+                "Claude calls run with no tools, MCP servers, hooks, CLAUDE.md, plugins or slash commands, from an empty folder; "
+                "Codex calls run with no MCP servers, from an empty folder. "
+                "A reply that is not valid JSON or fails the schema is asked again, up to 3 tries. "
+                "Every reply is kept word for word in {name}_annotating_raw.jsonl. "
+                "If the plan's usage limit is hit the job stops with every saved row kept; run it again later to continue. "
                 "Runs in the background; returns a job ID immediately. "
                 "Use get_annotation_job_status to check progress and cancel_annotation_job to stop. "
                 "The original CSV is never modified; results go to {name}_annotating.csv. "
@@ -1543,7 +1724,7 @@ def _all_tools() -> List[types.Tool]:
                     },
                     "tool": {
                         "type": "string",
-                        "description": "Backend to use: 'claude' (default), 'codex', 'gemini', 'agy' (Antigravity CLI, Google's replacement for Gemini CLI starting 2026-06-18), 'qwen' (Qwen Code CLI), or 'ollama' (local Ollama HTTP server). The CLI tools require their respective binary on PATH; ollama requires `ollama serve` running locally."
+                        "description": "Backend to use: 'claude' (default), 'codex', 'agy' (Antigravity CLI, Google's replacement for Gemini CLI, which shut down on 2026-06-18), 'qwen' (Qwen Code CLI), or 'ollama' (local Ollama HTTP server). The CLI tools require their respective binary on PATH; ollama requires `ollama serve` running locally."
                     },
                     "model": {
                         "type": "string",
@@ -1560,6 +1741,14 @@ def _all_tools() -> List[types.Tool]:
                     "ollama_base_url": {
                         "type": "string",
                         "description": "Ollama only: base URL of the Ollama server. Defaults to 'http://localhost:11434'. Set this to point at a remote Ollama instance (e.g. a LAN GPU box)."
+                    },
+                    "batch_size": {
+                        "type": "integer",
+                        "description": "Rows per call (default 1, max 200). Keep 1 unless the job is very large: with 1, no row can influence another. Above 1, each call sees that many rows at once, which is much faster and cheaper but lets rows in the same call affect each other."
+                    },
+                    "no_api_key": {
+                        "type": "boolean",
+                        "description": "Remove API keys from each call's environment (ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN for claude, OPENAI_API_KEY and CODEX_API_KEY for codex) so the CLI uses your subscription login and an API key is never billed. Default false. Leave it off if an API key is how you sign in."
                     }
                 },
                 "required": ["csv_path"]
@@ -3300,13 +3489,22 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         timeout = int(arguments.get("timeout", 60))
         reasoning_effort = arguments.get("reasoning_effort", "high")
         ollama_base_url = (arguments.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
+        no_api_key = bool(arguments.get("no_api_key", False))
+        try:
+            batch_size = int(arguments.get("batch_size") or 1)
+        except (TypeError, ValueError):
+            return [types.TextContent(type="text", text="Error: 'batch_size' must be a whole number.")]
+        if not 1 <= batch_size <= 200:
+            return [types.TextContent(type="text", text="Error: 'batch_size' must be between 1 and 200.")]
 
         if not csv_path:
             return [types.TextContent(type="text", text="Error: 'csv_path' is required.")]
         if not os.path.exists(csv_path):
             return [types.TextContent(type="text", text=f"Error: File not found: {csv_path}")]
-        if tool not in ("claude", "codex", "gemini", "agy", "qwen", "ollama"):
-            return [types.TextContent(type="text", text="Error: 'tool' must be 'claude', 'codex', 'gemini', 'agy', 'qwen', or 'ollama'.")]
+        if tool == "gemini":
+            return [types.TextContent(type="text", text="Error: Gemini CLI shut down on June 18, 2026. Use tool 'agy' (Antigravity), its replacement.")]
+        if tool not in ("claude", "codex", "agy", "qwen", "ollama"):
+            return [types.TextContent(type="text", text="Error: 'tool' must be 'claude', 'codex', 'agy', 'qwen', or 'ollama'.")]
 
         if tool == "ollama":
             # No CLI binary; verify the Ollama server is reachable instead.
@@ -3330,6 +3528,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         # Working copy
         base, ext = os.path.splitext(csv_path)
         work_path = f"{base}_annotating{ext}"
+        raw_path = f"{base}_annotating_raw.jsonl"
         if not os.path.exists(work_path):
             shutil.copy2(csv_path, work_path)
 
@@ -3371,13 +3570,16 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             "done": 0,
             "errors": [],
             "work_path": work_path,
+            "raw_path": raw_path,
             "tool": tool,
+            "batch_size": batch_size,
             "cancelled": False,
         }
 
         t = threading.Thread(
             target=_annotation_job_worker,
             args=(job_id, rows, fieldnames, unannotated, schema, work_path, tool, tool_path, model, timeout, reasoning_effort, ollama_base_url),
+            kwargs={"batch_size": batch_size, "no_api_key": no_api_key, "raw_path": raw_path},
             daemon=True
         )
         t.start()
@@ -3386,8 +3588,10 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             f"Annotation job started.\n"
             f"Job ID: {job_id}\n"
             f"Tool: {tool} ({tool_path})\n"
-            f"Rows to annotate: {len(unannotated)} of {len(rows)}\n"
-            f"Working file: {work_path}\n\n"
+            f"Rows to annotate: {len(unannotated)} of {len(rows)}"
+            + (f", {batch_size} per call" if batch_size > 1 else "") + "\n"
+            f"Working file: {work_path}\n"
+            f"Raw replies: {raw_path}\n\n"
             f"Use get_annotation_job_status(job_id='{job_id}') to check progress."
         ))]
 
@@ -3411,6 +3615,15 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             f"Tool: {job['tool']}",
             f"Output: {job['work_path']}",
         ]
+        if job.get("raw_path"):
+            lines.append(f"Raw replies: {job['raw_path']}")
+        if job["status"] == "stopped_at_limit":
+            lines.append(
+                "Stopped: the plan's usage limit was hit. Every saved row is kept. "
+                "Run run_annotation_job again with the same csv_path once the limit resets to continue."
+            )
+            if job.get("limit_message"):
+                lines.append(f"  The CLI said: {job['limit_message']}")
         if errors:
             lines.append(f"Errors ({len(errors)}):")
             for e in errors[-5:]:  # show last 5

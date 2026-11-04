@@ -33,13 +33,13 @@ tired human screener drifts.
 
 Pick the backend by budget. A local ollama model costs nothing and can
 screen thousands of records overnight. A hosted model (claude, codex,
-gemini) costs subscription usage and screens with higher quality.
+agy) costs subscription usage and screens with higher quality.
 
 ## Step 3: Run the second pass with a DIFFERENT model family
 
 Copy the original CSV to a second file and run `run_annotation_job` again
 with a different tool. Two passes from the same family share blind spots.
-Claude plus Qwen, or Claude plus Gemini, gives two genuinely independent
+Claude plus Qwen, or Claude plus agy, gives two genuinely independent
 screeners. This mirrors the human dual-screening standard.
 
 ## Step 4: Compute agreement and isolate conflicts
