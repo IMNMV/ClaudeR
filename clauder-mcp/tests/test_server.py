@@ -394,9 +394,16 @@ def _annot_rows(n=1):
 def _run_annot(tmp_path, monkeypatch, mode, n=1, help_text=FAKE_HELP, **kw):
     """Run one annotation job against the fake CLI, in this thread. Returns
     (job, calls, rows, raw replies)."""
-    fake = tmp_path / "claude"
-    fake.write_text(FAKE_CLAUDE.format(python=sys.executable))
-    fake.chmod(0o755)
+    script = tmp_path / "fake_claude.py"
+    script.write_text(FAKE_CLAUDE.format(python=sys.executable))
+    if os.name == "nt":
+        # Windows cannot run a script by its #! line, so wrap it the way npm
+        # wraps the real claude.
+        fake = tmp_path / "claude.cmd"
+        fake.write_text(f'@"{sys.executable}" "{script}" %*\r\n')
+    else:
+        fake = script
+        fake.chmod(0o755)
     monkeypatch.setenv("FAKE_MODE", mode)
     monkeypatch.setenv("FAKE_LOG", str(tmp_path / "calls.jsonl"))
     monkeypatch.setenv("FAKE_HELP", help_text)
