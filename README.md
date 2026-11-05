@@ -295,7 +295,16 @@ data_annotation_prompt()
 
 Or tell the agent to run `ClaudeR::data_annotation_prompt()` and it will read the protocol itself. The agent then calls `load_annotation_data` to start and `annotate` to label each row. The original file is never modified, and sessions are automatically resumable if interrupted.
 
-For a bigger file, `run_annotation_job` labels every row in the background, each in a fresh call to claude, codex, agy, qwen or a local ollama model that sees only that row. It keeps every reply, asks again when a reply is malformed, and stops cleanly at your plan's usage limit so you can pick up later. Check on it with `get_annotation_job_status`.
+**Running it in the background:** for a bigger file, `run_annotation_job` labels every row in the background, each in a fresh call to claude, codex, agy, qwen or a local ollama model that sees only that row.
+
+- Each Claude call starts in an empty folder with no tools, MCP servers, hooks, CLAUDE.md, plugins or slash commands, so nothing but the row reaches the model. Codex calls also start in an empty folder.
+- Labels go to `{name}_annotating.csv`, and every reply is kept word for word in `{name}_annotating_raw.jsonl`, so you can check what the model actually said.
+- A reply that isn't valid JSON or doesn't fit the schema is asked again, up to three times.
+- If you hit your plan's usage limit, the job stops with every saved row kept. Run it again later and it picks up where it stopped.
+- `no_api_key = true` removes API keys from each call, so the CLI uses your subscription login and never bills a key. Leave it off if an API key is how you sign in.
+- `batch_size` sends several rows per call for very large jobs. The default is 1, which keeps one row from influencing another. Raise it only when speed matters more than that.
+
+Check on a job with `get_annotation_job_status`, or stop it with `cancel_annotation_job`.
 
 ## Systematic Review Screening
 
