@@ -136,6 +136,12 @@ working (waiting never touches the R session). On handoff, send a signal
 naming the objects produced: `body = {"name": "CLEAN_READY",
 "objects": "clean_data, eda_summary"}`.
 
+When you receive a handoff, check what you were handed before building on
+it. Your partner's message is its summary of the work, and summaries drop
+things. Inspect the named objects in the session and read what actually ran
+(`get_session_history` or the session log). If something does not match the
+message, say so to your partner before you go on.
+
 ## Phase 6: Presence
 
 Every write stamps your presence automatically. If you have nothing to say

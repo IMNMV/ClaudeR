@@ -179,6 +179,7 @@ Every working subagent MUST:
 
 **Before any major decision that depends on prior work:**
 - Re-read the ledger. Findings from other agents may have changed the landscape since you last looked.
+- Treat another agent's finding as a claim to check, not a fact. A ledger entry is that agent's summary of its work, and summaries drop things. Before you build on one, look at what actually ran: open the files and outputs its `Evidence` field names, inspect the objects in the session, and read the relevant part of the session log (`get_session_history`). If the record does not support the claim, say so in a new finding instead of building on it.
 
 **Findings are append-only.** You may NOT delete or overwrite a prior finding. If you discover a previous finding was wrong, append a new finding F-XXX with the correction, and update only the `Status:` field of the original entry to `Modified by F-XXX` or `Retracted by F-XXX`.
 
