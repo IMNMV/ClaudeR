@@ -347,7 +347,8 @@ import os
 import sys
 
 FAKE_HELP = ("  --safe-mode   x\n  --tools <tools...>   x\n  --strict-mcp-config   x\n"
-             "  --disable-slash-commands   x\n  --output-format <format>   x\n")
+             "  --disable-slash-commands   x\n  --output-format <format>   x\n"
+             "  --append-system-prompt <prompt>   x\n")
 
 FAKE_CLAUDE = r'''#!{python}
 # Stands in for the claude CLI. What it does comes from FAKE_MODE; every call
@@ -418,7 +419,9 @@ def _run_annot(tmp_path, monkeypatch, mode, n=1, help_text=FAKE_HELP, **kw):
                                 "claude", str(fake), None, 30, raw_path=str(raw), **kw)
     calls_file = tmp_path / "calls.jsonl"
     calls = [json.loads(l) for l in open(calls_file)] if calls_file.exists() else []
-    replies = [json.loads(l) for l in open(raw)] if raw.exists() else []
+    lines = [json.loads(l) for l in open(raw)] if raw.exists() else []
+    _run_annot.job_line = next((l for l in lines if l.get("type") == "job"), None)
+    replies = [l for l in lines if l.get("type") != "job"]
     return _srv._annot_jobs["t"], calls, rows, replies
 
 
@@ -500,3 +503,31 @@ class TestAnnotationJob:
                                          fieldnames=["row_id", "message", "label"])
         assert job["status"] == "failed"
         assert work.read_text() == "row_id,message,label,_schema\n1,message 1,,x\n"
+
+    def test_instructions_go_to_claude_once_as_a_system_prompt(self, tmp_path, monkeypatch):
+        rules = "Label person when the message treats Claude as having a mind."
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "ok", n=2, instructions=rules)
+        for c in calls:
+            argv = c["argv"]
+            assert argv[argv.index("--append-system-prompt") + 1] == rules
+            assert rules not in c["prompt"]
+        assert _run_annot.job_line["instructions"] == rules
+        assert _run_annot.job_line["instructions_sent_as"] == "system prompt"
+        assert [r["label"] for r in rows] == ["person", "person"]
+
+    def test_instructions_in_the_prompt_once_without_the_option(self, tmp_path, monkeypatch):
+        rules = "Label person when the message treats Claude as having a mind."
+        help_without = FAKE_HELP.replace("--append-system-prompt", "--something-else")
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "ok", n=3, batch_size=3,
+                                         instructions=rules, help_text=help_without)
+        assert len(calls) == 1
+        assert "--append-system-prompt" not in calls[0]["argv"]
+        assert calls[0]["prompt"].count(rules) == 1
+        assert calls[0]["prompt"].startswith("Instructions for this task:")
+        assert _run_annot.job_line["instructions_sent_as"] == "prompt"
+
+    def test_no_instructions_leaves_the_prompt_as_before(self, tmp_path, monkeypatch):
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "ok")
+        assert calls[0]["prompt"].startswith("Annotate the following data row.")
+        assert "--append-system-prompt" not in calls[0]["argv"]
+        assert _run_annot.job_line["instructions"] is None

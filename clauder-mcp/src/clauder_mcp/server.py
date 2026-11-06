@@ -574,7 +574,14 @@ def _annotation_field_lines(schema: Dict[str, Any]) -> List[str]:
     return field_lines
 
 
-def _build_subprocess_prompt(row: Dict, schema: Dict[str, Any], annot_fields: List[str]) -> str:
+def _instructions_block(instructions: Optional[str]) -> str:
+    """The task's instructions at the top of a prompt, when they are not sent as
+    a system prompt."""
+    return f"Instructions for this task:\n{instructions}\n\n" if instructions else ""
+
+
+def _build_subprocess_prompt(row: Dict, schema: Dict[str, Any], annot_fields: List[str],
+                             instructions: Optional[str] = None) -> str:
     """Build a lean one-shot prompt for a single row annotation subprocess."""
     field_lines = _annotation_field_lines(schema)
     row_data = {k: v for k, v in row.items() if k not in annot_fields and k != "_schema"}
@@ -582,7 +589,8 @@ def _build_subprocess_prompt(row: Dict, schema: Dict[str, Any], annot_fields: Li
     field_names = list(schema.keys())
 
     return (
-        "Annotate the following data row.\n"
+        _instructions_block(instructions)
+        + "Annotate the following data row.\n"
         "Return ONLY a valid JSON object — no explanation, no markdown, no code blocks.\n\n"
         "Fields to annotate:\n"
         + "\n".join(field_lines)
@@ -591,7 +599,8 @@ def _build_subprocess_prompt(row: Dict, schema: Dict[str, Any], annot_fields: Li
     )
 
 
-def _build_batch_prompt(items: List[tuple], schema: Dict[str, Any], annot_fields: List[str]) -> str:
+def _build_batch_prompt(items: List[tuple], schema: Dict[str, Any], annot_fields: List[str],
+                        instructions: Optional[str] = None) -> str:
     """Prompt for several rows in one call (batch_size > 1). Each row carries a _row
     key, and the reply maps each key to that row's annotation."""
     field_lines = _annotation_field_lines(schema)
@@ -601,7 +610,8 @@ def _build_batch_prompt(items: List[tuple], schema: Dict[str, Any], annot_fields
         row_lines.append(json.dumps({"_row": key, **row_data}, ensure_ascii=False))
     keys = [key for key, _ in items]
     return (
-        "Annotate each data row below. Judge every row on its own, as if it were the only one.\n"
+        _instructions_block(instructions)
+        + "Annotate each data row below. Judge every row on its own, as if it were the only one.\n"
         "Return ONLY a valid JSON object. No explanation, no markdown, no code blocks.\n\n"
         "Fields to annotate:\n"
         + "\n".join(field_lines)
@@ -630,23 +640,29 @@ _ANNOT_API_KEYS = {
     "codex": ("OPENAI_API_KEY", "CODEX_API_KEY"),
 }
 
-_claude_flags_cache: Dict[str, List[str]] = {}
+_claude_help_cache: Dict[str, str] = {}
+
+
+def _claude_has_flag(tool_path: str, flag: str) -> bool:
+    """Whether this Claude Code's --help lists the flag. Older versions lack
+    some, and an unknown flag makes the CLI refuse to run at all."""
+    if tool_path not in _claude_help_cache:
+        try:
+            _claude_help_cache[tool_path] = subprocess.run(
+                [tool_path, "--help"], capture_output=True, text=True, timeout=30).stdout or ""
+        except Exception:
+            _claude_help_cache[tool_path] = ""
+    help_text = _claude_help_cache[tool_path]
+    return re.search(r"(?:^|\s)" + re.escape(flag) + r"(?=[\s<=,]|$)", help_text, re.M) is not None
 
 
 def _claude_lockdown_flags(tool_path: str) -> List[str]:
-    """Flags that leave a labelling call with nothing but its prompt: no tools, no
-    MCP servers, no hooks, CLAUDE.md, plugins or slash commands. Only flags this
-    CLI's --help lists are used, so an older Claude Code still runs."""
-    if tool_path in _claude_flags_cache:
-        return _claude_flags_cache[tool_path]
-    try:
-        help_text = subprocess.run([tool_path, "--help"], capture_output=True,
-                                   text=True, timeout=30).stdout or ""
-    except Exception:
-        help_text = ""
-
+    """Flags that leave a labelling call with nothing but its prompt: no tools,
+    MCP servers, hooks, CLAUDE.md or slash commands. Installed plugins are still
+    listed by the CLI but have nothing to run through. Only flags this CLI's
+    --help lists are used, so an older Claude Code still runs."""
     def has(flag: str) -> bool:
-        return re.search(r"(?:^|\s)" + re.escape(flag) + r"(?=[\s<=,]|$)", help_text, re.M) is not None
+        return _claude_has_flag(tool_path, flag)
 
     flags: List[str] = []
     if has("--safe-mode"):
@@ -661,7 +677,6 @@ def _claude_lockdown_flags(tool_path: str) -> List[str]:
         flags.append("--disable-slash-commands")
     if has("--output-format"):
         flags += ["--output-format", "json"]
-    _claude_flags_cache[tool_path] = flags
     return flags
 
 
@@ -693,7 +708,8 @@ def _annotation_call(
     prompt: str, tool: str, tool_path: str,
     model: Optional[str], timeout: int, reasoning_effort: str = "high",
     ollama_base_url: str = "http://localhost:11434",
-    workdir: Optional[str] = None, env: Optional[Dict[str, str]] = None
+    workdir: Optional[str] = None, env: Optional[Dict[str, str]] = None,
+    system_text: Optional[str] = None
 ) -> Dict[str, Any]:
     """One annotation call: a fresh CLI process, or an HTTP call for ollama.
 
@@ -707,6 +723,8 @@ def _annotation_call(
             command = [tool_path, "-p", "--no-session-persistence"] + _claude_lockdown_flags(tool_path)
             if model:
                 command.extend(["--model", model])
+            if system_text:
+                command.extend(["--append-system-prompt", system_text])
             completed = subprocess.run(
                 command, input=prompt, text=True,
                 capture_output=True, timeout=timeout, cwd=workdir, env=env
@@ -830,11 +848,13 @@ def _annotation_job_worker(
     work_path: str, tool: str, tool_path: str,
     model: Optional[str], timeout: int, reasoning_effort: str = "high",
     ollama_base_url: str = "http://localhost:11434",
-    batch_size: int = 1, no_api_key: bool = False, raw_path: Optional[str] = None
+    batch_size: int = 1, no_api_key: bool = False, raw_path: Optional[str] = None,
+    instructions: Optional[str] = None
 ) -> None:
     """Background thread: annotate the rows, each batch (one row by default) in a
     fresh process that sees only that batch. A bad reply is asked again, up to
-    _ANNOT_TRIES times. Every reply is kept word for word in raw_path. Hitting the
+    _ANNOT_TRIES times. Every reply is kept word for word in raw_path, after a
+    first line recording the job and its instructions. Hitting the
     plan's usage limit stops the job with every saved row kept, so running the
     job again later picks up where it stopped."""
     import csv as csv_module
@@ -850,6 +870,20 @@ def _annotation_job_worker(
     env = None
     if no_api_key and tool in _ANNOT_API_KEYS:
         env = {k: v for k, v in os.environ.items() if k not in _ANNOT_API_KEYS[tool]}
+
+    # The task's instructions go to every call once, ahead of the rows. Claude
+    # gets them as a system prompt, which stays the same from call to call and
+    # so can be reused between calls; every other backend reads them at the top
+    # of the prompt. Very long instructions on Windows go in the prompt too,
+    # since a command line there is capped near 8,000 characters.
+    instructions = (instructions or "").strip() or None
+    use_system = bool(
+        instructions and tool == "claude"
+        and _claude_has_flag(tool_path, "--append-system-prompt")
+        and (os.name != "nt" or len(instructions) <= 7000)
+    )
+    system_text = instructions if use_system else None
+    prompt_instructions = None if use_system else instructions
 
     def row_label(i: int):
         return rows[i].get("row_id", i)
@@ -880,6 +914,18 @@ def _annotation_job_worker(
         except Exception:
             pass
 
+    if raw_path:
+        try:
+            with open(raw_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "type": "job", "time": datetime.now().isoformat(timespec="seconds"),
+                    "job_id": job_id, "tool": tool, "model": model, "batch_size": batch_size,
+                    "instructions": instructions,
+                    "instructions_sent_as": ("system prompt" if use_system else "prompt") if instructions else None,
+                }, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
     try:
         for start in range(0, len(unannotated_indices), batch_size):
             pending = list(unannotated_indices[start:start + batch_size])
@@ -889,11 +935,14 @@ def _annotation_job_worker(
                     job["status"] = "cancelled"
                     return
                 if batch_size == 1:
-                    prompt = _build_subprocess_prompt(rows[pending[0]], schema, annot_fields)
+                    prompt = _build_subprocess_prompt(rows[pending[0]], schema, annot_fields,
+                                                      prompt_instructions)
                 else:
-                    prompt = _build_batch_prompt([(str(i), rows[i]) for i in pending], schema, annot_fields)
+                    prompt = _build_batch_prompt([(str(i), rows[i]) for i in pending], schema,
+                                                 annot_fields, prompt_instructions)
                 res = _annotation_call(prompt, tool, tool_path, model, timeout,
-                                       reasoning_effort, ollama_base_url, workdir, env)
+                                       reasoning_effort, ollama_base_url, workdir, env,
+                                       system_text=system_text)
                 keep_raw(pending, attempt, res)
 
                 if res["limit"]:
@@ -1705,7 +1754,7 @@ def _all_tools() -> List[types.Tool]:
             description=(
                 "Annotate a CSV dataset using a fresh subprocess (or Ollama HTTP call) per row, with no context bleed between rows. "
                 "Each row is scored by a brand-new claude, codex, agy (Antigravity), qwen, or ollama process that sees only that row. "
-                "Claude calls run with no tools, MCP servers, hooks, CLAUDE.md, plugins or slash commands, from an empty folder; "
+                "Claude calls run with no tools, MCP servers, hooks, CLAUDE.md or slash commands, from an empty folder; "
                 "Codex calls run with no MCP servers, from an empty folder. "
                 "A reply that is not valid JSON or fails the schema is asked again, up to 3 tries. "
                 "Every reply is kept word for word in {name}_annotating_raw.jsonl. "
@@ -1745,6 +1794,10 @@ def _all_tools() -> List[types.Tool]:
                     "batch_size": {
                         "type": "integer",
                         "description": "Rows per call (default 1, max 200). Keep 1 unless the job is very large: with 1, no row can influence another. Above 1, each call sees that many rows at once, which is much faster and cheaper but lets rows in the same call affect each other."
+                    },
+                    "instructions": {
+                        "type": "string",
+                        "description": "Task instructions or codebook, given once per call ahead of the rows, instead of copying them into a column on every row. Claude gets them as a system prompt, which can be reused from call to call. Recorded at the top of the raw replies file."
                     },
                     "no_api_key": {
                         "type": "boolean",
@@ -3490,6 +3543,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         reasoning_effort = arguments.get("reasoning_effort", "high")
         ollama_base_url = (arguments.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
         no_api_key = bool(arguments.get("no_api_key", False))
+        instructions = str(arguments.get("instructions") or "").strip() or None
         try:
             batch_size = int(arguments.get("batch_size") or 1)
         except (TypeError, ValueError):
@@ -3579,7 +3633,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         t = threading.Thread(
             target=_annotation_job_worker,
             args=(job_id, rows, fieldnames, unannotated, schema, work_path, tool, tool_path, model, timeout, reasoning_effort, ollama_base_url),
-            kwargs={"batch_size": batch_size, "no_api_key": no_api_key, "raw_path": raw_path},
+            kwargs={"batch_size": batch_size, "no_api_key": no_api_key, "raw_path": raw_path,
+                    "instructions": instructions},
             daemon=True
         )
         t.start()
@@ -3590,7 +3645,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             f"Tool: {tool} ({tool_path})\n"
             f"Rows to annotate: {len(unannotated)} of {len(rows)}"
             + (f", {batch_size} per call" if batch_size > 1 else "") + "\n"
-            f"Working file: {work_path}\n"
+            + (f"Instructions: {len(instructions):,} characters, sent once per call\n" if instructions else "")
+            + f"Working file: {work_path}\n"
             f"Raw replies: {raw_path}\n\n"
             f"Use get_annotation_job_status(job_id='{job_id}') to check progress."
         ))]
