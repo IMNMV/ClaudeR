@@ -18,8 +18,8 @@ authors:
 repository-code: "https://github.com/IMNMV/ClaudeR"
 url: "https://github.com/IMNMV/ClaudeR"
 license: MIT
-version: 0.16.4
-date-released: "2026-09-30"
+version: 0.16.5
+date-released: "2026-11-11"
 keywords:
   - R
   - reproducibility
