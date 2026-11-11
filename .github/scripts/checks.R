@@ -481,6 +481,57 @@ r <- tryCatch({
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("format_coord_event: full body shown, no truncation") else fail("format_coord_event:", r)
 
+# --- 15b. Coordination echo: first event of a run is not swallowed ---
+r <- tryCatch({
+  ev <- function(ids) lapply(ids, function(i) list(id = i, from = "a", to = "all",
+                                                   type = "message", body = list(text = i)))
+  ids <- function(u) vapply(u$events, function(e) e$id, integer(1))
+  # Server started on an empty log (baseline 0): the very first event prints
+  u1 <- env$coord_unseen(ev(1L), env$coord_last_id(list()))
+  # Server started with 5 old events: only the 6th and later print
+  u2 <- env$coord_unseen(ev(1:7), env$coord_last_id(ev(1:5)))
+  # Folder deleted mid-run (seen was 15, log now has 2): both print
+  u3 <- env$coord_unseen(ev(1:2), 15L)
+  # Log emptied: nothing to print, and the baseline drops to 0
+  u4 <- env$coord_unseen(list(), 15L)
+  # No baseline recorded: skip what is there, print what comes after
+  u5 <- env$coord_unseen(ev(1:3), NULL)
+  u6 <- env$coord_unseen(ev(1:4), u5$seen)
+  identical(ids(u1), 1L) && u1$seen == 1L &&
+    identical(ids(u2), 6:7) && u2$seen == 7L &&
+    identical(ids(u3), 1:2) &&
+    length(u4$events) == 0 && u4$seen == 0L &&
+    length(u5$events) == 0 && identical(ids(u6), 4L)
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("coord_unseen: first event kept, history skipped, cleared log replays") else fail("coord_unseen:", r)
+
+# --- 15c. Plot capture never leaves a hidden file device open ---
+r <- if (!capabilities("png")) TRUE else tryCatch({
+  flaky <- new.env(); flaky$fail <- FALSE
+  registerS3method("drawDetails", "ci_flaky", function(x, recording) {
+    if (flaky$fail) stop("external pointer is not valid (simulated)")
+    grid::grid.rect()
+  }, envir = asNamespace("grid"))
+  grDevices::pdf(NULL); grDevices::dev.control("enable")
+  screen <- grDevices::dev.cur()
+  grid::grid.newpage(); grid::grid.draw(grid::grob(cl = "ci_flaky"))
+  before <- grDevices::dev.list()
+  # A copy that works writes the file and leaves the devices as they were
+  f1 <- tempfile(fileext = ".png")
+  env$copy_plot_to_file(grDevices::png, f1, width = 300, height = 200)
+  ok1 <- file.exists(f1) && file.info(f1)$size > 100 &&
+    identical(grDevices::dev.list(), before) && grDevices::dev.cur() == screen
+  # A copy whose replay fails still closes the device it opened
+  flaky$fail <- TRUE
+  failed <- inherits(tryCatch(env$copy_plot_to_file(grDevices::png, tempfile(fileext = ".png"),
+                                                    width = 300, height = 200),
+                              error = function(e) e), "error")
+  ok2 <- failed && identical(grDevices::dev.list(), before) && grDevices::dev.cur() == screen
+  grDevices::dev.off(screen)
+  ok1 && ok2
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("plot capture: failed copy closes its device, current device kept") else fail("plot capture device leak:", r)
+
 # --- 16. Editor tools: save-to-disk, line-count change, focus guard ---
 r <- tryCatch({
   f <- file.path(tempdir(), "clauder_edit_ci.R")

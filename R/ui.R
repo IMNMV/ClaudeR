@@ -231,6 +231,25 @@ is_screen_device <- function() {
   identical(dn, "RStudioGD") || isTRUE(dn %in% grDevices::deviceIsInteractive())
 }
 
+# Copy the current screen plot into an image file for the agent. Every device
+# dev.copy() opens is closed again, even when the copy fails: a plot whose
+# replay errors used to leave a hidden file device (quartz_off_screen on a Mac)
+# open, and a later dev.off() could make that hidden device current, so the
+# user's plots stopped reaching the Plots pane. The device that was current
+# before the copy is current again afterwards.
+copy_plot_to_file <- function(device, filename, ...) {
+  old <- grDevices::dev.cur()
+  before <- grDevices::dev.list()
+  on.exit({
+    for (d in setdiff(grDevices::dev.list(), before)) {
+      try(grDevices::dev.off(d), silent = TRUE)
+    }
+    if (old %in% grDevices::dev.list()) try(grDevices::dev.set(old), silent = TRUE)
+  }, add = TRUE)
+  grDevices::dev.copy(device, filename = filename, ...)
+  invisible(filename)
+}
+
 # --- Agent History Environment ---
 # Package-level environment for tracking per-agent execution history.
 .claude_history_env <- new.env(parent = emptyenv())
@@ -1131,7 +1150,10 @@ claudeAddin <- function() {
           session_name <- trimws(input$session_name)
           if (session_name == "") session_name <- paste0("session_", input$port)
           .claude_server_env$session_name <- session_name
-          .claude_server_env$coord_seen <- NULL  # re-baseline coordination echo
+          # Baseline for the coordination echo: skip only what was already
+          # in the log when the server started.
+          .claude_server_env$coord_seen <- coord_last_id(
+            tryCatch(coord_events(session_name), error = function(e) list()))
           tryCatch(
             write_discovery_file(session_name, input$port, .claude_server_env$token),
             error = function(e) {
@@ -1317,18 +1339,11 @@ claudeAddin <- function() {
       if (!isTRUE(.claude_server_env$running)) return(invisible(NULL))
       evs <- tryCatch(coord_events(.claude_server_env$session_name),
                       error = function(e) list())
-      if (length(evs) == 0) return(invisible(NULL))
-      max_id <- max(vapply(evs, function(e) e$id, integer(1)))
-      seen <- .claude_server_env$coord_seen
-      if (is.null(seen)) {
-        # First look at this log: do not replay history into the console
-        .claude_server_env$coord_seen <- max_id
-        return(invisible(NULL))
-      }
-      new_evs <- Filter(function(e) e$id > seen, evs)
-      if (length(new_evs) == 0) return(invisible(NULL))
+      u <- coord_unseen(evs, .claude_server_env$coord_seen)
+      .claude_server_env$coord_seen <- u$seen
+      if (length(u$events) == 0) return(invisible(NULL))
       s <- .claude_server_env$settings
-      for (e in new_evs) {
+      for (e in u$events) {
         line <- tryCatch(format_coord_event(e), error = function(err) NULL)
         if (is.null(line)) next
         if (isTRUE(s$print_to_console)) {
@@ -1340,7 +1355,6 @@ claudeAddin <- function() {
                   file = s$log_file_path, append = TRUE), silent = TRUE)
         }
       }
-      .claude_server_env$coord_seen <- max_id
     })
 
     # Close handler -- just close the UI, keep the server running
@@ -1664,9 +1678,7 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL,
         if (new_plot_exists) {
           # Try PNG first (sharp lines/text, often smaller for plots)
           tryCatch({
-            dev.copy(png, filename = plot_file_png,
-                     width = 600, height = 400)
-            dev.off()
+            copy_plot_to_file(png, plot_file_png, width = 600, height = 400)
             if (file.exists(plot_file_png) && file.info(plot_file_png)$size > 100) {
               plot_data <- base64encode(plot_file_png)
               plot_mime <- "image/png"
@@ -1676,9 +1688,8 @@ execute_code_in_session <- function(code, settings = NULL, agent_id = NULL,
             # JPEG fallback for base graphics
             message("PNG dev.copy failed, trying JPEG: ", e$message)
             tryCatch({
-              dev.copy(jpeg, filename = plot_file_jpeg,
-                       width = 600, height = 400, quality = 80)
-              dev.off()
+              copy_plot_to_file(jpeg, plot_file_jpeg,
+                                width = 600, height = 400, quality = 80)
               if (file.exists(plot_file_jpeg) && file.info(plot_file_jpeg)$size > 100) {
                 plot_data <<- base64encode(plot_file_jpeg)
                 plot_mime <<- "image/jpeg"

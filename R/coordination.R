@@ -452,6 +452,26 @@ format_coord_event <- function(e) {
           substr(e$ts, 12, 19), e$from, e$to, e$type, body_txt)
 }
 
+# Id of the last event in the log, 0 when the log is missing or empty.
+coord_last_id <- function(evs) {
+  if (length(evs) == 0) return(0L)
+  max(vapply(evs, function(e) as.integer(e$id), integer(1)))
+}
+
+# Which events the addin's echo should print, given the last id it printed.
+# Start Server sets `seen` to the log's length at that moment, so only events
+# from before the server started are skipped. (The echo used to take its
+# baseline on first sight, which swallowed the first event of a run whenever
+# the log started empty.) A log shorter than `seen` was cleared, for example by
+# deleting the folder to reset the agents' agreement, so all of it is new.
+# A NULL `seen` (no baseline recorded) skips what is there now.
+coord_unseen <- function(evs, seen) {
+  last <- coord_last_id(evs)
+  if (is.null(seen)) return(list(events = list(), seen = last))
+  if (last < seen) seen <- 0L
+  list(events = Filter(function(e) e$id > seen, evs), seen = last)
+}
+
 # Compact presence summary from the event log: who has written, how long ago.
 # Same one-day cutoff as cr_roster(): the log is append-only, so a reused
 # session name would otherwise list agents from weeks ago in the Agents panel
