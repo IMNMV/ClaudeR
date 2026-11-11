@@ -18,3 +18,14 @@ clauder.start(session_name = "analysis", port = 8790)
 clauder.status()
 clauder.stop()
 ```
+
+Every session needs its own name, because that is how the agent tells them
+apart. `clauder.start()` uses `default`, which is also the name the R addin
+fills in. If an R or another Python session already holds it, you will see
+
+```
+RuntimeError: Session name 'default' is already owned by a live or unknown process
+```
+
+Start this one with a name of its own, as above, and tell the agent to
+connect to that name.
