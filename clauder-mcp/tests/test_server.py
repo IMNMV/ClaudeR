@@ -348,7 +348,7 @@ import sys
 
 FAKE_HELP = ("  --safe-mode   x\n  --tools <tools...>   x\n  --strict-mcp-config   x\n"
              "  --disable-slash-commands   x\n  --output-format <format>   x\n"
-             "  --append-system-prompt <prompt>   x\n")
+             "  --append-system-prompt <prompt>   x\n  --system-prompt <prompt>   x\n")
 
 FAKE_CLAUDE = r'''#!{python}
 # Stands in for the claude CLI. What it does comes from FAKE_MODE; every call
@@ -362,7 +362,8 @@ log = os.environ["FAKE_LOG"]
 n = sum(1 for _ in open(log)) if os.path.exists(log) else 0
 with open(log, "a") as f:
     f.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "cwd_files": os.listdir("."),
-                        "api_key": "ANTHROPIC_API_KEY" in os.environ, "prompt": prompt}}) + "\n")
+                        "api_key": "ANTHROPIC_API_KEY" in os.environ, "prompt": prompt,
+                        "anthropic_vars": sorted(k for k in os.environ if k.startswith("ANTHROPIC_"))}}) + "\n")
 mode = os.environ["FAKE_MODE"]
 keys = [json.loads(l)["_row"] for l in prompt.splitlines() if l.startswith("{{") and '"_row"' in l]
 if mode == "bad_then_ok" and n == 0 or mode == "always_bad":
@@ -434,6 +435,10 @@ class TestAnnotationJob:
             assert flag in argv
         assert argv[argv.index("--tools") + 1] == ""
         assert argv[argv.index("--output-format") + 1] == "json"
+        # Claude Code's own system prompt is left out: an empty one instead
+        assert argv[argv.index("--system-prompt") + 1] == ""
+        assert "--append-system-prompt" not in argv
+        assert _run_annot.job_line["claude_code_prompt"] == "removed"
         # An empty folder, not the project, and it is cleaned up afterwards
         assert calls[0]["cwd_files"] == []
         assert os.path.realpath(calls[0]["cwd"]) != os.path.realpath(os.getcwd())
@@ -441,10 +446,15 @@ class TestAnnotationJob:
         assert calls[0]["api_key"] is True          # kept unless no_api_key
         assert job["status"] == "complete" and rows[0]["label"] == "person"
 
-    def test_no_api_key_removes_the_key(self, tmp_path, monkeypatch):
+    def test_no_api_key_removes_every_anthropic_variable(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://gateway.example")
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "ok")
+        assert calls[0]["anthropic_vars"] == ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"]
+        # The call log carries on from the first run, so look at the last call
         job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "ok", no_api_key=True)
-        assert calls[0]["api_key"] is False
+        assert calls[-1]["api_key"] is False
+        assert calls[-1]["anthropic_vars"] == []
         assert rows[0]["label"] == "person"
 
     def test_every_reply_is_kept_word_for_word(self, tmp_path, monkeypatch):
@@ -504,24 +514,50 @@ class TestAnnotationJob:
         assert job["status"] == "failed"
         assert work.read_text() == "row_id,message,label,_schema\n1,message 1,,x\n"
 
-    def test_instructions_go_to_claude_once_as_a_system_prompt(self, tmp_path, monkeypatch):
+    def test_instructions_are_the_whole_system_prompt(self, tmp_path, monkeypatch):
         rules = "Label person when the message treats Claude as having a mind."
         job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "ok", n=2, instructions=rules)
         for c in calls:
             argv = c["argv"]
-            assert argv[argv.index("--append-system-prompt") + 1] == rules
+            assert argv[argv.index("--system-prompt") + 1] == rules
+            assert "--append-system-prompt" not in argv
             assert rules not in c["prompt"]
         assert _run_annot.job_line["instructions"] == rules
         assert _run_annot.job_line["instructions_sent_as"] == "system prompt"
+        assert _run_annot.job_line["claude_code_prompt"] == "removed"
         assert [r["label"] for r in rows] == ["person", "person"]
+
+    def test_keeping_claude_codes_prompt_appends_the_instructions(self, tmp_path, monkeypatch):
+        rules = "Label person when the message treats Claude as having a mind."
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "ok", instructions=rules,
+                                         keep_claude_code_prompt=True)
+        argv = calls[0]["argv"]
+        assert argv[argv.index("--append-system-prompt") + 1] == rules
+        assert "--system-prompt" not in argv
+        assert _run_annot.job_line["claude_code_prompt"] == "kept"
+        assert _run_annot.job_line["instructions_sent_as"] == "system prompt"
+
+    def test_old_claude_code_keeps_its_prompt_and_says_so(self, tmp_path, monkeypatch):
+        rules = "Label person when the message treats Claude as having a mind."
+        help_old = FAKE_HELP.replace("--system-prompt <prompt>", "--something-else <x>")
+        job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "ok", instructions=rules,
+                                         help_text=help_old)
+        argv = calls[0]["argv"]
+        assert argv[argv.index("--append-system-prompt") + 1] == rules
+        assert "--system-prompt" not in argv
+        assert _run_annot.job_line["claude_code_prompt"] == (
+            "kept (this Claude Code has no --system-prompt option)")
+        assert rows[0]["label"] == "person"
 
     def test_instructions_in_the_prompt_once_without_the_option(self, tmp_path, monkeypatch):
         rules = "Label person when the message treats Claude as having a mind."
-        help_without = FAKE_HELP.replace("--append-system-prompt", "--something-else")
+        help_without = (FAKE_HELP.replace("--append-system-prompt", "--something-else")
+                        .replace("--system-prompt <prompt>", "--something-else-too <x>"))
         job, calls, rows, _ = _run_annot(tmp_path, monkeypatch, "ok", n=3, batch_size=3,
                                          instructions=rules, help_text=help_without)
         assert len(calls) == 1
         assert "--append-system-prompt" not in calls[0]["argv"]
+        assert "--system-prompt" not in calls[0]["argv"]
         assert calls[0]["prompt"].count(rules) == 1
         assert calls[0]["prompt"].startswith("Instructions for this task:")
         assert _run_annot.job_line["instructions_sent_as"] == "prompt"

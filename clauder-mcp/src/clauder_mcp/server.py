@@ -634,9 +634,11 @@ _ANNOT_LIMIT_RE = re.compile(
 )
 
 # Removed from a call's environment when no_api_key is set, so the CLI uses the
-# subscription login and never bills an API key.
+# subscription login and never bills an API key. Names or prefixes: every
+# ANTHROPIC_* variable goes for Claude, so no key, token or custom base URL
+# reaches the call.
 _ANNOT_API_KEYS = {
-    "claude": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
+    "claude": ("ANTHROPIC_",),
     "codex": ("OPENAI_API_KEY", "CODEX_API_KEY"),
 }
 
@@ -660,7 +662,8 @@ def _claude_lockdown_flags(tool_path: str) -> List[str]:
     """Flags that leave a labelling call with nothing but its prompt: no tools,
     MCP servers, hooks, CLAUDE.md or slash commands. Installed plugins are still
     listed by the CLI but have nothing to run through. Only flags this CLI's
-    --help lists are used, so an older Claude Code still runs."""
+    --help lists are used, so an older Claude Code still runs. Claude Code's
+    own system prompt is dealt with in _annotation_call."""
     def has(flag: str) -> bool:
         return _claude_has_flag(tool_path, flag)
 
@@ -678,6 +681,20 @@ def _claude_lockdown_flags(tool_path: str) -> List[str]:
     if has("--output-format"):
         flags += ["--output-format", "json"]
     return flags
+
+
+def _claude_code_prompt_label(tool: str, tool_path: str, keep: bool) -> Optional[str]:
+    """What becomes of Claude Code's own system prompt in a labelling call:
+    "removed" (the default: the call runs with no system prompt beyond the
+    task's instructions), "kept" when asked for, or kept because this Claude
+    Code has no --system-prompt option. None for the other backends."""
+    if tool != "claude":
+        return None
+    if keep:
+        return "kept"
+    if _claude_has_flag(tool_path, "--system-prompt"):
+        return "removed"
+    return "kept (this Claude Code has no --system-prompt option)"
 
 
 def _extract_json(text: str) -> Optional[Dict]:
@@ -709,9 +726,13 @@ def _annotation_call(
     model: Optional[str], timeout: int, reasoning_effort: str = "high",
     ollama_base_url: str = "http://localhost:11434",
     workdir: Optional[str] = None, env: Optional[Dict[str, str]] = None,
-    system_text: Optional[str] = None
+    system_text: Optional[str] = None, replace_system: bool = False
 ) -> Dict[str, Any]:
     """One annotation call: a fresh CLI process, or an HTTP call for ollama.
+
+    For Claude, system_text is appended to Claude Code's own system prompt, or,
+    with replace_system, is the whole system prompt (empty when None), so
+    Claude Code's own is left out.
 
     Returns a dict with the model's reply ("text"), the backend's whole output
     word for word ("stdout", "stderr", "returncode"), an error message or None,
@@ -723,7 +744,10 @@ def _annotation_call(
             command = [tool_path, "-p", "--no-session-persistence"] + _claude_lockdown_flags(tool_path)
             if model:
                 command.extend(["--model", model])
-            if system_text:
+            if replace_system:
+                # The whole system prompt: the instructions, or nothing at all.
+                command.extend(["--system-prompt", system_text or ""])
+            elif system_text:
                 command.extend(["--append-system-prompt", system_text])
             completed = subprocess.run(
                 command, input=prompt, text=True,
@@ -849,7 +873,7 @@ def _annotation_job_worker(
     model: Optional[str], timeout: int, reasoning_effort: str = "high",
     ollama_base_url: str = "http://localhost:11434",
     batch_size: int = 1, no_api_key: bool = False, raw_path: Optional[str] = None,
-    instructions: Optional[str] = None
+    instructions: Optional[str] = None, keep_claude_code_prompt: bool = False
 ) -> None:
     """Background thread: annotate the rows, each batch (one row by default) in a
     fresh process that sees only that batch. A bad reply is asked again, up to
@@ -869,17 +893,27 @@ def _annotation_job_worker(
     workdir = tempfile.mkdtemp(prefix="clauder_annot_") if tool in ("claude", "codex") else None
     env = None
     if no_api_key and tool in _ANNOT_API_KEYS:
-        env = {k: v for k, v in os.environ.items() if k not in _ANNOT_API_KEYS[tool]}
+        env = {k: v for k, v in os.environ.items() if not k.startswith(_ANNOT_API_KEYS[tool])}
+
+    # Claude Code's own system prompt, the built-in instructions that make the
+    # model a command-line coding assistant, is left out of each Claude call
+    # unless asked for: a labeller has no tools or files for it to describe,
+    # and it can colour the answers. A Claude Code without --system-prompt
+    # keeps it, and the raw file's first line says which happened.
+    prompt_label = _claude_code_prompt_label(tool, tool_path, keep_claude_code_prompt)
+    replace_system = prompt_label == "removed"
+    system_flag = "--system-prompt" if replace_system else "--append-system-prompt"
 
     # The task's instructions go to every call once, ahead of the rows. Claude
-    # gets them as a system prompt, which stays the same from call to call and
-    # so can be reused between calls; every other backend reads them at the top
-    # of the prompt. Very long instructions on Windows go in the prompt too,
-    # since a command line there is capped near 8,000 characters.
+    # gets them as the system prompt (added to Claude Code's own when that is
+    # kept), which stays the same from call to call and so can be reused
+    # between calls; every other backend reads them at the top of the prompt.
+    # Very long instructions on Windows go in the prompt too, since a command
+    # line there is capped near 8,000 characters.
     instructions = (instructions or "").strip() or None
     use_system = bool(
         instructions and tool == "claude"
-        and _claude_has_flag(tool_path, "--append-system-prompt")
+        and _claude_has_flag(tool_path, system_flag)
         and (os.name != "nt" or len(instructions) <= 7000)
     )
     system_text = instructions if use_system else None
@@ -922,6 +956,7 @@ def _annotation_job_worker(
                     "job_id": job_id, "tool": tool, "model": model, "batch_size": batch_size,
                     "instructions": instructions,
                     "instructions_sent_as": ("system prompt" if use_system else "prompt") if instructions else None,
+                    "claude_code_prompt": prompt_label,
                 }, ensure_ascii=False) + "\n")
         except Exception:
             pass
@@ -942,7 +977,7 @@ def _annotation_job_worker(
                                                  annot_fields, prompt_instructions)
                 res = _annotation_call(prompt, tool, tool_path, model, timeout,
                                        reasoning_effort, ollama_base_url, workdir, env,
-                                       system_text=system_text)
+                                       system_text=system_text, replace_system=replace_system)
                 keep_raw(pending, attempt, res)
 
                 if res["limit"]:
@@ -1754,7 +1789,7 @@ def _all_tools() -> List[types.Tool]:
             description=(
                 "Annotate a CSV dataset using a fresh subprocess (or Ollama HTTP call) per row, with no context bleed between rows. "
                 "Each row is scored by a brand-new claude, codex, agy (Antigravity), qwen, or ollama process that sees only that row. "
-                "Claude calls run with no tools, MCP servers, hooks, CLAUDE.md or slash commands, from an empty folder; "
+                "Claude calls run with no tools, MCP servers, hooks, CLAUDE.md, slash commands or Claude Code's own system prompt, from an empty folder; "
                 "Codex calls run with no MCP servers, from an empty folder. "
                 "A reply that is not valid JSON or fails the schema is asked again, up to 3 tries. "
                 "Every reply is kept word for word in {name}_annotating_raw.jsonl. "
@@ -1801,7 +1836,11 @@ def _all_tools() -> List[types.Tool]:
                     },
                     "no_api_key": {
                         "type": "boolean",
-                        "description": "Remove API keys from each call's environment (ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN for claude, OPENAI_API_KEY and CODEX_API_KEY for codex) so the CLI uses your subscription login and an API key is never billed. Default false. Leave it off if an API key is how you sign in."
+                        "description": "Remove API keys from each call's environment (every ANTHROPIC_* variable for claude, so no key, token or custom base URL reaches the call; OPENAI_API_KEY and CODEX_API_KEY for codex) so the CLI uses your subscription login and an API key is never billed. Default false. Leave it off if an API key is how you sign in."
+                    },
+                    "keep_claude_code_prompt": {
+                        "type": "boolean",
+                        "description": "Claude only. Keep Claude Code's own system prompt (the long built-in instructions that make the model a command-line coding assistant) in each call. Default false: the call runs with no system prompt beyond your instructions, since a labeller has no tools or files for that prompt to describe and it can colour the answers. Set true only to match runs made before clauder-mcp 0.16.5. A Claude Code without the --system-prompt option keeps it either way; the raw replies file records which happened."
                     }
                 },
                 "required": ["csv_path"]
@@ -3543,6 +3582,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         reasoning_effort = arguments.get("reasoning_effort", "high")
         ollama_base_url = (arguments.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
         no_api_key = bool(arguments.get("no_api_key", False))
+        keep_claude_code_prompt = bool(arguments.get("keep_claude_code_prompt", False))
         instructions = str(arguments.get("instructions") or "").strip() or None
         try:
             batch_size = int(arguments.get("batch_size") or 1)
@@ -3634,7 +3674,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             target=_annotation_job_worker,
             args=(job_id, rows, fieldnames, unannotated, schema, work_path, tool, tool_path, model, timeout, reasoning_effort, ollama_base_url),
             kwargs={"batch_size": batch_size, "no_api_key": no_api_key, "raw_path": raw_path,
-                    "instructions": instructions},
+                    "instructions": instructions, "keep_claude_code_prompt": keep_claude_code_prompt},
             daemon=True
         )
         t.start()
@@ -3646,6 +3686,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             f"Rows to annotate: {len(unannotated)} of {len(rows)}"
             + (f", {batch_size} per call" if batch_size > 1 else "") + "\n"
             + (f"Instructions: {len(instructions):,} characters, sent once per call\n" if instructions else "")
+            + (f"Claude Code's own system prompt: {_claude_code_prompt_label(tool, tool_path, keep_claude_code_prompt)}\n"
+               if tool == "claude" else "")
             + f"Working file: {work_path}\n"
             f"Raw replies: {raw_path}\n\n"
             f"Use get_annotation_job_status(job_id='{job_id}') to check progress."
