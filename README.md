@@ -639,7 +639,7 @@ citation("ClaudeR")
 
 ```
 Vitali, N. (2026). ClaudeR: Connect live RStudio and Python sessions to AI
-agents over MCP. R package version 0.15.0.
+agents over MCP. R package version 0.16.5.
 https://github.com/IMNMV/ClaudeR
 ```
 
