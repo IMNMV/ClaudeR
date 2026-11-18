@@ -602,5 +602,80 @@ r <- tryCatch({
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("checkpoints: restore by label") else fail("restore by label:", r)
 
+# --- start_server(): the server runs without the addin window ---
+# The shared start and stop are driven directly, with the home-folder pieces
+# pointed at a temp folder, and one real request goes over HTTP.
+r <- if (!all(vapply(c("httpuv", "fs", "ps"), requireNamespace, logical(1), quietly = TRUE)) ||
+         !nzchar(Sys.which("curl"))) "skip" else tryCatch({
+  home <- tempfile("termhome"); dir.create(home)
+  env$startServer <- httpuv::startServer; env$stopServer <- httpuv::stopServer
+  env$fromJSON <- jsonlite::fromJSON; env$toJSON <- jsonlite::toJSON
+  env$discovery_dir <- function() file.path(home, "sessions")
+  ci_settings <- list(print_to_console = FALSE, log_to_file = FALSE,
+                      log_file_path = file.path(home, "log.R"), require_token = FALSE,
+                      plot_auto = TRUE, tool_sets = NULL)
+  env$load_claude_settings <- function() ci_settings
+  env$save_claude_settings <- function(settings) invisible(NULL)
+  st <- env$.claude_server_env
+  st$settings <- ci_settings
+  st$headless <- TRUE
+  port <- httpuv::randomPort()
+  device_before <- getOption("device")
+
+  started <- env$server_start(" ci_term ", port)
+  rec <- jsonlite::fromJSON(file.path(home, "sessions", "ci_term.json"))
+  ok_start <- isTRUE(st$running) && identical(started$session_name, "ci_term") &&
+    is.null(started$log_file_path)
+  # No editor in a terminal, so the editor tools are not offered
+  ok_rec <- identical(rec$frontend, "terminal") && !("editor" %in% rec$tool_sets) &&
+    all(c("core", "coord") %in% rec$tool_sets) && rec$pid == Sys.getpid()
+
+  # One real request, answered while this script pumps the event loop
+  body <- file.path(home, "body.json"); out <- file.path(home, "reply.json")
+  writeLines('{"code": "ci_term_x <- 20 + 22; ci_term_x", "agent_id": "ci"}', body)
+  system2("curl", c("-s", "-m", "20", "-X", "POST", "-H", "Content-Type:application/json",
+                    "--data-binary", paste0("@", body), "-o", out,
+                    sprintf("http://127.0.0.1:%d", port)), wait = FALSE)
+  deadline <- Sys.time() + 20
+  while (Sys.time() < deadline && !(file.exists(out) && file.info(out)$size > 0)) {
+    httpuv::service(100)
+  }
+  reply <- jsonlite::fromJSON(out)
+  ok_http <- isTRUE(reply$success) && grepl("42", reply$output, fixed = TRUE) &&
+    identical(get("ci_term_x", envir = .GlobalEnv), 42)
+
+  # With no screen, a hidden device stands in and a plot can be copied from it
+  ok_plot <- if (!capabilities("png")) TRUE else {
+    swapped <- env$use_offscreen_device()
+    graphics::plot(1:3)
+    on_hidden <- env$is_screen_device()
+    f <- tempfile(fileext = ".png")
+    env$copy_plot_to_file(grDevices::png, f, width = 300, height = 200)
+    isTRUE(swapped) && on_hidden && file.exists(f) && file.info(f)$size > 100
+  }
+  opened <- grDevices::dev.list()
+
+  env$server_stop()
+  ok_stop <- !isTRUE(st$running) && is.null(st$headless) &&
+    !file.exists(file.path(home, "sessions", "ci_term.json")) &&
+    identical(getOption("device"), device_before) &&
+    (is.null(opened) || !any(opened %in% grDevices::dev.list()))
+
+  # A name already owned by a live process is refused and nothing is left running
+  dir.create(file.path(home, "sessions"), showWarnings = FALSE)
+  jsonlite::write_json(list(session_name = "taken", port = 1L, pid = 1L,
+                            token = "x", started_at = "2026-01-01T00:00:00"),
+                       file.path(home, "sessions", "taken.json"), auto_unbox = TRUE)
+  refused <- inherits(tryCatch(env$server_start("taken", port), error = function(e) e), "error")
+  ok_taken <- refused && !isTRUE(st$running) && is.null(st$server)
+
+  ok_start && ok_rec && ok_http && ok_plot && ok_stop && ok_taken
+}, error = function(e) conditionMessage(e))
+if (identical(r, "skip")) {
+  pass("start_server: skipped (needs httpuv, fs, ps and curl)")
+} else if (isTRUE(r)) {
+  pass("start_server: serves a request, leaves out editor tools, hidden plot device, clean stop")
+} else fail("start_server round trip:", r)
+
 if (!ok) quit(status = 1)
 cat("\nAll checks passed.\n")

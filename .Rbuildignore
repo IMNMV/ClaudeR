@@ -14,3 +14,4 @@ assets
 ^LICENSE\.md$
 ^CITATION\.cff$
 ^\.mcpregistry_.*$
+^\.pytest_cache$

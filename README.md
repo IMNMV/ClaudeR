@@ -39,6 +39,9 @@ install_cli(tools = "claude")  # For Claude Code CLI
 
 # Start the server in RStudio
 claudeAddin()
+
+# Or from any R console, with no window (terminal R, a cluster, Rscript)
+start_server()
 ```
 
 > **AI agents:** See [llms-install.md](llms-install.md) for automated setup instructions.
@@ -52,6 +55,7 @@ claudeAddin()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
+- **ClaudeR without RStudio (R 0.16.6).** `start_server()` starts the server from any R console, so terminal R, a tmux pane, an ssh login on a cluster and `Rscript` all work. At a prompt it returns at once and agents are served while R is idle. Under `Rscript` it serves until interrupted. The editor tools are left out there, since there is no editor, and when R has no screen, plots go to a hidden image device so the agent still sees them. It works inside RStudio and Positron too, where it leaves the console free. `stop_server()` stops it. See [Terminal R and Clusters](#terminal-r-and-clusters).
 - **Labelling calls run without Claude Code's own system prompt (clauder-mcp 0.16.5).** Claude Code gives the model a long block of built-in instructions before anything you type: that it is a command-line coding assistant, how to use Bash and the file tools, how to format replies for a terminal, how to handle git, when to ask permission, and so on. A labelling call has no tools, files or terminal for any of that to apply to, and it can colour the answers, so `run_annotation_job` now blanks it: each Claude call gets an empty system prompt, or just your `instructions`. `keep_claude_code_prompt = true` keeps it, for matching runs made before this version. A Claude Code without the `--system-prompt` option keeps it either way, and the first line of the raw replies file records which happened. `no_api_key` now removes every `ANTHROPIC_*` variable, not just the key and token, so a custom base URL can't route the call to a metered key either.
 - **The first agent message reaches the log, and plot capture tidies up after itself (R 0.16.5).** Found during a two-agent demo. When the coordination log started empty, the addin treated the first message of the run as old history, so it never reached the console or the session log. It now skips only what was already in the log when you pressed Start Server, and a log you clear mid-run is shown from its first message. Separately, when copying a plot for the agent failed, the hidden image device the copy had opened stayed open. It is now always closed, and your current graphics device is left as it was.
 - **Annotation instructions given once (clauder-mcp 0.16.4).** From a user's run. Task instructions had to go in a column copied onto every row, which bloated the file and repeated them for every row in a batch. `run_annotation_job` now takes `instructions` once and gives them to every call ahead of the rows. Claude gets them as a system prompt, so long instructions can be reused from call to call instead of paid for in full each time. The instructions are recorded at the top of the raw replies file.
@@ -129,6 +133,7 @@ claudeAddin()
 - [Quick Start](#quick-start)
 - [Features](#features)
 - [Python Sessions and Positron](#python-sessions-and-positron)
+- [Terminal R and Clusters](#terminal-r-and-clusters)
 - [How It Works](#how-it-works)
 - [Reviewer Zero](#reviewer-zero-automated-academic-audits)
 - [R Best Practices Protocol](#r-best-practices-protocol)
@@ -407,6 +412,9 @@ tooling, because those drive the IDE through `rstudioapi`, which has no Python e
 | Checkpoint and roll back the environment | yes | no |
 | Reviewer Zero and the audit tools | yes | no |
 
+R in a plain terminal, started with `start_server()`, has everything in the R column
+except the two editor rows. See [Terminal R and Clusters](#terminal-r-and-clusters).
+
 So "load this file, fit the model, plot the residuals" works in Python. "Look at the file
 I have open and fix that function" is R only. An agent can still read and write those
 files with its own file tools, it just cannot go through your editor buffer.
@@ -417,6 +425,31 @@ R in Positron needs nothing special. Positron ships an `rstudioapi` compatibilit
 so the editor tools work there, with one difference: `suggest_edit` stages the change
 unsaved rather than using `showEditSuggestion()`, which Positron does not implement. You
 accept by saving or reject with undo.
+
+## Terminal R and Clusters
+
+You don't need RStudio. `start_server()` does what the addin's **Start Server** button does, from any R console:
+
+```r
+library(ClaudeR)
+start_server("analysis")
+```
+
+At an R prompt it returns straight away and the prompt stays yours. Agents are served whenever R is idle, and whatever they create is there for you to use. If your own code is running when an agent's request arrives, the request waits and runs the moment your code finishes. `stop_server()` stops it.
+
+For a session you leave alone, such as a tmux pane or a batch job on a cluster, run it from `Rscript`. There it serves until interrupted:
+
+```bash
+Rscript -e 'ClaudeR::start_server("fit", port = 8790)'
+```
+
+What differs from RStudio:
+
+- **No editor tools.** Reading and editing the open document needs an editor, so those four tools are left out of what the agent is offered. Everything else works: code, plots, checkpoints, logging, coordination, background jobs and the audit tools.
+- **Plots without a screen.** With no display, R's default graphics device is a PDF file, which the agent could never see. While the server runs, `start_server()` swaps in a hidden image device, so plots reach the agent the way they do from the Plots pane. If R does have a screen (terminal R on your laptop), plots open in a window as usual and the agent sees those.
+- **The bridge runs on the same machine as R.** It finds sessions through files in your home folder and talks to `127.0.0.1`, so run your AI tool on the machine R is on.
+
+`start_server()` also works inside RStudio and Positron, as an alternative to the addin window that leaves the console free. Running `claudeAddin()` later opens the window on the server that is already running.
 
 ## How It Works
 
@@ -550,7 +583,7 @@ After setup, **quit and restart** any active Desktop Apps or terminal sessions f
 
 ### Part 1: In RStudio
 
-For **all** workflows, you must first start the ClaudeR server from RStudio.
+For **all** workflows, you must first start the ClaudeR server. Without RStudio, run `start_server()` from any R console instead (see [Terminal R and Clusters](#terminal-r-and-clusters)).
 
 ```r
 library(ClaudeR)
@@ -639,7 +672,7 @@ citation("ClaudeR")
 
 ```
 Vitali, N. (2026). ClaudeR: Connect live RStudio and Python sessions to AI
-agents over MCP. R package version 0.16.5.
+agents over MCP. R package version 0.16.6.
 https://github.com/IMNMV/ClaudeR
 ```
 

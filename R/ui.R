@@ -80,7 +80,7 @@ pid_is_alive <- function(pid) {
   tryCatch(pid %in% ps::ps_pids(), error = function(e) NA)
 }
 
-write_discovery_file <- function(session_name, port, token) {
+write_discovery_file <- function(session_name, port, token, terminal = FALSE) {
   s <- tryCatch(load_claude_settings(), error = function(e) list())
   d <- discovery_dir()
   if (!dir.exists(d)) dir.create(d, recursive = TRUE, mode = "0700")
@@ -104,10 +104,19 @@ write_discovery_file <- function(session_name, port, token) {
       identical(other$token, token)
     started <- if (same_owner && !is.null(other$started_at)) other$started_at else
       format(Sys.time(), "%Y-%m-%dT%H:%M:%S")
+    sets <- if (is.null(s$tool_sets)) "all" else s$tool_sets
+    # Terminal R has no editor to reach, so the editor tools are left out of
+    # what the bridge offers the agent.
+    terminal <- isTRUE(terminal)
+    if (terminal) {
+      every <- c("core", "editor", "session", "coord", "async", "audit")
+      sets <- setdiff(if (identical(sets, "all")) every else sets, "editor")
+    }
     info <- list(session_name = session_name, port = as.integer(port),
                  pid = Sys.getpid(), token = token, started_at = started,
                  plot_auto = isTRUE(s$plot_auto),
-                 tool_sets = if (is.null(s$tool_sets)) "all" else s$tool_sets)
+                 tool_sets = sets)
+    if (terminal) info$frontend <- "terminal"
     tmp <- tempfile(pattern = ".discovery-", tmpdir = d)
     on.exit(if (file.exists(tmp)) unlink(tmp), add = TRUE)
     file.create(tmp)
@@ -228,7 +237,70 @@ remove_draw_tracers <- function() {
 is_screen_device <- function() {
   if (is.null(grDevices::dev.list())) return(FALSE)
   dn <- names(grDevices::dev.cur())
-  identical(dn, "RStudioGD") || isTRUE(dn %in% grDevices::deviceIsInteractive())
+  identical(dn, "RStudioGD") || isTRUE(dn %in% grDevices::deviceIsInteractive()) ||
+    is_offscreen_device()
+}
+
+# --- Plots without a screen ---
+# In terminal R with no display (a cluster, an ssh login, Rscript) the default
+# graphics device is a PDF file, which keeps nothing to copy from, so a plot
+# never reached the agent. start_server() swaps the default for a hidden image
+# device that remembers what was drawn on it, and capture then works the way
+# it does from the Plots pane.
+offscreen_device <- function(...) {
+  before <- grDevices::dev.list()
+  f <- file.path(tempdir(), "clauder_offscreen_%03d.png")
+  try(suppressWarnings(grDevices::png(f, width = 600, height = 400)), silent = TRUE)
+  # No PNG support in this build of R: a PDF that writes nowhere still records.
+  if (identical(grDevices::dev.list(), before)) {
+    grDevices::pdf(NULL, width = 600 / 72, height = 400 / 72)
+  }
+  grDevices::dev.control(displaylist = "enable")
+  .claude_plot_env$offscreen <- unique(c(.claude_plot_env$offscreen, grDevices::dev.cur()))
+  invisible(grDevices::dev.cur())
+}
+
+# TRUE when the current device is one offscreen_device() opened. The display
+# list check keeps a file device that later reuses the same number out.
+is_offscreen_device <- function() {
+  if (!isTRUE(grDevices::dev.cur() %in% .claude_plot_env$offscreen)) return(FALSE)
+  # grDevices has dev.displaylist() but does not export it.
+  has_list <- get0("dev.displaylist", envir = asNamespace("grDevices"), inherits = FALSE)
+  if (is.function(has_list)) isTRUE(has_list()) else TRUE
+}
+
+# Make the hidden device the default, unless plots already have a screen to
+# go to (RStudio's pane, a quartz or X11 window) or someone set their own
+# device function on purpose.
+use_offscreen_device <- function() {
+  if (!is.null(.claude_plot_env$saved_device)) return(invisible(FALSE))
+  dev <- getOption("device")
+  # With no screen R falls back to a PDF file: the name "pdf" at a prompt,
+  # the pdf function itself under Rscript.
+  on_screen <- is.character(dev) && (identical(dev, "RStudioGD") ||
+    isTRUE(dev %in% grDevices::deviceIsInteractive()))
+  own_function <- is.function(dev) && !identical(dev, grDevices::pdf)
+  if (on_screen || own_function) return(invisible(FALSE))
+  .claude_plot_env$saved_device <- list(device = dev)
+  options(device = offscreen_device)
+  invisible(TRUE)
+}
+
+# Undo use_offscreen_device(): the default device is what it was, and the
+# hidden devices are closed so later plots go where they would have gone.
+restore_screen_device <- function() {
+  saved <- .claude_plot_env$saved_device
+  if (is.null(saved)) return(invisible(FALSE))
+  options(device = saved$device)
+  .claude_plot_env$saved_device <- NULL
+  for (d in intersect(.claude_plot_env$offscreen, grDevices::dev.list())) {
+    try({
+      grDevices::dev.set(d)
+      if (is_offscreen_device()) grDevices::dev.off(d)
+    }, silent = TRUE)
+  }
+  .claude_plot_env$offscreen <- NULL
+  invisible(TRUE)
 }
 
 # Copy the current screen plot into an image file for the agent. Every device
@@ -517,6 +589,355 @@ check_background_job <- function(job_id) {
   })
 }
 
+# The HTTP server agents talk to. Shared by the addin and start_server().
+start_http_server <- function(port) {
+  server <- startServer(
+    host = "127.0.0.1",
+    port = port,
+    app = list(
+      call = function(req) {
+        # --- Auth gate ---
+        # Binding to 127.0.0.1 is not a security boundary: any local process
+        # can reach this port, and a webpage can POST to it cross-origin
+        # without a CORS preflight (text/plain body). Both would land as
+        # arbitrary R execution.
+        #
+        # Two independent defences, deliberately decoupled:
+        #
+        # 1. Origin block -- always on. Only browsers set Origin, and the MCP
+        #    bridge never does, so this closes the drive-by-webpage vector at
+        #    zero compatibility cost.
+        # 2. Token check -- opt-in (settings$require_token). Enforcing it
+        #    rejects any bridge older than clauder-mcp 0.6.0, so it stays off
+        #    until the user has updated both halves. Turn it on in Advanced.
+        if (!is.null(req$HTTP_ORIGIN)) {
+          return(list(
+            status = 403L,
+            headers = list('Content-Type' = 'application/json'),
+            body = '{"error": "Forbidden: browser-originated requests are not accepted"}'
+          ))
+        }
+
+        expected_token <- .claude_server_env$token
+        supplied_token <- req$HTTP_X_CLAUDER_TOKEN
+
+        if (isTRUE(.claude_server_env$require_token)) {
+          if (is.null(expected_token) || !identical(supplied_token, expected_token)) {
+            return(list(
+              status = 401L,
+              headers = list('Content-Type' = 'application/json'),
+              body = '{"error": "Unauthorized: missing or invalid X-Clauder-Token. Your clauder-mcp bridge is older than 0.6.0 -- run `uvx --refresh clauder-mcp`, or untick Require token in the addin Advanced panel."}'
+            ))
+          }
+        } else if (is.null(supplied_token) && !isTRUE(.claude_server_env$warned_no_token)) {
+          .claude_server_env$warned_no_token <- TRUE
+          message(
+            "[ClaudeR] Bridge connected without an auth token (clauder-mcp < 0.6.0). ",
+            "Any local process can reach this port. After updating the bridge, ",
+            "tick 'Require token' in the addin's Advanced panel to lock it down."
+          )
+        }
+
+        # Handle POST requests (receiving code from Claude)
+        if (req$REQUEST_METHOD == "POST") {
+          # Parse the request body
+          body_raw <- req$rook.input$read()
+          body <- tryCatch(fromJSON(rawToChar(body_raw)), error = function(e) NULL)
+          if (is.null(body)) {
+            return(list(
+              status = 400L,
+              headers = list('Content-Type' = 'application/json'),
+              body = '{"error": "Invalid JSON in request body"}'
+            ))
+          }
+
+          # --- Check background job status ---
+          if (!is.null(body$check_job)) {
+            result <- check_background_job(body$check_job)
+            response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
+            return(list(
+              status = 200L,
+              headers = list('Content-Type' = 'application/json'),
+              body = response_body
+            ))
+          }
+
+          # --- Cancel a running background job ---
+          if (!is.null(body$cancel_job)) {
+            result <- kill_background_job(body$cancel_job)
+            response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
+            return(list(
+              status = 200L,
+              headers = list('Content-Type' = 'application/json'),
+              body = response_body
+            ))
+          }
+
+          # --- Get viewer content (paginated) ---
+          if (!is.null(body$get_viewer)) {
+            max_length <- if (!is.null(body$max_length)) as.integer(body$max_length) else 10000L
+            offset <- if (!is.null(body$offset)) as.integer(body$offset) else 0L
+
+            last_url <- .claude_viewer_env$last_url
+            if (is.null(last_url) || !file.exists(last_url)) {
+              result <- list(success = FALSE, error = "No viewer content available.")
+            } else {
+              html <- paste(readLines(last_url, warn = FALSE), collapse = "\n")
+              total <- nchar(html)
+              start_pos <- offset + 1L
+              end_pos <- min(offset + max_length, total)
+              chunk <- if (start_pos > total) "" else substr(html, start_pos, end_pos)
+              result <- list(success = TRUE, content = chunk,
+                             total_chars = total, offset = offset,
+                             returned_chars = nchar(chunk))
+            }
+            response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
+            return(list(
+              status = 200L,
+              headers = list('Content-Type' = 'application/json'),
+              body = response_body
+            ))
+          }
+
+          if (!is.null(body$code)) {
+            agent_id <- body$agent_id  # NULL if not provided (backwards compatible)
+
+            # --- Async: launch in background via callr ---
+            if (isTRUE(body$async) && !is.null(body$job_id)) {
+              input_names  <- if (!is.null(body$input_names))  as.character(body$input_names)  else character(0)
+              output_names <- if (!is.null(body$output_names)) as.character(body$output_names) else character(0)
+              result <- start_background_job(
+                body$code, body$job_id, .claude_server_env$settings,
+                agent_id = agent_id,
+                input_names = input_names,
+                output_names = output_names
+              )
+              .claude_server_env$execution_count <- .claude_server_env$execution_count + 1L
+              response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
+              return(list(
+                status = 200L,
+                headers = list('Content-Type' = 'application/json'),
+                body = response_body
+              ))
+            }
+
+            # --- Sync: execute in main session ---
+            result <- execute_code_in_session(body$code, .claude_server_env$settings,
+                                             agent_id = agent_id,
+                                             want_plot = body$want_plot)
+            .claude_server_env$execution_count <- .claude_server_env$execution_count + 1L
+
+            # Return the result as JSON
+            response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
+
+            return(list(
+              status = 200L,
+              headers = list('Content-Type' = 'application/json'),
+              body = response_body
+            ))
+          }
+
+          return(list(
+            status = 400L,
+            headers = list('Content-Type' = 'application/json'),
+            body = '{"error": "Missing code or check_job parameter"}'
+          ))
+        }
+
+        # Handle GET requests (status checks)
+        if (req$REQUEST_METHOD == "GET") {
+          agent_ids <- unique(vapply(
+            .claude_history_env$entries,
+            function(e) e$agent_id, character(1)
+          ))
+          live <- .claude_server_env$settings
+          status <- list(
+            running = isTRUE(.claude_server_env$running),
+            execution_count = .claude_server_env$execution_count,
+            # as.list() keeps this a JSON array even with one element;
+            # auto_unbox would collapse it to a bare string, which the
+            # bridge then iterates character by character
+            connected_agents = as.list(agent_ids),
+            history_size = length(.claude_history_env$entries),
+            session_name = .claude_server_env$session_name,
+            log_file_path = if (isTRUE(live$log_to_file)) live$log_file_path else NULL
+          )
+
+          return(list(
+            status = 200L,
+            headers = list('Content-Type' = 'application/json'),
+            body = toJSON(status, auto_unbox = TRUE)
+          ))
+        }
+
+        # Default response for other request types
+        return(list(
+          status = 405L,
+          headers = list('Content-Type' = 'application/json'),
+          body = '{"error": "Method not allowed"}'
+        ))
+      }
+    )
+  )
+  return(server)
+}
+
+# Everything Start Server does apart from the addin's own window: mint the
+# token, start listening, write the discovery file, start the log. Shared by
+# the addin's button and start_server(). If the session name is taken, the
+# server this call started is stopped again and the error is passed on.
+server_start <- function(session_name, port, require_token = FALSE,
+                         fresh_start = FALSE) {
+  if (is.null(.claude_server_env$settings)) {
+    .claude_server_env$settings <- load_claude_settings()
+  }
+
+  # Clean up any stale discovery files from crashed sessions
+  cleanup_stale_discovery_files()
+
+  # Fresh start: also reset agent history, execution count, console history
+  if (isTRUE(fresh_start)) {
+    .claude_server_env$execution_count <- 0L
+    .claude_history_env$entries <- list()
+
+    # Clear R console history
+    tryCatch({
+      tmp_hist <- tempfile()
+      writeLines("", tmp_hist)
+      utils::loadhistory(tmp_hist)
+      unlink(tmp_hist)
+    }, error = function(e) NULL)  # silently skip if not supported
+  }
+
+  # Mint the session token before the server starts accepting requests.
+  .claude_server_env$token <- generate_session_token()
+  .claude_server_env$require_token <- isTRUE(require_token)
+  .claude_server_env$warned_no_token <- FALSE
+
+  server <- start_http_server(port)
+
+  # Persist resume state immediately: if anything below fails, the
+  # server is already listening and must stay resumable/stoppable.
+  .claude_server_env$server <- server
+  .claude_server_env$running <- TRUE
+  .claude_server_env$port <- port
+
+  # Resolve session name
+  session_name <- trimws(session_name)
+  if (session_name == "") session_name <- paste0("session_", port)
+  .claude_server_env$session_name <- session_name
+  # Baseline for the coordination echo: skip only what was already
+  # in the log when the server started.
+  .claude_server_env$coord_seen <- coord_last_id(
+    tryCatch(coord_events(session_name), error = function(e) list()))
+  tryCatch(
+    write_discovery_file(session_name, port, .claude_server_env$token,
+                         terminal = isTRUE(.claude_server_env$headless)),
+    error = function(e) {
+      # Only roll back the server this call just created. A name
+      # collision must never stop another research session's server.
+      stopServer(server)
+      .claude_server_env$server <- NULL
+      .claude_server_env$running <- FALSE
+      stop(e)
+    }
+  )
+
+  # Create log file with session name in the filename
+  new_log <- NULL
+  if (isTRUE(.claude_server_env$settings$log_to_file)) {
+    session_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    safe_name <- gsub("[^a-zA-Z0-9_-]", "_", session_name)
+    new_log <- file.path(
+      dirname(.claude_server_env$settings$log_file_path),
+      paste0("clauder_", safe_name, "_", port, "_", session_timestamp, ".R")
+    )
+    s <- .claude_server_env$settings
+    s$log_file_path <- new_log
+    .claude_server_env$settings <- s
+    save_claude_settings(s)
+    write_log_header(new_log)
+    message("ClaudeR: session log at ", normalizePath(new_log, winslash = "/"))
+  }
+
+  # "Also log my own console commands" is saved between sessions and
+  # the box comes back ticked, but its observer ignores the initial
+  # value, so after an R restart the box said on while nothing was
+  # armed. Arm it here, once the log file exists.
+  if (isTRUE(.claude_server_env$settings$log_console)) {
+    tryCatch(start_console_logging(), error = function(e) {
+      message("ClaudeR: could not start console logging: ", conditionMessage(e))
+    })
+  }
+
+  # Wrap viewer to capture HTML widget URLs
+  wrap_viewer()
+
+  invisible(list(session_name = session_name, port = port, log_file_path = new_log))
+}
+
+# Everything Stop Server does apart from the addin's own window.
+server_stop <- function() {
+  if (!is.null(.claude_server_env$server)) stopServer(.claude_server_env$server)
+
+  # Remove discovery file before clearing the session name
+  if (!is.null(.claude_server_env$session_name)) {
+    remove_discovery_file(.claude_server_env$session_name)
+  }
+
+  # Clear persisted state
+  .claude_server_env$server <- NULL
+  .claude_server_env$running <- FALSE
+  .claude_server_env$port <- NULL
+  .claude_server_env$session_name <- NULL
+  .claude_server_env$execution_count <- 0L
+  .claude_server_env$token <- NULL
+  .claude_server_env$headless <- NULL
+
+  # Reset agent history
+  .claude_history_env$entries <- list()
+
+  # Restore original viewer
+  unwrap_viewer()
+
+  # Don't leave graphics functions traced in the user's session
+  remove_draw_tracers()
+
+  # Put the default graphics device back if start_server() swapped it
+  restore_screen_device()
+
+  # Force garbage collection to ensure port is released
+  gc()
+  invisible(NULL)
+}
+
+# Echo coordination traffic to the console and session log. Coordination
+# bypasses the R server by design (a busy session cannot block it), so
+# without this the human sees none of it. Called every two seconds: by the
+# addin while its window is open, and by the timer start_server() sets.
+coord_echo_once <- function() {
+  if (!isTRUE(.claude_server_env$running)) return(invisible(NULL))
+  evs <- tryCatch(coord_events(.claude_server_env$session_name),
+                  error = function(e) list())
+  u <- coord_unseen(evs, .claude_server_env$coord_seen)
+  .claude_server_env$coord_seen <- u$seen
+  if (length(u$events) == 0) return(invisible(NULL))
+  s <- .claude_server_env$settings
+  for (e in u$events) {
+    line <- tryCatch(format_coord_event(e), error = function(err) NULL)
+    if (is.null(line)) next
+    if (isTRUE(s$print_to_console)) {
+      cat("### coordination ###", line, "\n")
+    }
+    if (isTRUE(s$log_to_file) && !is.null(s$log_file_path) &&
+        nzchar(s$log_file_path)) {
+      try(cat(sprintf("# [coordination] %s\n", line),
+              file = s$log_file_path, append = TRUE), silent = TRUE)
+    }
+  }
+  invisible(NULL)
+}
+
 #' Claude R Studio Add-in using HTTP server
 #'
 #' @importFrom shiny observeEvent reactiveValues renderText verbatimTextOutput
@@ -544,7 +965,8 @@ claudeAddin <- function() {
     # unreadable record is reported, not raised.
     tryCatch(
       write_discovery_file(.claude_server_env$session_name,
-                           .claude_server_env$port, .claude_server_env$token),
+                           .claude_server_env$port, .claude_server_env$token,
+                           terminal = isTRUE(.claude_server_env$headless)),
       error = function(e) {
         message("ClaudeR: could not refresh the discovery file (", conditionMessage(e),
                 "). The server is still running; agents already connected are unaffected.")
@@ -565,199 +987,6 @@ claudeAddin <- function() {
 
   # Log file is created when the server starts (in the Start Server handler)
   # so we know the session name to include in the filename.
-
-  # Start HTTP server function
-  start_http_server <- function(port) {
-    server <- startServer(
-      host = "127.0.0.1",
-      port = port,
-      app = list(
-        call = function(req) {
-          # --- Auth gate ---
-          # Binding to 127.0.0.1 is not a security boundary: any local process
-          # can reach this port, and a webpage can POST to it cross-origin
-          # without a CORS preflight (text/plain body). Both would land as
-          # arbitrary R execution.
-          #
-          # Two independent defences, deliberately decoupled:
-          #
-          # 1. Origin block -- always on. Only browsers set Origin, and the MCP
-          #    bridge never does, so this closes the drive-by-webpage vector at
-          #    zero compatibility cost.
-          # 2. Token check -- opt-in (settings$require_token). Enforcing it
-          #    rejects any bridge older than clauder-mcp 0.6.0, so it stays off
-          #    until the user has updated both halves. Turn it on in Advanced.
-          if (!is.null(req$HTTP_ORIGIN)) {
-            return(list(
-              status = 403L,
-              headers = list('Content-Type' = 'application/json'),
-              body = '{"error": "Forbidden: browser-originated requests are not accepted"}'
-            ))
-          }
-
-          expected_token <- .claude_server_env$token
-          supplied_token <- req$HTTP_X_CLAUDER_TOKEN
-
-          if (isTRUE(.claude_server_env$require_token)) {
-            if (is.null(expected_token) || !identical(supplied_token, expected_token)) {
-              return(list(
-                status = 401L,
-                headers = list('Content-Type' = 'application/json'),
-                body = '{"error": "Unauthorized: missing or invalid X-Clauder-Token. Your clauder-mcp bridge is older than 0.6.0 -- run `uvx --refresh clauder-mcp`, or untick Require token in the addin Advanced panel."}'
-              ))
-            }
-          } else if (is.null(supplied_token) && !isTRUE(.claude_server_env$warned_no_token)) {
-            .claude_server_env$warned_no_token <- TRUE
-            message(
-              "[ClaudeR] Bridge connected without an auth token (clauder-mcp < 0.6.0). ",
-              "Any local process can reach this port. After updating the bridge, ",
-              "tick 'Require token' in the addin's Advanced panel to lock it down."
-            )
-          }
-
-          # Handle POST requests (receiving code from Claude)
-          if (req$REQUEST_METHOD == "POST") {
-            # Parse the request body
-            body_raw <- req$rook.input$read()
-            body <- tryCatch(fromJSON(rawToChar(body_raw)), error = function(e) NULL)
-            if (is.null(body)) {
-              return(list(
-                status = 400L,
-                headers = list('Content-Type' = 'application/json'),
-                body = '{"error": "Invalid JSON in request body"}'
-              ))
-            }
-
-            # --- Check background job status ---
-            if (!is.null(body$check_job)) {
-              result <- check_background_job(body$check_job)
-              response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
-              return(list(
-                status = 200L,
-                headers = list('Content-Type' = 'application/json'),
-                body = response_body
-              ))
-            }
-
-            # --- Cancel a running background job ---
-            if (!is.null(body$cancel_job)) {
-              result <- kill_background_job(body$cancel_job)
-              response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
-              return(list(
-                status = 200L,
-                headers = list('Content-Type' = 'application/json'),
-                body = response_body
-              ))
-            }
-
-            # --- Get viewer content (paginated) ---
-            if (!is.null(body$get_viewer)) {
-              max_length <- if (!is.null(body$max_length)) as.integer(body$max_length) else 10000L
-              offset <- if (!is.null(body$offset)) as.integer(body$offset) else 0L
-
-              last_url <- .claude_viewer_env$last_url
-              if (is.null(last_url) || !file.exists(last_url)) {
-                result <- list(success = FALSE, error = "No viewer content available.")
-              } else {
-                html <- paste(readLines(last_url, warn = FALSE), collapse = "\n")
-                total <- nchar(html)
-                start_pos <- offset + 1L
-                end_pos <- min(offset + max_length, total)
-                chunk <- if (start_pos > total) "" else substr(html, start_pos, end_pos)
-                result <- list(success = TRUE, content = chunk,
-                               total_chars = total, offset = offset,
-                               returned_chars = nchar(chunk))
-              }
-              response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
-              return(list(
-                status = 200L,
-                headers = list('Content-Type' = 'application/json'),
-                body = response_body
-              ))
-            }
-
-            if (!is.null(body$code)) {
-              agent_id <- body$agent_id  # NULL if not provided (backwards compatible)
-
-              # --- Async: launch in background via callr ---
-              if (isTRUE(body$async) && !is.null(body$job_id)) {
-                input_names  <- if (!is.null(body$input_names))  as.character(body$input_names)  else character(0)
-                output_names <- if (!is.null(body$output_names)) as.character(body$output_names) else character(0)
-                result <- start_background_job(
-                  body$code, body$job_id, .claude_server_env$settings,
-                  agent_id = agent_id,
-                  input_names = input_names,
-                  output_names = output_names
-                )
-                .claude_server_env$execution_count <- .claude_server_env$execution_count + 1L
-                response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
-                return(list(
-                  status = 200L,
-                  headers = list('Content-Type' = 'application/json'),
-                  body = response_body
-                ))
-              }
-
-              # --- Sync: execute in main session ---
-              result <- execute_code_in_session(body$code, .claude_server_env$settings,
-                                               agent_id = agent_id,
-                                               want_plot = body$want_plot)
-              .claude_server_env$execution_count <- .claude_server_env$execution_count + 1L
-
-              # Return the result as JSON
-              response_body <- toJSON(result, auto_unbox = TRUE, force = TRUE)
-
-              return(list(
-                status = 200L,
-                headers = list('Content-Type' = 'application/json'),
-                body = response_body
-              ))
-            }
-
-            return(list(
-              status = 400L,
-              headers = list('Content-Type' = 'application/json'),
-              body = '{"error": "Missing code or check_job parameter"}'
-            ))
-          }
-
-          # Handle GET requests (status checks)
-          if (req$REQUEST_METHOD == "GET") {
-            agent_ids <- unique(vapply(
-              .claude_history_env$entries,
-              function(e) e$agent_id, character(1)
-            ))
-            live <- .claude_server_env$settings
-            status <- list(
-              running = isTRUE(.claude_server_env$running),
-              execution_count = .claude_server_env$execution_count,
-              # as.list() keeps this a JSON array even with one element;
-              # auto_unbox would collapse it to a bare string, which the
-              # bridge then iterates character by character
-              connected_agents = as.list(agent_ids),
-              history_size = length(.claude_history_env$entries),
-              session_name = .claude_server_env$session_name,
-              log_file_path = if (isTRUE(live$log_to_file)) live$log_file_path else NULL
-            )
-
-            return(list(
-              status = 200L,
-              headers = list('Content-Type' = 'application/json'),
-              body = toJSON(status, auto_unbox = TRUE)
-            ))
-          }
-
-          # Default response for other request types
-          return(list(
-            status = 405L,
-            headers = list('Content-Type' = 'application/json'),
-            body = '{"error": "Method not allowed"}'
-          ))
-        }
-      )
-    )
-    return(server)
-  }
 
   # UI definition
   ui <- miniPage(
@@ -907,7 +1136,8 @@ claudeAddin <- function() {
       tryCatch({
         st <- .claude_server_env
         if (isTRUE(st$running) && !is.null(st$session_name) && !is.null(st$port)) {
-          write_discovery_file(st$session_name, st$port, st$token)
+          write_discovery_file(st$session_name, st$port, st$token,
+                               terminal = isTRUE(st$headless))
         }
       }, error = function(e) NULL)
     }
@@ -1112,91 +1342,30 @@ claudeAddin <- function() {
     observeEvent(input$startServer, {
       if (!state$running) {
         tryCatch({
-          # Clean up any stale discovery files from crashed sessions
-          cleanup_stale_discovery_files()
+          started <- server_start(input$session_name, input$port,
+                                  require_token = isTRUE(input$require_token),
+                                  fresh_start = isTRUE(input$fresh_start))
+          server_state <<- .claude_server_env$server
+          state$running <- TRUE
+          settings <<- .claude_server_env$settings
 
-          # Fresh start: also reset agent history, execution count, console history
           if (isTRUE(input$fresh_start)) {
-            .claude_server_env$execution_count <- 0L
             state$execution_count <- 0
-            .claude_history_env$entries <- list()
-
-            # Clear R console history
-            tryCatch({
-              tmp_hist <- tempfile()
-              writeLines("", tmp_hist)
-              utils::loadhistory(tmp_hist)
-              unlink(tmp_hist)
-            }, error = function(e) NULL)  # silently skip if not supported
-
             showNotification("Fresh start: log, history, and agents reset", type = "message")
           }
-
-          # Mint the session token before the server starts accepting requests.
-          .claude_server_env$token <- generate_session_token()
-          .claude_server_env$require_token <- isTRUE(input$require_token)
-          .claude_server_env$warned_no_token <- FALSE
-
-          server_state <<- start_http_server(input$port)
-
-          # Persist resume state immediately: if anything below fails, the
-          # server is already listening and must stay resumable/stoppable.
-          .claude_server_env$server <- server_state
-          .claude_server_env$running <- TRUE
-          .claude_server_env$port <- input$port
-          state$running <- TRUE
-
-          # Resolve session name
-          session_name <- trimws(input$session_name)
-          if (session_name == "") session_name <- paste0("session_", input$port)
-          .claude_server_env$session_name <- session_name
-          # Baseline for the coordination echo: skip only what was already
-          # in the log when the server started.
-          .claude_server_env$coord_seen <- coord_last_id(
-            tryCatch(coord_events(session_name), error = function(e) list()))
-          tryCatch(
-            write_discovery_file(session_name, input$port, .claude_server_env$token),
-            error = function(e) {
-              # Only roll back the server this handler just created. A name
-              # collision must never stop another research session's server.
-              stopServer(server_state)
-              server_state <<- NULL
-              .claude_server_env$server <- NULL
-              .claude_server_env$running <- FALSE
-              state$running <- FALSE
-              stop(e)
-            }
-          )
-
-          # Create log file with session name in the filename
-          if (isTRUE(.claude_server_env$settings$log_to_file)) {
-            session_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-            safe_name <- gsub("[^a-zA-Z0-9_-]", "_", session_name)
-            new_log <- file.path(
-              dirname(.claude_server_env$settings$log_file_path),
-              paste0("clauder_", safe_name, "_", input$port, "_", session_timestamp, ".R")
-            )
-            update_setting("log_file_path", new_log)
-            write_log_header(new_log)
-            shiny::updateTextInput(session, "log_file_path", value = new_log)
-            message("ClaudeR: session log at ", normalizePath(new_log, winslash = "/"))
+          if (!is.null(started$log_file_path)) {
+            shiny::updateTextInput(session, "log_file_path", value = started$log_file_path)
           }
-
-          # "Also log my own console commands" is saved between sessions and
-          # the box comes back ticked, but its observer ignores the initial
-          # value, so after an R restart the box said on while nothing was
-          # armed. Arm it here, once the log file exists.
-          if (isTRUE(.claude_server_env$settings$log_console)) {
-            tryCatch(start_console_logging(), error = function(e) {
-              message("ClaudeR: could not start console logging: ", conditionMessage(e))
-            })
-          }
-
-          # Wrap viewer to capture HTML widget URLs
-          wrap_viewer()
 
           showNotification("HTTP server started successfully", type = "message")
         }, error = function(e) {
+          # The server may already be listening when a later step fails (the
+          # log file, say). Keep the window in step with it, so Stop Server
+          # still works.
+          if (isTRUE(.claude_server_env$running)) {
+            server_state <<- .claude_server_env$server
+            state$running <- TRUE
+          }
           message("Error starting HTTP server: ", e$message)
           showNotification(
             paste("Failed to start HTTP server:", e$message),
@@ -1210,35 +1379,10 @@ claudeAddin <- function() {
     observeEvent(input$stopServer, {
       if (state$running) {
         tryCatch({
-          stopServer(server_state)
+          server_stop()
           state$running <- FALSE
           server_state <<- NULL
-
-          # Remove discovery file before clearing the session name
-          if (!is.null(.claude_server_env$session_name)) {
-            remove_discovery_file(.claude_server_env$session_name)
-          }
-
-          # Clear persisted state
-          .claude_server_env$server <- NULL
-          .claude_server_env$running <- FALSE
-          .claude_server_env$port <- NULL
-          .claude_server_env$session_name <- NULL
-          .claude_server_env$execution_count <- 0L
-          .claude_server_env$token <- NULL
-
-          # Reset execution count and agent history
           state$execution_count <- 0
-          .claude_history_env$entries <- list()
-
-          # Restore original viewer
-          unwrap_viewer()
-
-          # Don't leave graphics functions traced in the user's session
-          remove_draw_tracers()
-
-          # Force garbage collection to ensure port is released
-          gc()
 
           showNotification("HTTP server stopped", type = "message")
         }, error = function(e) {
@@ -1248,7 +1392,6 @@ claudeAddin <- function() {
       }
     })
 
-    
     # Force release port button handler
     shiny::observeEvent(input$kill_process, {
       if (.Platform$OS.type == "windows") {
@@ -1331,30 +1474,11 @@ claudeAddin <- function() {
       invalidateLater(2000)
     })
 
-    # Echo coordination traffic to the console and session log. Coordination
-    # bypasses the R server by design (a busy session cannot block it), so
-    # without this the human sees none of it.
+    # Echo coordination traffic to the console and session log while this
+    # window is open.
     observe({
       invalidateLater(2000)
-      if (!isTRUE(.claude_server_env$running)) return(invisible(NULL))
-      evs <- tryCatch(coord_events(.claude_server_env$session_name),
-                      error = function(e) list())
-      u <- coord_unseen(evs, .claude_server_env$coord_seen)
-      .claude_server_env$coord_seen <- u$seen
-      if (length(u$events) == 0) return(invisible(NULL))
-      s <- .claude_server_env$settings
-      for (e in u$events) {
-        line <- tryCatch(format_coord_event(e), error = function(err) NULL)
-        if (is.null(line)) next
-        if (isTRUE(s$print_to_console)) {
-          cat("### coordination ###", line, "\n")
-        }
-        if (isTRUE(s$log_to_file) && !is.null(s$log_file_path) &&
-            nzchar(s$log_file_path)) {
-          try(cat(sprintf("# [coordination] %s\n", line),
-                  file = s$log_file_path, append = TRUE), silent = TRUE)
-        }
-      }
+      coord_echo_once()
     })
 
     # Close handler -- just close the UI, keep the server running

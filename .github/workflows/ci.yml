@@ -35,7 +35,7 @@ jobs:
         with:
           use-public-rspm: true
       - name: Install check dependencies
-        run: Rscript -e 'install.packages(c("jsonlite", "xml2", "zip"))'
+        run: Rscript -e 'install.packages(c("jsonlite", "xml2", "zip", "httpuv", "fs", "ps"))'
       - name: Run checks
         run: Rscript .github/scripts/checks.R
 
