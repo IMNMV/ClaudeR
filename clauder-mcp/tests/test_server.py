@@ -711,3 +711,97 @@ class TestWakeOnMessage:
         intro = asyncio.run(_srv.get_agent_introduction())
         assert "wake_on_message" in intro and "background" in intro
         assert "do NOT set timers" in intro
+
+
+# --- No tool waits past the app's limit; names survive a bridge restart ---
+
+class TestWaitCapAndKeptName:
+    def test_waits_are_capped_under_the_app_limit(self):
+        assert _srv._clamp_wait(600) == _srv.MAX_TOOL_WAIT_S < 60
+        assert _srv._clamp_wait(None) == _srv.MAX_TOOL_WAIT_S
+        assert _srv._clamp_wait("soon") == _srv.MAX_TOOL_WAIT_S
+        assert _srv._clamp_wait(0) == 0 and _srv._clamp_wait(-5) == 0
+
+    def test_long_wait_for_message_returns_at_the_cap(self, tmp_path, monkeypatch):
+        TestWakeOnMessage()._bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(_srv, "MAX_TOOL_WAIT_S", 0.5)
+        t0 = time.monotonic()
+        text = asyncio.run(_srv.call_tool("wait_for_message", {"timeout_s": 600}))[0].text
+        assert time.monotonic() - t0 < 5
+        assert "No matching event" in text and "wake_on_message" in text
+
+    def test_long_get_async_result_returns_at_the_cap(self, monkeypatch):
+        _fake_r(monkeypatch, [RUNNING])
+        monkeypatch.setattr(_srv, "MAX_TOOL_WAIT_S", 0.5)
+        t0 = time.monotonic()
+        out = asyncio.run(_srv.call_tool("get_async_result", {"job_id": "j1", "wait_s": 600}))
+        assert time.monotonic() - t0 < 5 and "still running" in out[0].text
+
+    def _home(self, monkeypatch, tmp_path, key="4242-ThuNov191050532026"):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        monkeypatch.delenv("CLAUDER_AGENT_ID", raising=False)
+        monkeypatch.setattr(_srv, "_client_key", lambda: key)
+        monkeypatch.setattr(_srv, "_agent_introduced", True)
+        monkeypatch.setattr(_srv, "_agent_id", "agent-1af61230")
+        monkeypatch.setattr(_srv, "_agent_id_source", "randomly assigned for this connection")
+
+    def test_chosen_name_comes_back_after_a_restart(self, tmp_path, monkeypatch):
+        self._home(monkeypatch, tmp_path)
+        asyncio.run(_srv.call_tool("set_agent_name", {"name": "Claude-Designer"}))
+        assert _srv._initial_identity(None) == ("Claude-Designer", "set_agent_name", True)
+
+    def test_another_app_does_not_get_the_name(self, tmp_path, monkeypatch):
+        self._home(monkeypatch, tmp_path)
+        asyncio.run(_srv.call_tool("set_agent_name", {"name": "Claude-Designer"}))
+        monkeypatch.setattr(_srv, "_client_key", lambda: "5151-ThuNov191050532026")
+        name, source, kept = _srv._initial_identity(None)
+        assert name.startswith("agent-") and not kept
+
+    def test_explicit_identity_still_wins(self, tmp_path, monkeypatch):
+        self._home(monkeypatch, tmp_path)
+        asyncio.run(_srv.call_tool("set_agent_name", {"name": "Claude-Designer"}))
+        assert _srv._initial_identity("from-flag")[0] == "from-flag"
+        monkeypatch.setenv("CLAUDER_AGENT_ID", "from-env")
+        assert _srv._initial_identity(None)[0] == "from-env"
+
+    def test_kept_name_is_still_guarded_and_announced(self, tmp_path, monkeypatch):
+        self._home(monkeypatch, tmp_path)
+        asyncio.run(_srv.call_tool("set_agent_name", {"name": "Claude-Designer"}))
+        name, source, kept = _srv._initial_identity(None)
+        monkeypatch.setattr(_srv, "_agent_id", name)
+        monkeypatch.setattr(_srv, "_agent_id_source", source)
+        monkeypatch.setattr(_srv, "_agent_name_kept", kept)
+        refused = asyncio.run(_srv.call_tool("set_agent_name", {"name": "Someone-Else"}))[0].text
+        assert "REFUSED" in refused and _srv._agent_id == "Claude-Designer"
+
+        async def no_info(return_info=False):
+            return None
+        monkeypatch.setattr(_srv, "check_addin_status", no_info)
+        intro = asyncio.run(_srv.get_agent_introduction())
+        assert "Claude-Designer" in intro and "kept from before the restart" in intro
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="name keeping is POSIX only")
+    def test_real_restart_keeps_the_name(self, tmp_path):
+        # Two bridge processes started one after the other by the same app
+        # (this test process), as an app does when it restarts the bridge.
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        env = dict(os.environ, HOME=str(tmp_path), USERPROFILE=str(tmp_path))
+        env.pop("CLAUDER_AGENT_ID", None)
+        params = StdioServerParameters(command=sys.executable,
+                                       args=["-m", "clauder_mcp.server"], env=env)
+
+        async def session(tool, args):
+            async with stdio_client(params) as (r, w):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    out = await s.call_tool(tool, args)
+                    return " ".join(c.text for c in out.content if getattr(c, "type", "") == "text")
+
+        first = asyncio.run(session("set_agent_name", {"name": "Claude-Designer"}))
+        assert "Claude-Designer" in first
+        # The restarted bridge already holds the name, so a different one is refused
+        second = asyncio.run(session("set_agent_name", {"name": "Someone-Else"}))
+        assert "REFUSED" in second and "'Claude-Designer'" in second, second

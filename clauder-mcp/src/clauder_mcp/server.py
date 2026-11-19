@@ -52,6 +52,21 @@ _target_identity = None              # PID/port/start/token captured at explicit
 # environment is stale after a restart, and it has to be told.
 _rebind_note: Optional[str] = None
 _agent_introduced: bool = False        # First-call introduction flag
+_agent_name_kept: bool = False          # Name taken back after a bridge restart
+
+# The longest any single tool call waits. Apps give up on a tool call after
+# about a minute (the Claude desktop app at ~60 s) and then restart the
+# bridge, so a longer wait cost the agent its connection and, before names
+# were kept, its name. Tools that wait say "call again to keep waiting".
+MAX_TOOL_WAIT_S = 50.0
+
+
+def _clamp_wait(value: Any, default: float = MAX_TOOL_WAIT_S) -> float:
+    try:
+        v = float(value) if value is not None else default
+    except (TypeError, ValueError):
+        v = default
+    return min(max(v, 0.0), MAX_TOOL_WAIT_S)
 
 # Cache variable to store the result of the ggplot2 check
 _is_ggplot_installed = None
@@ -354,6 +369,9 @@ async def get_agent_introduction() -> str:
         "read cursor.",
         f"This ID uniquely identifies you in this R session. All code you execute is attributed to this ID.",
     ]
+    if _agent_name_kept:
+        lines.append("Your app restarted this bridge (it does that when a tool call runs past "
+                     "its time limit), and your name was kept from before the restart.")
 
     if info:
         agents = info.get("connected_agents", [])
@@ -527,6 +545,96 @@ def _is_unread_for(ev: Dict[str, Any], cur: int, me: Optional[str]) -> bool:
 # nothing is marked read unseen: the woken agent reads with check_messages,
 # which does. An agent that starts it again without reading is woken again at
 # once, which is the safe way to fail.
+
+# --- Keeping an agent's name across bridge restarts ---
+# An app restarts the bridge when a tool call runs past its time limit, and a
+# fresh bridge used to start under a random name. Messages addressed to the
+# agent's chosen name then went unread (field report: a session waiting with
+# 10-minute wait_for_message calls missed its partner's messages), and a
+# wake_on_message waiter listening under the chosen name would wake it again
+# and again for mail check_messages could not see. So the name chosen with
+# set_agent_name is saved against the app process that runs the bridge, keyed
+# by its pid and start time so a reused pid never matches, and a restarted
+# bridge under the same app takes it back. POSIX only.
+
+_LAUNCH_WRAPPERS = ("uv", "uvx", "disclaimer", "env")
+
+
+def _proc_info(pid: int):
+    """(ppid, start time, command) of a process, or None."""
+    try:
+        out = subprocess.run(["ps", "-o", "ppid=", "-o", "lstart=", "-o", "comm=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    parts = out.split(None, 6)  # ppid, five start-time fields, command
+    if len(parts) < 7 or not parts[0].isdigit():
+        return None
+    return int(parts[0]), " ".join(parts[1:6]), parts[6]
+
+
+def _client_key() -> Optional[str]:
+    """Identify the app that launched this bridge: the first ancestor that is
+    not a launcher (uv, uvx, the desktop app's disclaimer helper, python)."""
+    if sys.platform == "win32":
+        return None
+    pid = os.getppid()
+    for _ in range(8):
+        info = _proc_info(pid)
+        if info is None:
+            return None
+        ppid, start, command = info
+        base = os.path.basename(command).lower()
+        if base in _LAUNCH_WRAPPERS or base.startswith("python"):
+            if ppid <= 1:
+                return None
+            pid = ppid
+            continue
+        return f"{pid}-" + re.sub(r"[^0-9A-Za-z]+", "", start)
+    return None
+
+
+def _name_file(key: str) -> str:
+    return os.path.join(_home_dir(), ".clauder_coord", ".identities", key + ".txt")
+
+
+def _remember_agent_name(name: str) -> None:
+    key = _client_key()
+    if not key:
+        return
+    try:
+        path = _name_file(key)
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(name)
+    except OSError:
+        pass
+
+
+def _recall_agent_name() -> Optional[str]:
+    key = _client_key()
+    if not key:
+        return None
+    try:
+        with open(_name_file(key), encoding="utf-8") as f:
+            name = f.read().strip()
+    except OSError:
+        return None
+    return name if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}", name) else None
+
+
+def _initial_identity(arg_id: Optional[str]):
+    """(agent id, where it came from, kept from before a restart?)"""
+    if os.environ.get("CLAUDER_AGENT_ID"):
+        return os.environ["CLAUDER_AGENT_ID"], "CLAUDER_AGENT_ID environment variable", False
+    if arg_id:
+        return arg_id, "--agent-id argument", False
+    kept = _recall_agent_name()
+    if kept:
+        # Counts as set_agent_name, so the rename guard still applies.
+        return kept, "set_agent_name", True
+    return f"agent-{uuid.uuid4().hex[:8]}", "randomly assigned for this connection", False
+
 
 def _wake_command(session: str, agent: str, timeout_s: float = 0) -> str:
     """The shell command that runs this file's waiter for `agent`."""
@@ -1640,7 +1748,7 @@ def _all_tools() -> List[types.Tool]:
                     },
                     "wait_s": {
                         "type": "number",
-                        "description": "Max seconds to wait for the job to finish (default 300, cap 1800). Lower it if your client times out tool calls sooner."
+                        "description": "Max seconds to wait for the job to finish (default and maximum 50: apps give up on a tool call after about a minute). Call again to keep waiting."
                     }
                 },
                 "required": ["job_id"]
@@ -2272,7 +2380,7 @@ def _all_tools() -> List[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "timeout_s": {"type": "number", "description": "Max seconds to wait (default 300, cap 1800)."},
+                    "timeout_s": {"type": "number", "description": "Max seconds to wait (default and maximum 50: apps give up on a tool call after about a minute and restart the bridge). For longer waits use wake_on_message."},
                     "from_agent": {"type": "string", "description": "Only return events from this agent."},
                     "type": {"type": "string", "description": "Only return events of this type."},
                     "as_agent": {"type": "string", "description": "Wait as this identity, using its own cursor. For personas sharing one MCP connection."}
@@ -3143,10 +3251,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
 
     elif name == "get_async_result":
         job_id = arguments.get("job_id", "")
-        try:
-            wait_s = min(max(float(arguments.get("wait_s", 300)), 0.0), 1800.0)
-        except (TypeError, ValueError):
-            wait_s = 300.0
+        wait_s = _clamp_wait(arguments.get("wait_s"))
 
         # Wait here instead of making the agent poll: a 20-minute fit used to
         # cost ~120 calls at the old fixed 10 s delay. The checks back off
@@ -4098,6 +4203,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         old_name = _agent_id
         _agent_id = new_name
         globals()["_agent_id_source"] = "set_agent_name"
+        _remember_agent_name(new_name)
         return [types.TextContent(
             type="text",
             text=(
@@ -4198,7 +4304,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         return result_contents
 
     elif name == "wait_for_message":
-        timeout_s = min(float(arguments.get("timeout_s", 300)), 1800.0)
+        timeout_s = _clamp_wait(arguments.get("timeout_s"))
         from_agent = arguments.get("from_agent")
         ev_type = arguments.get("type")
         persona = arguments.get("as_agent")
@@ -4230,7 +4336,9 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
             type="text",
             text=(f"No matching event within {round(timeout_s)}s. The other "
                   f"agent may be busy or offline; use coordination_roster to "
-                  f"check presence, or wait again.")
+                  f"check presence, or wait again. One call waits at most "
+                  f"{round(MAX_TOOL_WAIT_S)}s; to be woken whenever the message "
+                  f"comes, use wake_on_message.")
         ))
         return result_contents
 
@@ -4419,14 +4527,8 @@ async def main():
         sys.exit(_wait_main(sys.argv[2:]))
 
     args = parse_args()
-    global _agent_id_source
-    if os.environ.get("CLAUDER_AGENT_ID"):
-        _agent_id_source = "CLAUDER_AGENT_ID environment variable"
-    elif args.agent_id:
-        _agent_id_source = "--agent-id argument"
-    else:
-        _agent_id_source = "randomly assigned for this connection"
-    _agent_id = args.agent_id or f"agent-{uuid.uuid4().hex[:8]}"
+    global _agent_id_source, _agent_name_kept
+    _agent_id, _agent_id_source, _agent_name_kept = _initial_identity(args.agent_id)
 
     # Discover sessions
     sessions = discover_sessions()

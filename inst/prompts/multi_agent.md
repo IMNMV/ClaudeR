@@ -128,11 +128,13 @@ For anything requiring co-presence or strict ordering, block on the event
 instead of polling:
 
 ```
-wait_for_message(timeout_s = 600, from_agent = "beta", type = "signal")
+wait_for_message(timeout_s = 50, from_agent = "beta", type = "signal")
 ```
 
 This returns the instant the matching event lands, while your partner keeps
-working (waiting never touches the R session). On handoff, send a signal
+working (waiting never touches the R session). One call waits at most 50
+seconds, because apps give up on a tool call after about a minute. For a
+longer wait, use `wake_on_message` (below) instead of calling this in a loop. On handoff, send a signal
 naming the objects produced: `body = {"name": "CLEAN_READY",
 "objects": "clean_data, eda_summary"}`.
 

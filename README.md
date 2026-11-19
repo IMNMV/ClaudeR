@@ -55,6 +55,7 @@ start_server()
 <details>
 <summary><b>Recent Updates</b> (click to expand)</summary>
 
+- **Agents keep their name when the bridge restarts, and no tool waits past the app's time limit (R 0.16.7 / clauder-mcp 0.16.7).** From a field report. Apps give up on a tool call after about a minute (the Claude desktop app at about 60 seconds) and then restart the bridge. A fresh bridge used to start under a random name, so an agent waiting with 10-minute `wait_for_message` calls lost its name, and messages addressed to it went unread. Now the name set with `set_agent_name` is remembered for the app that runs the bridge, and a restarted bridge takes it back and says so. `wait_for_message` and `get_async_result` wait at most 50 seconds per call. Call again to keep waiting, or use `wake_on_message` to be woken whenever the message comes.
 - **Agents are woken when a message arrives (clauder-mcp 0.16.6).** From a user request. An idle agent used to learn about a new message only by setting its own timer and checking. MCP gives a tool server no way to wake a model, but Claude Code and Antigravity both wake the agent when a command it left running in the background finishes. The new `wake_on_message` tool hands the agent such a command. It sits quietly until a message for that agent lands on the board, then finishes, and the agent's app wakes it to read the message. It marks nothing as read, so a message is never lost. It quits by itself if the app that started it closes. Agents don't need telling: the short introduction the bridge gives every agent on its first tool call says to keep one running whenever it waits on another agent, and so does the multi-agent protocol.
 - **Fresh start gives agents an empty message board (R 0.16.6).** From a user report. The message board belongs to the session name, not to the R session, so a reused name such as "default" kept every message ever sent under it, and each new agent read all of them on its first check. Ticking **Fresh start on restart**, or `start_server(fresh_start = TRUE)`, now moves the old messages and every agent's read position to an `archive` folder inside `~/.clauder_coord/<session name>`, so agents start on an empty board. Nothing is deleted. It will not touch the board of a name another live R session is using.
 - **ClaudeR without RStudio (R 0.16.6).** `start_server()` starts the server from any R console, so terminal R, a tmux pane, an ssh login on a cluster and `Rscript` all work. At a prompt it returns at once and agents are served while R is idle. Under `Rscript` it serves until interrupted. The editor tools are left out there, since there is no editor, and when R has no screen, plots go to a hidden image device so the agent still sees them. It works inside RStudio and Positron too, where it leaves the console free. `stop_server()` stops it. See [Terminal R and Clusters](#terminal-r-and-clusters).
@@ -163,7 +164,7 @@ ClaudeR empowers your AI assistant with a suite of tools to interact with your R
 - **`execute_r`**: Execute R code and return the output.
 - **`execute_r_with_plot`**: Execute R code that generates a plot that the model can see.
 - **`execute_r_async`**: Execute long-running R code asynchronously (>25 seconds). Returns a job ID for polling.
-- **`get_async_result`**: Wait for an async job and return its result the moment it finishes (up to `wait_s` seconds, default 300). `wait_s = 0` just checks.
+- **`get_async_result`**: Wait for an async job and return its result the moment it finishes (up to `wait_s` seconds, default and maximum 50, since apps give up on a tool call after about a minute). Call again to keep waiting. `wait_s = 0` just checks.
 - **`list_sessions`**: List all active RStudio sessions the agent can connect to.
 - **`connect_session`**: Connect to a specific RStudio session by name for multi-session workflows.
 - **`get_session_history`**: View execution history filtered by agent ID.
@@ -679,7 +680,7 @@ citation("ClaudeR")
 
 ```
 Vitali, N. (2026). ClaudeR: Connect live RStudio and Python sessions to AI
-agents over MCP. R package version 0.16.6.
+agents over MCP. R package version 0.16.7.
 https://github.com/IMNMV/ClaudeR
 ```
 
