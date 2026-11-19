@@ -9,7 +9,7 @@ you can never clobber another agent's writes.
 Two ways to use it, same log underneath:
 
 - MCP tools (preferred): `send_message`, `check_messages`,
-  `wait_for_message`, `coordination_roster`
+  `wait_for_message`, `wake_on_message`, `coordination_roster`
 - R functions via execute_r: `cr_send()`, `cr_inbox()`, `cr_ack()`,
   `cr_fact()`/`cr_facts()`, `cr_claim()`/`cr_release()`/`cr_done()`,
   `cr_roster()`, `propose_plan()`, `confirm_agreement()`,
@@ -142,6 +142,16 @@ things. Inspect the named objects in the session and read what actually ran
 (`get_session_history` or the session log). If something does not match the
 message, say so to your partner before you go on.
 
+## Waiting while idle: be woken, never set timers
+
+When you have nothing to do until a partner writes, do not set timers or
+keep calling `check_messages`. Call `wake_on_message` once. It gives you a
+command to run as a background command (Claude Code: the Bash tool with
+`run_in_background`; Antigravity: run it and let it carry on in the
+background). The command finishes the moment a message for you lands, and
+your app wakes you when it does. Then `check_messages`, act, and run the
+same command again. Keep one running whenever you are waiting.
+
 ## Phase 6: Presence
 
 Every write stamps your presence automatically. If you have nothing to say
@@ -159,6 +169,8 @@ their last event before assuming they are alive.
    when untrue. The banner does not stop until everyone has confirmed.
 4. Claim before working; release or complete what you claimed.
 5. Reply with reply_to so threads are explicit.
-6. Use wait_for_message for rendezvous instead of poll-and-hope.
+6. Use wait_for_message for rendezvous instead of poll-and-hope. When you
+   are idle, keep the `wake_on_message` command running in the background
+   instead of setting timers.
 7. Cross-check your partner's work when relevant; the goal is an analysis
    better than either of you alone.

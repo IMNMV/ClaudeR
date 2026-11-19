@@ -444,7 +444,10 @@ def _coord_append(ev_type: str, body: Any, to: str = "all",
 
 
 def _coord_events() -> List[Dict[str, Any]]:
-    path = _coord_log_path()
+    return _read_events(_coord_log_path())
+
+
+def _read_events(path: str) -> List[Dict[str, Any]]:
     if not os.path.exists(path):
         return []
     out = []
@@ -468,8 +471,12 @@ def _coord_cursor_path(as_agent: Optional[str] = None) -> str:
 
 
 def _coord_cursor(as_agent: Optional[str] = None) -> int:
+    return _read_cursor(_coord_cursor_path(as_agent))
+
+
+def _read_cursor(path: str) -> int:
     try:
-        with open(_coord_cursor_path(as_agent)) as f:
+        with open(path) as f:
             return int(f.read().strip())
     except (OSError, ValueError):
         return 0
@@ -487,11 +494,7 @@ def _coord_unread(from_agent: Optional[str] = None,
     me = as_agent or _agent_id
     out = []
     for ev in _coord_events():
-        if ev["id"] <= cur or ev.get("from") == me:
-            continue
-        if ev.get("to") not in ("all", me):
-            continue
-        if ev.get("type") == "heartbeat":
+        if not _is_unread_for(ev, cur, me):
             continue
         if from_agent and ev.get("from") != from_agent:
             continue
@@ -499,6 +502,100 @@ def _coord_unread(from_agent: Optional[str] = None,
             continue
         out.append(ev)
     return out
+
+
+def _is_unread_for(ev: Dict[str, Any], cur: int, me: Optional[str]) -> bool:
+    """What check_messages counts as unread for `me`. The waiter uses the same
+    test, so it can never wake an agent for something check_messages then
+    says is not there."""
+    return (ev["id"] > cur and ev.get("from") != me
+            and ev.get("to") in ("all", me) and ev.get("type") != "heartbeat")
+
+
+# --- Wake-up waiter: `clauder-mcp wait` ---
+# MCP gives a server no way to start a model turn. Claude Code and Antigravity
+# act only when the person writes or when something the agent started comes
+# back. Both wake the agent when a command it left running in the background
+# finishes, so the waiter is a plain command: it watches the board's files and
+# exits the moment something unread arrives for one agent, and the agent's own
+# app turns that exit into a wake-up. It never moves the read cursor, so
+# nothing is marked read unseen: the woken agent reads with check_messages,
+# which does. An agent that starts it again without reading is woken again at
+# once, which is the safe way to fail.
+
+def _wake_command(session: str, agent: str, timeout_s: float = 0) -> str:
+    """The shell command that runs this file's waiter for `agent`."""
+    argv = [sys.executable, os.path.abspath(__file__), "wait",
+            "--session", session, "--agent", agent]
+    if timeout_s and timeout_s > 0:
+        argv += ["--timeout", str(int(timeout_s))]
+    if sys.platform == "win32":
+        return subprocess.list2cmdline(argv)
+    import shlex
+    return shlex.join(argv)
+
+
+def _file_key(path: str):
+    try:
+        st = os.stat(path)
+        return (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
+
+
+def _wait_main(argv: List[str]) -> int:
+    import time
+    parser = argparse.ArgumentParser(
+        prog="clauder-mcp wait",
+        description=("Wait until a coordination message for AGENT arrives on "
+                     "SESSION's board, then exit. Run it as a background command, "
+                     "so the app that started it wakes the agent when it finishes."))
+    parser.add_argument("--session", required=True)
+    parser.add_argument("--agent", required=True)
+    parser.add_argument("--timeout", type=float, default=0.0,
+                        help=("Give up after this many seconds. 0, the default, waits "
+                              "until a message comes or whatever started it goes away."))
+    parser.add_argument("--interval", type=float, default=1.0, help=argparse.SUPPRESS)
+    a = parser.parse_args(argv)
+
+    board = os.path.join(_home_dir(), ".clauder_coord",
+                         re.sub(r"[^a-zA-Z0-9_-]", "_", a.session))
+    log = os.path.join(board, "events.jsonl")
+    cursor = os.path.join(board, "cursor_" + re.sub(r"[^a-zA-Z0-9_-]", "_", a.agent) + ".txt")
+    parent = os.getppid()
+    started = time.monotonic()
+    seen = None
+    try:
+        while True:
+            # Parse the log only when it or the cursor changed: a long board
+            # read every second by several waiters would be wasted work.
+            key = (_file_key(log), _file_key(cursor))
+            if key != seen:
+                seen = key
+                cur = _read_cursor(cursor)
+                unread = [ev for ev in _read_events(log) if _is_unread_for(ev, cur, a.agent)]
+                if unread:
+                    n = len(unread)
+                    print(f"ClaudeR: {n} new coordination message{'' if n == 1 else 's'} "
+                          f"for {a.agent} on session '{a.session}':")
+                    for ev in unread[-10:]:
+                        line = _coord_format([ev])
+                        print(line if len(line) <= 300 else line[:300] + " ...")
+                    if n > 10:
+                        print(f"(and {n - 10} earlier)")
+                    print("Read them with check_messages, which marks them read. Then run "
+                          "this same command again in the background to keep listening.")
+                    return 0
+            if a.timeout and time.monotonic() - started >= a.timeout:
+                print(f"ClaudeR: no message for {a.agent} on session '{a.session}' within "
+                      f"{round(a.timeout)} s. Run the same command again to keep listening.")
+                return 0
+            # Whatever started the waiter has gone, so nobody is left to wake.
+            if sys.platform != "win32" and os.getppid() != parent:
+                return 0
+            time.sleep(max(a.interval, 0.2))
+    except KeyboardInterrupt:
+        return 130
 
 
 def _coord_format(events: List[Dict[str, Any]]) -> str:
@@ -1130,7 +1227,7 @@ for _n in ("get_active_document", "modify_code_section", "insert_text", "suggest
 for _n in ("checkpoint_session", "restore_session", "list_checkpoints",
            "get_session_history", "generate_notebook", "clean_error_log"):
     TOOL_GROUPS[_n] = "session"
-for _n in ("send_message", "check_messages", "wait_for_message", "coordination_roster",
+for _n in ("send_message", "check_messages", "wait_for_message", "wake_on_message", "coordination_roster",
            "set_agent_name", "create_task_list", "update_task_status"):
     TOOL_GROUPS[_n] = "coord"
 for _n in ("execute_r_async", "get_async_result", "cancel_async_job"):
@@ -2111,6 +2208,31 @@ def _all_tools() -> List[types.Tool]:
             }
         ),
         types.Tool(
+            name="wake_on_message",
+            description=(
+                "Get a command that wakes you when a coordination message for you arrives, "
+                "so you never set timers or keep checking while you wait. Run the command "
+                "it returns as a background command (Claude Code: the Bash tool with "
+                "run_in_background; Antigravity: run it and let it carry on in the "
+                "background). It finishes the moment a message for you lands on the board, "
+                "and your app wakes you when it finishes. Then read with check_messages and "
+                "run the command again to keep listening."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "timeout_s": {"type": "number", "description": "Stop waiting after this many seconds. Default 0: wait until a message comes or your app closes."},
+                    "as_agent": {"type": "string", "description": "Listen as this identity. For personas sharing one MCP connection."}
+                }
+            },
+            annotations={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            }
+        ),
+        types.Tool(
             name="check_messages",
             description=(
                 "Read unread coordination events addressed to you (or to all), then advance "
@@ -2139,7 +2261,8 @@ def _all_tools() -> List[types.Tool]:
                 "writes, which removes coordination latency, crossed messages, and the need "
                 "for a human to schedule polls. Does not touch the R session, so the other "
                 "agent can keep executing code while you wait. Filter by sender and/or type "
-                "for rendezvous ('wait until beta sends signal HANDOFF_READY')."
+                "for rendezvous ('wait until beta sends signal HANDOFF_READY'). To be woken "
+                "while you are idle, without holding a tool call open, use wake_on_message."
             ),
             inputSchema={
                 "type": "object",
@@ -2389,7 +2512,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
     # These tools check Python-side state only — skip addin check
     _skip_addin_check = {"list_sessions", "connect_session", "load_annotation_data", "annotate", "run_annotation_job", "get_annotation_job_status", "cancel_annotation_job",
                          # File-based coordination must work while R is busy or down
-                         "send_message", "check_messages", "wait_for_message", "coordination_roster",
+                         "send_message", "check_messages", "wait_for_message", "wake_on_message",
+                         "coordination_roster",
                          # Identity is Python-side state, settable while R is down
                          "set_agent_name"}
     # Refuse an R-only tool against a Python session with a reason. Without
@@ -4029,6 +4153,45 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         result_contents.append(types.TextContent(type="text", text=reply))
         return result_contents
 
+    elif name == "wake_on_message":
+        persona = arguments.get("as_agent")
+        note, coord_err = _coord_target()
+        if coord_err:
+            return [types.TextContent(type="text", text=coord_err)]
+        me = persona or _agent_id
+        session = _target_session or "default"
+        try:
+            timeout_s = max(float(arguments.get("timeout_s") or 0), 0.0)
+        except (TypeError, ValueError):
+            timeout_s = 0.0
+        cmd = _wake_command(session, me, timeout_s)
+        waiting = len(_coord_unread(as_agent=persona))
+        lines = [
+            f"Run this as a background command. It finishes as soon as a coordination "
+            f"message for '{me}' arrives on session '{session}', and your app wakes you "
+            f"when it does, so you need no timers and no checking in the meantime:",
+            "",
+            cmd,
+            "",
+            "Claude Code: the Bash tool with run_in_background set to true. Antigravity: "
+            "run it as a command; it carries on in the background and you are told when it "
+            "finishes. Do not run it in the foreground, where it would hold you until a "
+            "message comes.",
+            "",
+            "When it finishes: call check_messages, which marks the messages read, deal with "
+            "them, then run the same command again to keep listening. If you change your "
+            "name with set_agent_name, ask for a new command, since it listens by name.",
+        ]
+        if waiting:
+            lines += ["", f"You already have {waiting} unread message"
+                          f"{'' if waiting == 1 else 's'}, so it would finish at once. "
+                          "Read them with check_messages first."]
+        reply = "\n".join(lines)
+        if note:
+            reply = note + "\n" + reply
+        result_contents.append(types.TextContent(type="text", text=reply))
+        return result_contents
+
     elif name == "wait_for_message":
         timeout_s = min(float(arguments.get("timeout_s", 300)), 1800.0)
         from_agent = arguments.get("from_agent")
@@ -4245,6 +4408,10 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
 # Run the server
 async def main():
     global _agent_id
+
+    # `clauder-mcp wait ...` is the wake-up waiter, not the MCP server.
+    if len(sys.argv) > 1 and sys.argv[1] == "wait":
+        sys.exit(_wait_main(sys.argv[2:]))
 
     args = parse_args()
     global _agent_id_source

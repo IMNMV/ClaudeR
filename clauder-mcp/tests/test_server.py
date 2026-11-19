@@ -567,3 +567,137 @@ class TestAnnotationJob:
         assert calls[0]["prompt"].startswith("Annotate the following data row.")
         assert "--append-system-prompt" not in calls[0]["argv"]
         assert _run_annot.job_line["instructions"] is None
+
+
+# --- wake_on_message: a background command that ends when mail arrives ----
+
+import subprocess as _sp
+
+
+def _board(home, session="s1"):
+    d = home / ".clauder_coord" / session
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _post(board, frm, body, to="all", typ="message"):
+    ev = {"ts": "2026-11-19T00:00:00.000", "from": frm, "type": typ, "to": to,
+          "body": {"text": body}}
+    with open(board / "events.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(ev) + "\n")
+
+
+def _waiter(home, agent="Claude", session="s1", *extra):
+    env = dict(os.environ, HOME=str(home))
+    return _sp.Popen([sys.executable, _srv.__file__, "wait", "--session", session,
+                      "--agent", agent, "--interval", "0.2", *extra],
+                     env=env, stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True)
+
+
+def _finished(proc, within=10.0):
+    try:
+        out, _ = proc.communicate(timeout=within)
+        return out
+    except _sp.TimeoutExpired:
+        return None
+
+
+class TestWakeOnMessage:
+    def test_wakes_on_mail_for_it_and_ignores_the_rest(self, tmp_path):
+        board = _board(tmp_path)
+        _post(board, "Claude", "my own message")
+        _post(board, "beta", "still here", typ="heartbeat")
+        _post(board, "beta", "for gamma only", to="gamma")
+        proc = _waiter(tmp_path)
+        try:
+            time.sleep(1.5)
+            assert proc.poll() is None, proc.communicate()[0]
+            _post(board, "beta", "your turn, the model is fitted", to="Claude")
+            out = _finished(proc)
+            assert out is not None and proc.returncode == 0
+            assert "your turn, the model is fitted" in out and "check_messages" in out
+            assert "my own message" not in out and "for gamma only" not in out
+            # Nothing is marked read: the woken agent does that with check_messages
+            assert not (board / "cursor_Claude.txt").exists()
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+
+    def test_messages_already_read_do_not_wake_it(self, tmp_path):
+        board = _board(tmp_path)
+        _post(board, "beta", "one")
+        _post(board, "beta", "two")
+        (board / "cursor_Claude.txt").write_text("2")
+        proc = _waiter(tmp_path)
+        try:
+            time.sleep(1.5)
+            assert proc.poll() is None
+            _post(board, "beta", "three")
+            out = _finished(proc)
+            assert out is not None and "three" in out and "] one" not in out
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+
+    def test_gives_up_after_its_timeout(self, tmp_path):
+        _board(tmp_path)
+        proc = _waiter(tmp_path, "Claude", "s1", "--timeout", "1")
+        out = _finished(proc, within=8)
+        assert out is not None and proc.returncode == 0 and "no message" in out
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="parent check is POSIX only")
+    def test_quits_when_what_started_it_goes_away(self, tmp_path):
+        _board(tmp_path)
+        env = dict(os.environ, HOME=str(tmp_path))
+        # A shell starts the waiter in the background and exits a second later
+        shell = _sp.run(["sh", "-c", '"$0" "$@" >/dev/null 2>&1 & echo $!; sleep 1',
+                         sys.executable, _srv.__file__, "wait", "--session", "s1",
+                         "--agent", "Claude", "--interval", "0.2"],
+                        env=env, capture_output=True, text=True, timeout=20)
+        pid = int(shell.stdout.strip())
+        deadline = time.time() + 8
+        alive = True
+        while time.time() < deadline and alive:
+            try:
+                os.kill(pid, 0)
+                time.sleep(0.2)
+            except ProcessLookupError:
+                alive = False
+        assert not alive
+
+    def _bind(self, monkeypatch, home, agent="Claude"):
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr(_srv, "_coord_target", lambda: (None, None))
+        monkeypatch.setattr(_srv, "get_r_addin_url", lambda: "http://127.0.0.1:1")
+        monkeypatch.setattr(_srv, "_target_session", "s1")
+        monkeypatch.setattr(_srv, "_agent_id", agent)
+        monkeypatch.setattr(_srv, "_agent_introduced", True)
+
+    def test_tool_gives_a_command_for_this_agent_and_session(self, tmp_path, monkeypatch):
+        self._bind(monkeypatch, tmp_path)
+        text = asyncio.run(_srv.call_tool("wake_on_message", {}))[0].text
+        assert "wait --session s1 --agent Claude" in text
+        assert "run_in_background" in text and "unread" not in text
+        persona = asyncio.run(_srv.call_tool("wake_on_message", {"as_agent": "Gemini"}))[0].text
+        assert "--agent Gemini" in persona
+        _post(_board(tmp_path), "beta", "waiting already")
+        text = asyncio.run(_srv.call_tool("wake_on_message", {}))[0].text
+        assert "already have 1 unread message" in text
+
+    def test_after_check_messages_it_waits_again(self, tmp_path, monkeypatch):
+        # The waiter and check_messages must agree on what is unread, or an
+        # agent would be woken over and over for mail it cannot find.
+        self._bind(monkeypatch, tmp_path)
+        board = _board(tmp_path)
+        _post(board, "beta", "handoff ready", to="Claude")
+        first = _waiter(tmp_path)
+        assert "handoff ready" in (_finished(first) or "")
+        read = " ".join(c.text for c in asyncio.run(_srv.call_tool("check_messages", {})))
+        assert "handoff ready" in read
+        again = _waiter(tmp_path)
+        try:
+            time.sleep(1.5)
+            assert again.poll() is None, again.communicate()[0]
+        finally:
+            if again.poll() is None:
+                again.kill()
