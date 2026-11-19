@@ -588,7 +588,8 @@ def _post(board, frm, body, to="all", typ="message"):
 
 
 def _waiter(home, agent="Claude", session="s1", *extra):
-    env = dict(os.environ, HOME=str(home))
+    # Windows finds the home folder through USERPROFILE, not HOME
+    env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
     return _sp.Popen([sys.executable, _srv.__file__, "wait", "--session", session,
                       "--agent", agent, "--interval", "0.2", *extra],
                      env=env, stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True)
@@ -667,6 +668,7 @@ class TestWakeOnMessage:
 
     def _bind(self, monkeypatch, home, agent="Claude"):
         monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
         monkeypatch.setattr(_srv, "_coord_target", lambda: (None, None))
         monkeypatch.setattr(_srv, "get_r_addin_url", lambda: "http://127.0.0.1:1")
         monkeypatch.setattr(_srv, "_target_session", "s1")
