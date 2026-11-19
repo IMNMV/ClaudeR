@@ -701,3 +701,11 @@ class TestWakeOnMessage:
         finally:
             if again.poll() is None:
                 again.kill()
+
+    def test_every_agent_is_told_about_it_on_its_first_call(self, monkeypatch):
+        async def no_info(return_info=False):
+            return None
+        monkeypatch.setattr(_srv, "check_addin_status", no_info)
+        intro = asyncio.run(_srv.get_agent_introduction())
+        assert "wake_on_message" in intro and "background" in intro
+        assert "do NOT set timers" in intro
