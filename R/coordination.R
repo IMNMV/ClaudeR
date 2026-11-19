@@ -26,6 +26,41 @@ coord_dir <- function(session = NULL) {
 
 coord_log_path <- function(session = NULL) file.path(coord_dir(session), "events.jsonl")
 
+# Set a session's message board aside for a fresh start. The board is keyed
+# by session name, not by the R process, so without this a reused name hands
+# every new agent the whole history on its first check_messages. The log and
+# every agent's read position move into archive/<time>/ inside the session's
+# board folder; nothing is deleted. Read positions move too, because message
+# ids are line numbers: an agent whose old position was 491 would otherwise
+# skip the first 491 messages of the new board. Returns the archive folder
+# and the number of messages moved, or NULL when there was nothing to move.
+archive_coord_board <- function(session = NULL) {
+  d <- coord_dir(session)
+  files <- c(file.path(d, "events.jsonl"),
+             list.files(d, pattern = "^cursor_.*[.]txt$", full.names = TRUE))
+  files <- files[file.exists(files) & file.size(files) > 0]
+  if (length(files) == 0) return(NULL)
+  log <- file.path(d, "events.jsonl")
+  n_msgs <- if (log %in% files) {
+    sum(nzchar(readLines(log, warn = FALSE)))
+  } else 0L
+  stamp <- format(Sys.time(), "%Y%m%d-%H%M%S")
+  dest <- file.path(d, "archive", stamp)
+  k <- 1L
+  while (dir.exists(dest)) {
+    k <- k + 1L
+    dest <- file.path(d, "archive", paste0(stamp, "-", k))
+  }
+  dir.create(dest, recursive = TRUE, mode = "0700")
+  moved <- file.rename(files, file.path(dest, basename(files)))
+  if (!all(moved)) {
+    stop(sprintf(
+      "Fresh start could not move %s into %s. Nothing was deleted and the server was not started.",
+      paste(basename(files[!moved]), collapse = ", "), dest), call. = FALSE)
+  }
+  list(dir = dest, messages = n_msgs)
+}
+
 # The calling agent's identity. execute_code_in_session() sets
 # CLAUDER_AGENT_ID around each evaluation, so agent code gets correct
 # attribution with no arguments; humans at the console default to "user".

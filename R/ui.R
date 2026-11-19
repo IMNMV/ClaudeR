@@ -80,6 +80,19 @@ pid_is_alive <- function(pid) {
   tryCatch(pid %in% ps::ps_pids(), error = function(e) NA)
 }
 
+# TRUE when a live (or unknown) process other than this one holds the
+# session name. Same test write_discovery_file() applies, made before a fresh
+# start moves the name's message board, so another live session's board is
+# never pulled out from under it.
+name_owned_elsewhere <- function(session_name) {
+  f <- discovery_path(session_name)
+  if (!file.exists(f)) return(FALSE)
+  other <- tryCatch(jsonlite::fromJSON(f), error = function(e) NULL)
+  if (!is.list(other) || length(other$pid) != 1L) return(TRUE)
+  !identical(as.integer(other$pid), Sys.getpid()) &&
+    !identical(pid_is_alive(other$pid), FALSE)
+}
+
 write_discovery_file <- function(session_name, port, token, terminal = FALSE) {
   s <- tryCatch(load_claude_settings(), error = function(e) list())
   d <- discovery_dir()
@@ -795,8 +808,25 @@ server_start <- function(session_name, port, require_token = FALSE,
   # Clean up any stale discovery files from crashed sessions
   cleanup_stale_discovery_files()
 
-  # Fresh start: also reset agent history, execution count, console history
+  # Resolve session name
+  session_name <- trimws(session_name)
+  if (session_name == "") session_name <- paste0("session_", port)
+
+  # Fresh start: also reset agent history, execution count, console history,
+  # and set the session's old message board aside. This runs before the
+  # session is announced, while no bridge will read or write its board.
+  board_archive <- NULL
   if (isTRUE(fresh_start)) {
+    if (name_owned_elsewhere(session_name)) {
+      stop(sprintf("Session name '%s' is already owned by a live or unknown process", session_name))
+    }
+    board_archive <- archive_coord_board(session_name)
+    if (!is.null(board_archive)) {
+      message(sprintf(
+        "ClaudeR: fresh start, the old message board (%d message%s) was moved to %s. Nothing was deleted.",
+        board_archive$messages, if (board_archive$messages == 1) "" else "s",
+        normalizePath(board_archive$dir, winslash = "/")))
+    }
     .claude_server_env$execution_count <- 0L
     .claude_history_env$entries <- list()
 
@@ -821,10 +851,6 @@ server_start <- function(session_name, port, require_token = FALSE,
   .claude_server_env$server <- server
   .claude_server_env$running <- TRUE
   .claude_server_env$port <- port
-
-  # Resolve session name
-  session_name <- trimws(session_name)
-  if (session_name == "") session_name <- paste0("session_", port)
   .claude_server_env$session_name <- session_name
   # Baseline for the coordination echo: skip only what was already
   # in the log when the server started.
@@ -873,7 +899,8 @@ server_start <- function(session_name, port, require_token = FALSE,
   # Wrap viewer to capture HTML widget URLs
   wrap_viewer()
 
-  invisible(list(session_name = session_name, port = port, log_file_path = new_log))
+  invisible(list(session_name = session_name, port = port, log_file_path = new_log,
+                 board_archive = board_archive$dir))
 }
 
 # Everything Stop Server does apart from the addin's own window.
@@ -1285,8 +1312,13 @@ claudeAddin <- function() {
             tags$li(tags$b("Log file"), " - a new timestamped log is created with a fresh sessionInfo() header."),
             tags$li(tags$b("Agent history"), " - the execution history is cleared. get_session_history returns empty."),
             tags$li(tags$b("Execution count"), " - resets to 0."),
-            tags$li(tags$b("Console history"), " - clears the R console command history.")
+            tags$li(tags$b("Console history"), " - clears the R console command history."),
+            tags$li(tags$b("Message board"), " - the agents' old messages and read positions are moved to an ",
+                    tags$code("archive"), " folder inside ", tags$code("~/.clauder_coord/<session name>"),
+                    ", so agents start on an empty board instead of reading the old history. Nothing is deleted.")
           ),
+          tags$p("The message board belongs to the session name. Without a fresh start, a session that reuses a name ",
+                 "picks up that name's old messages, and every new agent reads all of them."),
           tags$p("Your R environment (variables, loaded packages) is ", tags$b("not"), " cleared.",
             "To also clear the environment, run ", tags$code("rm(list = ls())"), " before restarting.")
         ),
@@ -1351,7 +1383,7 @@ claudeAddin <- function() {
 
           if (isTRUE(input$fresh_start)) {
             state$execution_count <- 0
-            showNotification("Fresh start: log, history, and agents reset", type = "message")
+            showNotification("Fresh start: log, history and message board reset", type = "message")
           }
           if (!is.null(started$log_file_path)) {
             shiny::updateTextInput(session, "log_file_path", value = started$log_file_path)

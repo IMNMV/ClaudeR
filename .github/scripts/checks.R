@@ -350,6 +350,36 @@ r <- tryCatch({
 }, error = function(e) conditionMessage(e))
 if (isTRUE(r)) pass("coordination v2: typed log, cursors, claims, consensus, no clobber") else fail("coordination:", r)
 
+# --- 13b. Fresh start sets the old message board aside ---
+r <- tryCatch({
+  cs <- "citest_fresh"
+  env$cr_send("old one", agent = "alpha", session = cs)
+  env$cr_send("old two", agent = "alpha", session = cs)
+  env$cr_ack(2L, agent = "beta", session = cs)
+  bdir <- env$coord_dir(cs)
+  before <- readLines(file.path(bdir, "events.jsonl"))
+
+  a <- env$archive_coord_board(cs)
+  moved <- file.path(a$dir, c("events.jsonl", "cursor_beta.txt"))
+  ok_move <- a$messages == 2L && all(file.exists(moved)) &&
+    identical(readLines(moved[1]), before) &&
+    !file.exists(file.path(bdir, "events.jsonl")) &&
+    length(list.files(bdir, pattern = "^cursor_")) == 0
+  # The new board starts at id 1, and beta, whose old position was 2,
+  # still gets the first new message
+  env$cr_send("new one", agent = "alpha", session = cs)
+  inbox <- env$cr_inbox(agent = "beta", session = cs)
+  ok_new <- nrow(inbox) == 1 && inbox$id == 1 && grepl("new one", inbox$body)
+  # A second fresh start keeps the first archive and adds another
+  b <- env$archive_coord_board(cs)
+  ok_again <- !identical(a$dir, b$dir) && file.exists(moved[1]) && b$messages == 1L
+  # Nothing to move: no archive folder is made
+  ok_empty <- is.null(env$archive_coord_board(cs))
+  ok_move && ok_new && ok_again && ok_empty
+}, error = function(e) conditionMessage(e))
+if (isTRUE(r)) pass("fresh start: old board moved aside, nothing deleted, new board readable") else fail("fresh start board:", r)
+
+
 # --- 14. reviewer2 stance ---
 r <- tryCatch({
   t1 <- capture.output(env$referee_prompt(stance = "reviewer2"))
@@ -669,7 +699,23 @@ r <- if (!all(vapply(c("httpuv", "fs", "ps"), requireNamespace, logical(1), quie
   refused <- inherits(tryCatch(env$server_start("taken", port), error = function(e) e), "error")
   ok_taken <- refused && !isTRUE(st$running) && is.null(st$server)
 
-  ok_start && ok_rec && ok_http && ok_plot && ok_stop && ok_taken
+  # A fresh start on that taken name is refused too, and its board is left alone
+  env$cr_send("live session's message", agent = "owner", session = "taken")
+  taken_log <- file.path(env$coord_dir("taken"), "events.jsonl")
+  refused_fresh <- inherits(tryCatch(suppressMessages(env$server_start("taken", port, fresh_start = TRUE)),
+                                     error = function(e) e), "error")
+  ok_taken_board <- refused_fresh && file.exists(taken_log) &&
+    !dir.exists(file.path(env$coord_dir("taken"), "archive")) && !isTRUE(st$running)
+
+  # A fresh start on a free name moves its old board aside and says where
+  env$cr_send("from an earlier run", agent = "old", session = "ci_fresh")
+  fresh <- suppressMessages(env$server_start("ci_fresh", port, fresh_start = TRUE))
+  ok_fresh <- !is.null(fresh$board_archive) &&
+    file.exists(file.path(fresh$board_archive, "events.jsonl")) &&
+    length(env$coord_events(session = "ci_fresh")) == 0 && isTRUE(st$running)
+  env$server_stop()
+
+  ok_start && ok_rec && ok_http && ok_plot && ok_stop && ok_taken && ok_taken_board && ok_fresh
 }, error = function(e) conditionMessage(e))
 if (identical(r, "skip")) {
   pass("start_server: skipped (needs httpuv, fs, ps and curl)")

@@ -54,11 +54,14 @@ start_coord_echo <- function() {
 #'   the prompt is idle. The default is `FALSE` at an interactive prompt and
 #'   `TRUE` otherwise.
 #' @param fresh_start `TRUE` clears the agent history and execution count
-#'   first, like the addin's "Fresh start on restart" box.
+#'   first and moves the session's old message board to an archive folder,
+#'   so agents start on an empty board, like the addin's "Fresh start on
+#'   restart" box. Nothing is deleted.
 #' @param require_token `TRUE` rejects any request without this session's
 #'   token. The default is the setting saved from the addin's Advanced panel.
-#' @return Invisibly, a list with the session name, the port and the path of
-#'   the session log (`NULL` when logging is off).
+#' @return Invisibly, a list with the session name, the port, the path of
+#'   the session log (`NULL` when logging is off) and the folder the old
+#'   message board was moved to (`NULL` unless a fresh start moved one).
 #' @seealso [stop_server()] to stop it, [claudeAddin()] for the addin window.
 #' @examples
 #' \dontrun{
